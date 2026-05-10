@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jetstream</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0a0a0a;
+    color: #e8e8e8;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 0.85rem 1.2rem;
+    background: #111;
+    border-bottom: 1px solid #1f1f1f;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  header h1 { margin: 0; font-size: 1rem; font-weight: 500; }
+  #status {
+    flex: 1;
+    color: #888;
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #status .live {
+    display: inline-block;
+    background: #c00;
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    margin-right: 0.5rem;
+    letter-spacing: 0.05em;
+  }
+  #viewers { color: #888; font-size: 0.85rem; }
+  main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: black;
+  }
+  #player-wrap {
+    position: relative;
+    width: 100%;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: black;
+  }
+  video {
+    display: block;
+    width: 100%;
+    /* Hold the box at 16:9 so pause / seek / auto-advance can't collapse the layout
+       when the <video> momentarily has no intrinsic dimensions. Real video aspect
+       gets letterboxed via object-fit. */
+    aspect-ratio: 16 / 9;
+    max-height: calc(100vh - 50px);
+    background: black;
+    object-fit: contain;
+  }
+  #unmute-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    background: rgba(0,0,0,0.4);
+    color: white;
+    font-size: 1rem;
+    letter-spacing: 0.02em;
+  }
+  #unmute-overlay.hidden { display: none; }
+  #vol-controls {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    display: flex;
+    gap: 0.4rem;
+    background: rgba(0,0,0,0.55);
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    align-items: center;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+  }
+  #vol-controls:hover { opacity: 1; }
+  #vol-controls button {
+    background: transparent;
+    border: none;
+    color: white;
+    cursor: pointer;
+    font-size: 0.95rem;
+    padding: 0.1rem 0.3rem;
+  }
+  #vol-controls input[type="range"] {
+    width: 80px;
+    accent-color: white;
+  }
+  .placeholder {
+    color: #555;
+    font-size: 0.95rem;
+    padding: 3rem;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>jetstream</h1>
+  <span id="status">waiting…</span>
+  <span id="position" style="color:#888;font-size:0.85rem;font-variant-numeric:tabular-nums"></span>
+  <span id="viewers"></span>
+</header>
+<main id="main">
+  <div id="player-wrap">
+    <video id="video" autoplay playsinline muted
+           controlslist="nodownload noremoteplayback noplaybackrate"></video>
+    <div id="vol-controls">
+      <button id="mute-btn" title="Mute / unmute">🔊</button>
+      <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="1" title="Volume">
+      <button id="pip-btn" title="Picture in picture" style="display:none">⧉</button>
+      <button id="fs-btn" title="Fullscreen" style="display:none">⛶</button>
+    </div>
+    <div id="unmute-overlay">tap to unmute</div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script>
+const video = document.getElementById("video");
+const statusEl = document.getElementById("status");
+const viewersEl = document.getElementById("viewers");
+const playerWrap = document.getElementById("player-wrap");
+const positionEl = document.getElementById("position");
+const unmuteOverlay = document.getElementById("unmute-overlay");
+const muteBtn = document.getElementById("mute-btn");
+const volSlider = document.getElementById("vol-slider");
+const fsBtn = document.getElementById("fs-btn");
+const pipBtn = document.getElementById("pip-btn");
+
+// Restore the user's last volume choice. Mute state is intentionally NOT
+// persisted: the page loads muted (autoplay policy requires it), and the
+// existing tap-to-unmute overlay drives that transition.
+const savedVol = parseFloat(localStorage.getItem("jetstream_volume"));
+if (isFinite(savedVol) && savedVol >= 0 && savedVol <= 1) {
+  video.volume = savedVol;
+  volSlider.value = String(savedVol);
+}
+
+// Feature detection — iPhone Safari uses the webkit-prefixed video APIs
+// (no requestFullscreen on divs, no standard requestPictureInPicture).
+const fsSupported = !!(video.webkitEnterFullscreen || playerWrap.requestFullscreen || video.requestFullscreen);
+const pipSupported = !!(
+  (typeof video.webkitSupportsPresentationMode === "function" && video.webkitSupportsPresentationMode("picture-in-picture"))
+  || document.pictureInPictureEnabled
+);
+if (fsSupported) fsBtn.style.display = "";
+if (pipSupported) pipBtn.style.display = "";
+
+let hls = null;
+let lastReady = false;
+let serverPaused = false;
+
+function syncMuteUI() {
+  // Surface the overlay whenever the user needs to interact: muted (so they
+  // can unmute) OR paused while the server is streaming (so they can start
+  // playback when iOS Safari blocked autoplay). Don't surface for serverPaused
+  // — that's an admin-driven state, not something the viewer should bypass.
+  const needsTap = video.muted || (video.paused && !serverPaused);
+  unmuteOverlay.classList.toggle("hidden", !needsTap);
+  unmuteOverlay.textContent = video.paused && !serverPaused ? "tap to play" : "tap to unmute";
+  muteBtn.textContent = video.muted || video.volume === 0 ? "🔇" : "🔊";
+  // Mirror the element's volume back onto the slider so programmatic changes
+  // (e.g. the unmute overlay bumping volume from 0 to 1) keep the UI in sync.
+  const shown = video.muted ? 0 : video.volume;
+  if (parseFloat(volSlider.value) !== shown) volSlider.value = String(shown);
+}
+
+// Best-effort play(). Just swallow the rejection: the source-swap path on
+// Hls.js (setupPlayer's hls-exists branch) preserves the video element's
+// playing state across stream restarts, so the autoplay-policy rejection
+// that this used to fall back from no longer fires there. The remaining
+// rejection sites (initial cold load, tab visibility change) leave the
+// element paused, and syncMuteUI surfaces the "tap to play" overlay as
+// the recovery affordance — which the user controls. Don't auto-mute on
+// rejection: silently demoting the user's audio choice on every transient
+// hiccup is worse than a visible overlay they can tap.
+function playWithFallback() {
+  const p = video.play();
+  if (p && typeof p.catch === "function") p.catch(() => {});
+}
+
+unmuteOverlay.addEventListener("click", () => {
+  video.muted = false;
+  if (video.volume === 0) video.volume = 1;
+  // Flushing a play() inside the gesture is required: changing `muted=false`
+  // can pause the element on iOS Safari, and a later play() from a non-gesture
+  // handler is then blocked by autoplay policy and silently dropped.
+  video.play().catch(() => {});
+  // One-shot snap to the live edge. iOS Safari native HLS can land the user
+  // at the buffer start (~24s behind live) when the user-tap is what starts
+  // playback, and the drift loop is gated off for Infinity-duration streams,
+  // so it can't pull them forward. Doing this once inside the gesture (not
+  // on a recurring timer — that caused the iOS stutter+skip loop) gets the
+  // viewer in sync without continuous re-seeking.
+  snapToLive();
+  syncMuteUI();
+});
+muteBtn.addEventListener("click", () => {
+  video.muted = !video.muted;
+  if (!video.muted && video.volume === 0) video.volume = 1;
+  video.play().catch(() => {});
+  syncMuteUI();
+});
+volSlider.addEventListener("input", () => {
+  const v = parseFloat(volSlider.value);
+  video.volume = v;
+  // Dragging the slider above 0 is an explicit "I want sound" gesture — also
+  // clears mute so the icon and audio both reflect the user's intent.
+  if (v > 0 && video.muted) video.muted = false;
+  // Same gesture-driven play() flush as the mute button: changing audio state
+  // can leave iOS Safari paused, and a play() outside the gesture is dropped.
+  video.play().catch(() => {});
+  localStorage.setItem("jetstream_volume", String(v));
+  syncMuteUI();
+});
+fsBtn.addEventListener("click", () => {
+  // iOS Safari: must fullscreen the <video> itself; div fullscreen is unsupported.
+  if (typeof video.webkitEnterFullscreen === "function" && !playerWrap.requestFullscreen) {
+    if (!video.webkitDisplayingFullscreen) video.webkitEnterFullscreen();
+    return;
+  }
+  if (document.fullscreenElement) document.exitFullscreen();
+  else (playerWrap.requestFullscreen || video.requestFullscreen).call(playerWrap.requestFullscreen ? playerWrap : video);
+});
+pipBtn.addEventListener("click", async () => {
+  // iOS Safari path.
+  if (typeof video.webkitSetPresentationMode === "function" && video.webkitSupportsPresentationMode?.("picture-in-picture")) {
+    const next = video.webkitPresentationMode === "picture-in-picture" ? "inline" : "picture-in-picture";
+    video.webkitSetPresentationMode(next);
+    return;
+  }
+  try {
+    if (document.pictureInPictureElement) await document.exitPictureInPicture();
+    else if (document.pictureInPictureEnabled) await video.requestPictureInPicture();
+  } catch {}
+});
+
+video.addEventListener("pause", syncMuteUI);
+video.addEventListener("play", syncMuteUI);
+video.addEventListener("playing", syncMuteUI);
+// Background-tab autoplay is blocked harder than foreground autoplay on most
+// browsers — opening / in a new tab while another tab is active can leave the
+// player paused with no recovery. Fire play() (and refresh the source if the
+// buffer went stale) when the tab becomes visible.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || serverPaused) return;
+  if (video.paused) playWithFallback();
+});
+function snapToLive() {
+  // Never seek past the buffered edge. Firefox/MSE doesn't clamp out-of-buffer
+  // seeks like Chrome does — currentTime past buffered.end leaves the playhead
+  // in a phantom zone that decodes nothing (black + silent, no error). Hls.js
+  // sometimes advances MediaSource.duration ahead of what's actually appended,
+  // so duration / seekable.end can both point past the real frames.
+  // Prefer hls.liveSyncPosition (live edge − liveSyncDurationCount * target);
+  // fall back to the last buffered range minus a small margin; final fallback
+  // is seekable.end for native HLS (Safari) where MSE isn't in play.
+  let target = null;
+  if (hls && typeof hls.liveSyncPosition === "number" && isFinite(hls.liveSyncPosition)) {
+    target = hls.liveSyncPosition;
+  } else if (video.buffered.length) {
+    target = video.buffered.end(video.buffered.length - 1) - 1.0;
+  } else if (video.seekable.length) {
+    target = video.seekable.end(video.seekable.length - 1);
+  }
+  if (target != null && isFinite(target) && target >= 0) {
+    try { video.currentTime = target; } catch {}
+  }
+}
+// On (re)load, jump straight to the live edge — fires for both Hls.js
+// (after MANIFEST_PARSED) and iOS native HLS. Without this, refreshing
+// drops the viewer behind admin by the playlist's lookback window.
+// Also kick playback here: the `autoplay` attribute races with MSE attach
+// on Hls.js and with native-HLS manifest fetch on Safari; explicit play()
+// on loadedmetadata is the documented "playback is now safe to start"
+// hook and ensures the stream starts on first page load without a tap.
+video.addEventListener("loadedmetadata", () => {
+  snapToLive();
+  if (!serverPaused) playWithFallback();
+});
+// Continuous server-time sync. Each segment carries an absolute
+// `EXT-X-PROGRAM-DATE-TIME`, so we can ask "what wall-clock moment is the
+// player rendering right now?" and steer every device toward the SAME
+// target (server_now − TARGET_LAG). That makes admin and viewers converge
+// on the same playhead instead of each tracking their own buffer.
+const TARGET_LAG_S = 2.5;     // playhead = server_now − this. Matches admin (and Hls.js liveSyncPosition with liveSyncDurationCount: 1).
+let serverClockOffsetMs = 0;  // updated by pollStatus from s.server_unix.
+
+function currentPlayingDateMs() {
+  // Hls.js path: walks the loaded fragments to map currentTime → PDT.
+  if (hls && hls.playingDate instanceof Date) return hls.playingDate.getTime();
+  // Native HLS (iOS Safari): startDate + currentTime.
+  if (typeof video.getStartDate === "function") {
+    const start = video.getStartDate();
+    if (start && !isNaN(start.getTime())) return start.getTime() + video.currentTime * 1000;
+  }
+  return null;
+}
+
+// PDT-based sync. Rate steering was previously enabled (±1.5%) to keep devices
+// within ~1s of each other, but Firefox's audio resampler stutters audibly on
+// software h264 decode at 1080p when playbackRate ≠ 1.0 — the cure was worse
+// than the disease. Now: keep playbackRate pinned at 1.0 and only intervene
+// on big drift via snapToLive(). Trade-off is ~2-3s skew between devices,
+// which is fine for casual co-watching.
+try { video.preservesPitch = true; } catch {}
+setInterval(() => {
+  if (!video.duration || !isFinite(video.duration)) return;
+  if (video.paused || serverPaused) return;
+  if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
+  const playing = currentPlayingDateMs();
+  if (playing == null) return;
+  const serverNowMs = Date.now() + serverClockOffsetMs;
+  const drift = (serverNowMs - playing) / 1000 - TARGET_LAG_S;
+  if (Math.abs(drift) > 5) snapToLive();
+}, 2000);
+// Disable space-bar pause and right-click menu.
+document.addEventListener("keydown", e => {
+  if (e.key === " " || e.code === "Space") e.preventDefault();
+});
+video.addEventListener("contextmenu", e => e.preventDefault());
+
+video.addEventListener("volumechange", syncMuteUI);
+syncMuteUI();
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function basename(p) { return (p || "").split("/").pop(); }
+function formatTime(sec) {
+  if (!sec || !isFinite(sec) || sec < 0) return "0:00";
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const pad = n => String(n).padStart(2, "0");
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+function setupPlayer() {
+  // Cache-buster forces iOS Safari (native HLS) to re-fetch the manifest on
+  // stream restarts; without it, reusing the same URL is sometimes treated
+  // as cached 404.
+  const src = "/hls/stream.m3u8?_=" + Date.now();
+  // Server-side composer keeps /hls/stream.m3u8 alive across every source
+  // change, seek, pause/resume — so setupPlayer is only ever called for the
+  // cold load and post-fatal-error recovery, both of which start with hls=null.
+  // No more "swap source" branch needed.
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = src;
+    // Trigger a fresh load even if Safari thinks the src is unchanged.
+    video.load();
+    // Don't call play() here — iOS Safari's `autoplay muted playsinline`
+    // combo handles the start natively, and an explicit play() before the
+    // manifest is fetched can put the element in a failed-play state that
+    // suppresses autoplay. The `loadedmetadata`/`canplay` handlers cover
+    // the case where autoplay still doesn't kick in.
+  } else if (window.Hls && Hls.isSupported()) {
+    // Match admin's tuning: 1-segment live-edge headroom keeps lag tight and
+    // avoids the constant snap-to-live hammering that the previous 3-segment
+    // setting caused with PDT-drift correction. The encode side now forces
+    // IDR frames at exact segment boundaries (see app.py force_key_frames),
+    // so each segment is independently decodable and Firefox doesn't stall
+    // on mid-GOP segment starts.
+    hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 1 });
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    // Explicit play() after attach — iOS Safari can leave the element paused
+    // after attachMedia otherwise.
+    playWithFallback();
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      if (data.fatal) {
+        // Real media error — destroy + retry once. Pause no longer 404s the
+        // manifest (composer keeps it live), so we don't need a special-case
+        // branch for serverPaused here.
+        hardTeardown();
+        setTimeout(setupPlayer, 800);
+      }
+    });
+  } else {
+    statusEl.textContent = "HLS not supported in this browser";
+    return;
+  }
+  syncMuteUI();
+}
+
+function hardTeardown() {
+  // Used by fatal-error recovery and full-idle teardown. Releases MSE and
+  // forces the next setupPlayer to recreate the Hls.js instance from
+  // scratch. The next play() may need a user gesture on autoplay-strict
+  // browsers.
+  if (hls) { hls.destroy(); hls = null; }
+}
+function teardownPlayer() {
+  // Used when the server is fully idle. Frees the source so the box can
+  // sit dormant rather than holding a stale frame.
+  hardTeardown();
+  video.removeAttribute("src");
+  video.load();
+}
+
+async function pollStatus() {
+  try {
+    const res = await fetch("/api/status");
+    const s = await res.json();
+    if (s.playing) {
+      // No more per-source-change teardown: the server's composer keeps
+      // /hls/stream.m3u8 live across seeks, queue advances, pause/resume,
+      // and admin source-swaps. Each ffmpeg run writes into its own
+      // /hls/run/<id>/ subdir and the master playlist accumulates them
+      // separated by EXT-X-DISCONTINUITY, so the player just keeps reading
+      // the same URL forever.
+      const label = s.title || basename(s.path) || "live";
+      const liveLabel = s.paused
+        ? '<span class="live" style="background:#888">PAUSED</span>'
+        : '<span class="live">LIVE</span>';
+      statusEl.innerHTML = `${liveLabel}${escapeHtml(label)}`;
+      document.title = label + " · jetstream";
+      serverPaused = !!s.paused;
+      if (s.ready && !lastReady) setupPlayer();
+      lastReady = s.ready;
+      // Mirror server pause state on the local player.
+      if (serverPaused && !video.paused) video.pause();
+      if (!serverPaused && video.paused) {
+        playWithFallback();
+      }
+      // Position display. For live URLs (no duration), just show elapsed.
+      if (s.is_live) {
+        positionEl.textContent = "LIVE";
+      } else if (s.position_seconds != null && s.duration_seconds) {
+        positionEl.textContent = `${formatTime(s.position_seconds)} / ${formatTime(s.duration_seconds)}`;
+      } else if (s.position_seconds != null) {
+        positionEl.textContent = formatTime(s.position_seconds);
+      } else {
+        positionEl.textContent = "";
+      }
+    } else {
+      statusEl.textContent = "idle";
+      document.title = "jetstream";
+      serverPaused = false;
+      if (lastReady) teardownPlayer();
+      lastReady = false;
+      positionEl.textContent = "";
+    }
+    const v = s.viewers || 0;
+    viewersEl.textContent = v ? `${v} viewer${v === 1 ? "" : "s"}` : "";
+    // Refresh the client/server clock offset so the sync interval can target
+    // an absolute server moment instead of the device's potentially-skewed
+    // local clock. Recomputed every poll so drift and NTP corrections track.
+    if (typeof s.server_unix === "number") {
+      serverClockOffsetMs = s.server_unix * 1000 - Date.now();
+    }
+  } catch (e) {}
+}
+
+// Kick the player up before the first /api/status round-trip so playback
+// starts the instant the page renders. If the manifest 404s (server idle),
+// the Hls.js fatal-error handler retries 800ms later.
+setupPlayer();
+pollStatus();
+setInterval(pollStatus, 2500);
+
+</script>
+</body>
+</html>
