@@ -38,6 +38,10 @@ HWACCEL_DECODE_CODECS = {"h264", "hevc", "vp8", "vp9", "mpeg2video"}
 VIDEO_BITRATE = os.environ.get("VIDEO_BITRATE", "5M")
 VIDEO_QP = os.environ.get("VIDEO_QP", "23")
 AUDIO_BITRATE = os.environ.get("AUDIO_BITRATE", "160k")
+# Output cap. 1080p is the default — fits a 5 Mbps target comfortably and
+# keeps the encode cheap on CPU. Set to 2160 for 4K passthrough on capable
+# hardware; output still shrinks to source height when source is smaller.
+TARGET_HEIGHT = int(os.environ.get("TARGET_HEIGHT", "1080"))
 HLS_SEG_TIME = os.environ.get("HLS_SEG_TIME", "4")
 # 450 segments × 4s = 30 minutes of scroll-back buffer for admin.
 HLS_LIST_SIZE = os.environ.get("HLS_LIST_SIZE", "450")
@@ -90,6 +94,27 @@ _composer_state = {
 
 viewers_lock = threading.Lock()
 viewers: dict[str, float] = {}
+# Parallel to `viewers`: ip -> last-seen token label, or None for no/invalid
+# token. Refreshed on every request that resolves a label so a friend who
+# revokes/rotates their token sees the change reflected in the admin list.
+viewer_labels: dict[str, str | None] = {}
+
+# Anonymous live chat. In-memory only — survives no restarts (per roadmap).
+# Each viewer's tab generates its own opaque session id (`sid`) client-side
+# and includes it in /chat/send; the server doesn't validate it, just stores
+# alongside the message so the UI can paint a per-session color dot. No
+# usernames anywhere.
+import collections as _collections
+CHAT_BUFFER_SIZE = 200      # ring-buffer depth visible to late-joiners
+CHAT_MSG_MAX_LEN = 500
+CHAT_NAME_MAX_LEN = 24      # caps display name; keeps a single message line scannable
+CHAT_RATE_WINDOW = 30       # seconds
+CHAT_RATE_MAX = 10          # per-IP messages per window
+chat_lock = threading.Lock()
+chat_messages = _collections.deque(maxlen=CHAT_BUFFER_SIZE)
+chat_next_id = 1
+# IP -> [timestamps within CHAT_RATE_WINDOW]. Pruned lazily on each send.
+chat_rate: dict[str, list[float]] = {}
 
 tokens_lock = threading.Lock()
 tokens: list[dict] = []
@@ -273,21 +298,23 @@ def _geo_lookup(ip: str) -> str:
 
 def _track_viewer():
     ip = _client_ip()
+    # Resolve label every request — cheap (a token-list scan) and lets admin
+    # see token rotation propagate without waiting for the IP to age out.
+    token = request.cookies.get(TOKEN_COOKIE) or request.args.get("t")
+    label = None
+    if token:
+        with tokens_lock:
+            for t in tokens:
+                if t.get("id") == token:
+                    label = t.get("label")
+                    break
     is_new = False
     with viewers_lock:
         if ip not in viewers:
             is_new = True
         viewers[ip] = time.time()
+        viewer_labels[ip] = label
     if is_new:
-        # Resolve token → label so the log says "who" instead of just an IP.
-        token = request.cookies.get(TOKEN_COOKIE) or request.args.get("t")
-        label = None
-        if token:
-            with tokens_lock:
-                for t in tokens:
-                    if t.get("id") == token:
-                        label = t.get("label")
-                        break
         ua = (request.headers.get("User-Agent") or "").replace("\n", " ")[:160]
         # Geo lookup hits the network; do it off the request thread so /hls
         # latency for the first segment isn't dragged into ipinfo.io's response time.
@@ -310,6 +337,7 @@ def _viewer_count() -> int:
         stale = [ip for ip, ts in viewers.items() if ts < cutoff]
         for ip in stale:
             del viewers[ip]
+            viewer_labels.pop(ip, None)
     if stale:
         for ip in stale:
             print(f"[viewer] disconnect ip={ip} (idle > {VIEWER_TIMEOUT}s)",
@@ -445,12 +473,25 @@ def _current_position() -> float | None:
 
 
 def _resolve_url(url: str) -> dict:
-    """Full-resolve a single video URL to a direct stream URL via yt-dlp."""
+    """Full-resolve a single video URL to direct stream URL(s) via yt-dlp.
+
+    YouTube only ships *muxed* formats (single file, video+audio together) up
+    to 360p — anything HD is DASH (separate video + audio streams). The
+    selector prefers the DASH path so we get real 1080p, falls back to muxed
+    when the site only offers that, and finally to "whatever yt-dlp can find."
+    h264 + m4a are constrained on the DASH branch so the encode side doesn't
+    have to handle vp9/opus on top of everything else.
+    """
     try:
         out = subprocess.check_output(
             [
                 "yt-dlp", "-J", "--no-playlist", "--no-warnings",
-                "-f", "best[height<=1080][ext=mp4]/best[height<=1080]/best",
+                "-f",
+                "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]"
+                "/bestvideo[height<=1080]+bestaudio"
+                "/best[height<=1080][ext=mp4]"
+                "/best[height<=1080]"
+                "/best",
                 url,
             ],
             timeout=45,
@@ -462,15 +503,26 @@ def _resolve_url(url: str) -> dict:
     except subprocess.TimeoutExpired:
         raise ValueError("yt-dlp timed out resolving URL")
     info = json.loads(out)
-    stream_url = info.get("url")
+    stream_url: str | None = info.get("url")
+    audio_url: str | None = None
     if not stream_url:
+        # DASH path — yt-dlp returns the chosen formats in `requested_formats`,
+        # one per stream. Pick the first video stream and (if present) the
+        # first audio stream so the caller can hand both to ffmpeg as
+        # separate -i inputs.
         formats = info.get("requested_formats") or []
-        if formats:
-            stream_url = formats[0].get("url")
+        for f in formats:
+            vcodec = (f.get("vcodec") or "").lower()
+            acodec = (f.get("acodec") or "").lower()
+            if stream_url is None and vcodec and vcodec != "none":
+                stream_url = f.get("url")
+            elif audio_url is None and acodec and acodec != "none":
+                audio_url = f.get("url")
     if not stream_url:
         raise ValueError("could not extract a direct stream URL")
     return {
         "stream_url": stream_url,
+        "audio_url": audio_url,
         "title": info.get("title") or url,
         "duration": info.get("duration"),
         "is_live": bool(info.get("is_live") or info.get("live_status") == "is_live"),
@@ -508,6 +560,10 @@ def _expand_url(url: str) -> list[dict]:
                 "title": e.get("title") or video_url,
                 "duration": e.get("duration"),
                 "is_live": False,
+                # URLs don't get burn-in subs — the source is a remote stream,
+                # libavfilter `subtitles=` reads the input file for sub data
+                # and there's no sidecar track for yt-dlp output.
+                "subtitle_idx": None,
             })
         if not items:
             raise ValueError("playlist has no playable entries")
@@ -517,26 +573,57 @@ def _expand_url(url: str) -> list[dict]:
         "title": info.get("title") or url,
         "duration": info.get("duration"),
         "is_live": bool(info.get("is_live") or info.get("live_status") == "is_live"),
+        "subtitle_idx": None,
     }]
 
 
 def _probe_video_codec(input_path: str) -> str | None:
     """Return ffmpeg's codec_name for the first video stream, or None if probe fails."""
+    info = _probe_video_info(input_path)
+    return info.get("codec") if info else None
+
+
+# transfer characteristics that signal HDR. smpte2084 = HDR10/PQ, arib-std-b67 = HLG.
+HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}
+
+
+def _probe_video_info(input_path: str) -> dict | None:
+    """One-shot ffprobe for the first video stream: codec, width, height, and an
+    is_hdr flag derived from color_transfer (PQ / HLG). Returns None if probe
+    fails. Cached per-source via the call sites — _start_stream calls this
+    once per ffmpeg launch, no need for a memoization layer here."""
     try:
         out = subprocess.check_output(
             [
                 "ffprobe", "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name",
-                "-of", "default=noprint_wrappers=1:nokey=1",
+                "-show_entries", "stream=codec_name,width,height,color_transfer,color_primaries",
+                "-of", "json",
                 input_path,
             ],
             timeout=10,
             stderr=subprocess.DEVNULL,
-        ).decode().strip().lower()
-        return out or None
+        ).decode()
+        data = json.loads(out)
     except Exception:
         return None
+    streams = data.get("streams") or []
+    if not streams:
+        return None
+    s = streams[0]
+    transfer = (s.get("color_transfer") or "").lower()
+    primaries = (s.get("color_primaries") or "").lower()
+    # HDR: PQ/HLG transfer is the canonical signal. bt2020 primaries alone
+    # aren't enough — some BT.2020-tagged sources are still SDR.
+    is_hdr = transfer in HDR_TRANSFERS
+    return {
+        "codec": (s.get("codec_name") or "").lower() or None,
+        "width": s.get("width"),
+        "height": s.get("height"),
+        "transfer": transfer or None,
+        "primaries": primaries or None,
+        "is_hdr": is_hdr,
+    }
 
 
 ENGLISH_LANG_TAGS = {"eng", "en", "en-us", "en-gb"}
@@ -575,11 +662,97 @@ def _probe_english_audio(input_path: str) -> int | None:
     return None
 
 
+# Text-based subtitle codecs the libavfilter `subtitles=` filter can render.
+# Bitmap formats (hdmv_pgs_subtitle, dvd_subtitle, dvb_subtitle) are skipped
+# because the filter rasterizes via libass and only handles text streams —
+# burning in PGS would need an OCR pass we don't have.
+TEXT_SUBTITLE_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "text"}
+
+
+def _probe_subtitle_tracks(input_path: str) -> list[dict]:
+    """Return text-based subtitle tracks as `[{index, codec, language}, …]`
+    where `index` is the position among ALL subtitle streams (0,1,2,…) in
+    container order — this is what the `subtitles=…:si=N` filter expects.
+    Bitmap formats (PGS, DVD, DVB) are filtered out: `subtitles=` can't render
+    them. Returns [] on probe failure or no usable tracks."""
+    try:
+        out = subprocess.check_output(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "stream=index,codec_type,codec_name:stream_tags=language",
+                "-of", "json",
+                input_path,
+            ],
+            timeout=10,
+            stderr=subprocess.DEVNULL,
+        ).decode()
+        data = json.loads(out)
+    except Exception:
+        return []
+    tracks: list[dict] = []
+    sub_pos = -1
+    for s in data.get("streams", []):
+        if s.get("codec_type") != "subtitle":
+            continue
+        sub_pos += 1
+        codec = (s.get("codec_name") or "").lower()
+        if codec not in TEXT_SUBTITLE_CODECS:
+            continue
+        lang = ((s.get("tags") or {}).get("language") or "").lower() or None
+        tracks.append({"index": sub_pos, "codec": codec, "language": lang})
+    return tracks
+
+
+def _pick_default_subtitle(input_path: str) -> int | None:
+    """Auto-pick a sub track index for burn-in: prefer English-tagged, fall
+    back to the first text-based track. None when nothing is usable."""
+    tracks = _probe_subtitle_tracks(input_path)
+    if not tracks:
+        return None
+    for t in tracks:
+        if _is_english(t.get("language")):
+            return t["index"]
+    return tracks[0]["index"]
+
+
+def _escape_subtitles_path(path: str) -> str:
+    """Escape a filesystem path for use as the `subtitles=filename=…` value
+    in an ffmpeg `-vf` argument. libavfilter parses this string twice — once
+    as a filtergraph (commas/semicolons/brackets are structural) and once as
+    a key=value list (colons split kv pairs). Backslash-escape every
+    metacharacter; ffmpeg's docs spell out this exact set."""
+    out = []
+    for ch in path:
+        if ch in ("\\", ":", "'", "[", "]", ",", ";"):
+            out.append("\\")
+        out.append(ch)
+    return "".join(out)
+
+
+# Subtitle styling for burn-in. Fontsize=24 is readable on 1080p without
+# overpowering the frame; OutlineColour with alpha + BorderStyle=3 puts a
+# semi-transparent box behind each line so subs stay legible on bright /
+# busy backgrounds. ASS-style force_style — applied to every track regardless
+# of source format.
+SUBTITLE_FORCE_STYLE = "Fontsize=24,OutlineColour=&H40000000,BorderStyle=3"
+
+
+def _subtitles_filter(input_path: str, sub_idx: int) -> str:
+    """Render the `subtitles=` filter expression with a properly escaped
+    filename and the chosen subtitle stream index."""
+    return (
+        f"subtitles=filename={_escape_subtitles_path(input_path)}"
+        f":si={sub_idx}:force_style='{SUBTITLE_FORCE_STYLE}'"
+    )
+
+
 def _build_ffmpeg_cmd(
     input_path: Path | str,
     run_dir: Path,
     start_seconds: float = 0.0,
     audio_idx: int | None = None,
+    subtitle_idx: int | None = None,
+    audio_input: str | None = None,
 ) -> list[str]:
     """Build the ffmpeg HLS command. Output goes into `run_dir/`:
     `init.mp4` (fmp4 init segment), `seg_NNNNN.m4s` (media segments), and
@@ -587,13 +760,35 @@ def _build_ffmpeg_cmd(
 
     `audio_idx` (the position of an English-tagged audio stream from
     `_probe_english_audio`, or None) drives English-audio preference for
-    MULTi rips."""
+    MULTi rips.
+
+    `subtitle_idx` (a sub-stream position from `_probe_subtitle_tracks`, or
+    None) selects a text-based track to burn in via the libavfilter
+    `subtitles=` filter. Burn-in only — there's no client-side toggle.
+
+    `audio_input` (a separate URL, only set on the YouTube DASH path) feeds
+    audio from a 2nd `-i` input. Without this, YouTube's "best muxed" tops
+    out at 360p — we ask yt-dlp for separate video+audio formats so we can
+    get real 1080p, then merge here at encode time."""
     input_str = str(input_path)
+    # Single ffprobe pass — codec for HW-decode eligibility, height for output
+    # cap, transfer/primaries for HDR detection.
+    info = _probe_video_info(input_str) or {}
+    src_codec = info.get("codec")
+    src_height = info.get("height")
+    is_hdr = bool(info.get("is_hdr"))
+    # Output height: clamp to TARGET_HEIGHT, but don't upscale a smaller source
+    # (a 720p WEB-DL has nothing to gain from being upscaled to 1080p, just CPU).
+    out_h = min(src_height, TARGET_HEIGHT) if src_height else TARGET_HEIGHT
     # Decide whether the GPU can decode this source; falls back to CPU decode
     # for codecs the iHD VLD engine doesn't support (e.g. AV1) or if ffprobe fails.
+    # HDR sources go through CPU decode unconditionally — the HW path can't
+    # tonemap on this iGPU (no VPP), and the zscale tonemap chain only works
+    # on CPU-side frames.
     hw_decode = (
         USE_VAAPI and USE_VAAPI_DECODE
-        and _probe_video_codec(input_str) in HWACCEL_DECODE_CODECS
+        and src_codec in HWACCEL_DECODE_CODECS
+        and not is_hdr
     )
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin"]
     if USE_VAAPI:
@@ -611,15 +806,30 @@ def _build_ffmpeg_cmd(
     if start_seconds > 0:
         cmd += ["-ss", f"{start_seconds:.3f}"]
     cmd += ["-re", "-i", input_str]
-    # Map: video, English-preferred audio. -sn drops every subtitle track;
-    # without it ffmpeg's HLS muxer auto-maps them all — Superbad's 8 PGS
-    # subs alone push CPU to ~1000%.
-    audio_map = f"0:a:{audio_idx}" if audio_idx is not None else "0:a:0?"
+    # YouTube DASH path: separate audio URL feeds a 2nd input. -ss is repeated
+    # so both inputs seek to the same position, keeping audio in sync after
+    # admin scrubbing. -re paces both at native rate.
+    if audio_input:
+        if start_seconds > 0:
+            cmd += ["-ss", f"{start_seconds:.3f}"]
+        cmd += ["-re", "-i", audio_input]
+    # Map: video from input #0, audio from input #1 if it's a separate URL,
+    # otherwise from input #0. -sn drops every subtitle track; without it
+    # ffmpeg's HLS muxer auto-maps them all — Superbad's 8 PGS subs alone
+    # push CPU to ~1000%.
+    if audio_input:
+        audio_map = "1:a:0"
+    else:
+        audio_map = f"0:a:{audio_idx}" if audio_idx is not None else "0:a:0?"
     cmd += [
         "-map", "0:v:0",
         "-map", audio_map,
         "-sn",
     ]
+    sub_filter = (
+        _subtitles_filter(input_str, subtitle_idx)
+        if subtitle_idx is not None else None
+    )
     if USE_VAAPI:
         # When hw_decode is on, frames are already in vaapi format on the GPU,
         # so scale_vaapi runs entirely on the GPU. Otherwise hwupload moves
@@ -630,11 +840,41 @@ def _build_ffmpeg_cmd(
         # then re-uploads for the GPU encoder. format=nv12|p010le accepts
         # 8-bit and Main10 sources; the trailing format=nv12 forces 8-bit
         # output for h264_vaapi (Main profile).
-        vf = (
-            "hwdownload,format=nv12|p010le,scale=-2:1080,format=nv12,hwupload"
-            if hw_decode else
-            "scale=-2:1080,format=nv12,hwupload"
-        )
+        # HDR path uses zscale to tonemap PQ/HLG → BT.709 SDR before encode
+        # — h264_vaapi outputs SDR, and naive p010le→nv12 colorspace truncation
+        # produces "deepfried" HDR-on-SDR output (clipped highlights, oversaturated).
+        # zscale is CPU-only, so HDR sources are decoded on CPU (hw_decode is
+        # forced off above for HDR).
+        # Subtitle burn-in: the `subtitles=` filter is CPU-only and renders
+        # via libass. It must run on SDR frames in CPU memory:
+        #   - HDR branch: AFTER tonemap (so subs render onto SDR pixels) and
+        #     BEFORE the final scale + hwupload.
+        #   - HW-decode branch: AFTER hwdownload (CPU frames) and BEFORE
+        #     hwupload — render then push back to GPU.
+        #   - CPU-decode branch: BEFORE format=nv12,hwupload.
+        if is_hdr:
+            # Reference: ffmpeg HDR-to-SDR best-practice chain. npl=100 targets
+            # SDR-display peak luminance (100 nits); hable is the most forgiving
+            # tonemap operator for the typical PQ-mastered movie source.
+            tonemap_pre = (
+                "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+                "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
+            )
+            tonemap_post = f"scale=-2:{out_h},format=nv12,hwupload"
+            vf = (
+                f"{tonemap_pre},{sub_filter},{tonemap_post}"
+                if sub_filter else f"{tonemap_pre},{tonemap_post}"
+            )
+        elif hw_decode:
+            pre = f"hwdownload,format=nv12|p010le"
+            post = f"scale=-2:{out_h},format=nv12,hwupload"
+            vf = (
+                f"{pre},{sub_filter},{post}"
+                if sub_filter else f"{pre},{post}"
+            )
+        else:
+            post = f"scale=-2:{out_h},format=nv12,hwupload"
+            vf = f"{sub_filter},{post}" if sub_filter else post
         cmd += [
             "-vf", vf,
             "-c:v", "h264_vaapi",
@@ -664,8 +904,25 @@ def _build_ffmpeg_cmd(
             "-bsf:v", "h264_metadata=aud=insert",
         ]
     else:
+        # Pure CPU path. Same HDR tonemap chain as the VAAPI branch when needed,
+        # else just a plain scale. Subs burn in BEFORE scale (cheaper to
+        # render once at source resolution than per-line at output) and AFTER
+        # tonemap when HDR.
+        if is_hdr:
+            tonemap_pre = (
+                "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+                "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
+            )
+            scale = f"scale=-2:{out_h}"
+            vf = (
+                f"{tonemap_pre},{sub_filter},{scale}"
+                if sub_filter else f"{tonemap_pre},{scale}"
+            )
+        else:
+            scale = f"scale=-2:{out_h}"
+            vf = f"{sub_filter},{scale}" if sub_filter else scale
         cmd += [
-            "-vf", "scale=-2:1080",
+            "-vf", vf,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-tune", "zerolatency",
@@ -705,20 +962,48 @@ def _build_ffmpeg_cmd(
     return cmd
 
 
-def _pick_random_from_library() -> dict | None:
-    """Walk MEDIA_ROOT and return a random playable file as a source dict, or None
-    if the library has no playable videos."""
-    candidates: list[Path] = []
+_library_cache_lock = threading.Lock()
+_library_cache: dict = {"mtime": None, "files": None}
+
+
+def _scan_library() -> list[Path]:
+    """Walk MEDIA_ROOT, returning every playable file. Result is cached and
+    reused while MEDIA_ROOT's top-level mtime is unchanged — adding/removing
+    a top-level series or movie folder bumps the dir mtime and forces a
+    rescan. Today this scan is ~13ms for 143 files; the cache is a guard
+    against cost growth as the library expands past a few thousand."""
     try:
-        for root, _dirs, files in os.walk(MEDIA_ROOT):
-            for name in files:
+        mtime = MEDIA_ROOT.stat().st_mtime
+    except OSError:
+        mtime = None
+    with _library_cache_lock:
+        if mtime is not None and _library_cache["mtime"] == mtime and _library_cache["files"] is not None:
+            return list(_library_cache["files"])
+    files: list[Path] = []
+    try:
+        for root, _dirs, names in os.walk(MEDIA_ROOT):
+            for name in names:
                 if name.startswith("."):
                     continue
                 if Path(name).suffix.lower() in VIDEO_EXTS:
-                    candidates.append(Path(root) / name)
+                    files.append(Path(root) / name)
     except Exception as e:
         print(f"library scan failed: {e}", file=sys.stderr)
-        return None
+        return []
+    with _library_cache_lock:
+        _library_cache["mtime"] = mtime
+        _library_cache["files"] = files
+    return list(files)
+
+
+def _pick_random_from_library() -> dict | None:
+    """Return a random playable file as a source dict, or None if the library
+    has no playable videos.
+
+    Auto-pick has no UI for choosing a subtitle track, so subtitle_idx is
+    set to None — _start_stream sees the key present and skips its legacy
+    auto-pick fallback. (If you want subs on auto-fill picks, change this.)"""
+    candidates = _scan_library()
     if not candidates:
         return None
     pick = random.choice(candidates)
@@ -728,6 +1013,7 @@ def _pick_random_from_library() -> dict | None:
         "title": pick.name,
         "duration": None,
         "is_live": False,
+        "subtitle_idx": None,
     }
 
 
@@ -1023,6 +1309,7 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
     and the new run's first segment. Viewers see one continuous stream.m3u8."""
     global current_proc, current_source, current_start_offset, current_start_time
     global current_paused, paused_position
+    audio_input: str | None = None  # set on the URL DASH path; passed as a 2nd ffmpeg -i
     if source["type"] == "file":
         full_path = _safe_resolve(source["ref"], must_be_file=True)
         ffmpeg_input = str(full_path)
@@ -1032,6 +1319,7 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
     elif source["type"] == "url":
         resolved = _resolve_url(source["ref"])
         ffmpeg_input = resolved["stream_url"]
+        audio_input = resolved.get("audio_url")
         source = {
             **source,
             "title": resolved["title"],
@@ -1044,6 +1332,14 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
     if duration is not None and start_seconds >= duration:
         start_seconds = max(0.0, duration - 1.0)
     audio_idx = _probe_english_audio(ffmpeg_input)
+    # Subtitle burn-in: use the value already on the source dict (set at
+    # queue/play time, including explicit `null` to mean "no subs"). Only
+    # auto-pick as a fallback when the key is entirely absent — i.e. this is
+    # a legacy state.json or a path that pre-dates subtitle support. URLs
+    # don't carry sub indices.
+    if source["type"] == "file" and "subtitle_idx" not in source:
+        source = {**source, "subtitle_idx": _pick_default_subtitle(ffmpeg_input)}
+    subtitle_idx = source.get("subtitle_idx") if source["type"] == "file" else None
     with state_lock:
         global active_run_id, next_run_id
         # Retire the old run (its segments stay on disk + in the master until
@@ -1056,7 +1352,10 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
         next_run_id += 1
         run_dir = _run_dir(run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
-        cmd = _build_ffmpeg_cmd(ffmpeg_input, run_dir, start_seconds, audio_idx)
+        cmd = _build_ffmpeg_cmd(
+            ffmpeg_input, run_dir, start_seconds, audio_idx, subtitle_idx,
+            audio_input=audio_input,
+        )
         current_proc = subprocess.Popen(cmd)
         active_run_id = run_id
         current_source = source
@@ -1114,6 +1413,8 @@ def _gate_viewer_routes():
     p = request.path
     if p.startswith("/admin"):
         return None  # Traefik handles admin auth
+    if p == "/api/_authcheck":
+        return None  # nginx subrequest endpoint — has its own logic below
     with settings_lock:
         if settings.get("viewer_public"):
             return None  # public mode — anyone can watch
@@ -1131,6 +1432,102 @@ def _gate_viewer_routes():
     if p == "/":
         return NO_TOKEN_PAGE, 401
     return ("", 401)
+
+
+@app.route("/api/_authcheck")
+def api_authcheck():
+    """nginx auth_request subrequest target. nginx forwards the original
+    request's Cookie + X-Forwarded-For + User-Agent here; we return 204 if
+    the viewer is allowed to fetch /hls/* (public mode OR valid token cookie),
+    401 otherwise. nginx then either serves the static segment or rejects
+    with 401 itself. Excluded from `_gate_viewer_routes` so the gate doesn't
+    return its HTML "no token" page here — nginx wants a body-less response.
+
+    Doubles as the viewer-tracking hook: each /hls/* fetch triggers an
+    auth_request, which is now the only Flask touchpoint per segment fetch.
+    Without _track_viewer here the active viewers list and history go silent."""
+    with settings_lock:
+        public = settings.get("viewer_public")
+    if not public and not _valid_token(request.cookies.get(TOKEN_COOKIE)):
+        return ("", 401)
+    # Authorized — log this viewer activity. Idempotent: updates the timestamp
+    # for known IPs and only emits a connect-log on the very first sighting.
+    _track_viewer()
+    return ("", 204)
+
+
+def _chat_rate_check(ip: str) -> bool:
+    """True if this IP can post one more message within the rolling window.
+    Mutates `chat_rate` to record the timestamp on success. Pruned lazily."""
+    now = time.time()
+    cutoff = now - CHAT_RATE_WINDOW
+    with chat_lock:
+        timestamps = [t for t in chat_rate.get(ip, []) if t > cutoff]
+        if len(timestamps) >= CHAT_RATE_MAX:
+            chat_rate[ip] = timestamps
+            return False
+        timestamps.append(now)
+        chat_rate[ip] = timestamps
+        return True
+
+
+@app.route("/chat/recent")
+def api_chat_recent():
+    """Long-poll-friendly catch-up endpoint. `?since=N` returns every message
+    with id > N (ring-buffer-bounded — late joiners get up to CHAT_BUFFER_SIZE
+    of history). Both the viewer and admin pages poll this."""
+    try:
+        since = int(request.args.get("since", 0))
+    except ValueError:
+        since = 0
+    with chat_lock:
+        messages = [m for m in chat_messages if m["id"] > since]
+    max_id = messages[-1]["id"] if messages else since
+    return jsonify({"messages": messages, "max_id": max_id})
+
+
+def _clean_chat_name(raw: str | None) -> str:
+    """Squeeze a user-provided display name down to printable ASCII-ish text,
+    cap to CHAT_NAME_MAX_LEN, fall back to 'anonymous' when nothing's left.
+    Strips control chars and zero-widths so a label can't hide its size or
+    inject formatting tricks into the chat list."""
+    if not raw:
+        return "anonymous"
+    cleaned = "".join(c for c in raw if c.isprintable() and c not in "​‌‍﻿")
+    cleaned = " ".join(cleaned.split())  # collapse whitespace runs
+    cleaned = cleaned[:CHAT_NAME_MAX_LEN].strip()
+    return cleaned or "anonymous"
+
+
+@app.route("/chat/send", methods=["POST"])
+def api_chat_send():
+    """Append a message to the in-memory ring. `sid` is opaque — generated
+    client-side, used only to color-dot the message. `name` is a free-text
+    display name (also client-driven — no validation against tokens). Per-IP
+    rate limit: CHAT_RATE_MAX messages per CHAT_RATE_WINDOW seconds. No
+    persistence — a server restart wipes the chat (intentional, per roadmap)."""
+    data = request.get_json(silent=True) or {}
+    text = (data.get("message") or "").strip()
+    if not text:
+        return jsonify({"error": "empty message"}), 400
+    if len(text) > CHAT_MSG_MAX_LEN:
+        return jsonify({"error": f"message exceeds {CHAT_MSG_MAX_LEN} chars"}), 413
+    sid = (data.get("sid") or "").strip()[:32] or "anon"
+    name = _clean_chat_name(data.get("name"))
+    if not _chat_rate_check(_client_ip()):
+        return jsonify({"error": "rate limited"}), 429
+    global chat_next_id
+    with chat_lock:
+        msg = {
+            "id": chat_next_id,
+            "ts": time.time(),
+            "sid": sid,
+            "name": name,
+            "text": text,
+        }
+        chat_next_id += 1
+        chat_messages.append(msg)
+    return jsonify({"ok": True, "id": msg["id"]})
 
 
 @app.route("/")
@@ -1174,15 +1571,28 @@ def api_play():
     if not path:
         return jsonify({"error": "path required"}), 400
     start = float(data.get("start_seconds") or 0)
+    # Subtitle handling: missing key → auto-pick English; explicit JSON
+    # `null` → no subs (passes through state intact). Anything else gets
+    # coerced to int.
+    if "subtitle_idx" in data:
+        raw = data["subtitle_idx"]
+        sub_idx = None if raw is None else int(raw)
+    else:
+        full = _safe_resolve(path, must_be_file=True)
+        sub_idx = _pick_default_subtitle(str(full))
     source = {
         "type": "file",
         "ref": path,
         "title": Path(path).name,
         "duration": None,
         "is_live": False,
+        "subtitle_idx": sub_idx,
     }
     _start_stream(source, start_seconds=start)
-    return jsonify({"ok": True, "path": path, "start_seconds": start})
+    return jsonify({
+        "ok": True, "path": path, "start_seconds": start,
+        "subtitle_idx": sub_idx,
+    })
 
 
 @app.route("/admin/api/play_url", methods=["POST"])
@@ -1253,14 +1663,55 @@ def api_viewers():
     cutoff = time.time() - VIEWER_TIMEOUT
     out = []
     with viewers_lock:
-        active = [(ip, ts) for ip, ts in viewers.items() if ts >= cutoff]
-    # Build labels outside viewers_lock to avoid nesting locks on the hot path.
-    for ip, ts in active:
+        active = [(ip, ts, viewer_labels.get(ip)) for ip, ts in viewers.items() if ts >= cutoff]
+    # Build geo lookup outside viewers_lock to avoid nesting locks on the hot path.
+    for ip, ts, label in active:
         with _geo_cache_lock:
             loc = _geo_cache.get(ip, "?")
-        out.append({"ip": ip, "loc": loc, "last_seen": ts})
+        out.append({"ip": ip, "loc": loc, "last_seen": ts, "who": label})
     out.sort(key=lambda v: -v["last_seen"])
     return jsonify(out)
+
+
+@app.route("/admin/api/perf", methods=["GET"])
+def api_perf():
+    """Cheap observability hook: ffmpeg PID + uptime, segment count on disk,
+    composer/run state, viewer count. No external probes — everything here is
+    O(small) so a polling admin dashboard won't add latency to the hot path."""
+    with state_lock:
+        proc = current_proc
+        run_id = active_run_id
+        finished = sorted(finished_run_ids)
+        source = current_source
+        start_time = current_start_time
+        paused = current_paused
+    pid = proc.pid if proc else None
+    alive = bool(proc and proc.poll() is None)
+    uptime = (time.time() - start_time) if (alive and start_time > 0) else None
+    segments = 0
+    runs_on_disk = 0
+    try:
+        for d in RUN_DIR_BASE.iterdir():
+            if not d.is_dir():
+                continue
+            runs_on_disk += 1
+            for f in d.iterdir():
+                if f.suffix == ".m4s":
+                    segments += 1
+    except FileNotFoundError:
+        pass
+    return jsonify({
+        "ffmpeg_pid": pid,
+        "ffmpeg_alive": alive,
+        "ffmpeg_uptime_seconds": uptime,
+        "active_run_id": run_id,
+        "finished_run_ids": finished,
+        "runs_on_disk": runs_on_disk,
+        "segments_on_disk": segments,
+        "viewers": _viewer_count(),
+        "paused": paused,
+        "title": (source or {}).get("title"),
+    })
 
 
 @app.route("/admin/api/viewers/history", methods=["GET"])
@@ -1299,12 +1750,23 @@ def api_queue_add():
         if not path:
             return jsonify({"error": "path required"}), 400
         try:
-            _safe_resolve(path, must_be_file=True)
+            full = _safe_resolve(path, must_be_file=True)
         except Exception:
             return jsonify({"error": "file not found"}), 400
+        # Subtitle pick at enqueue time, same convention as /admin/api/play:
+        # omitted → auto-pick English; explicit JSON null → no subs.
+        if "subtitle_idx" in data:
+            raw = data["subtitle_idx"]
+            sub_idx = None if raw is None else int(raw)
+        else:
+            sub_idx = _pick_default_subtitle(str(full))
+        # Probe duration at enqueue time (cheap — ffprobe ~10-50ms per file)
+        # so the queue UI can show a duration badge without round-tripping
+        # later. None on probe failure stays harmless.
         items = [{
             "type": "file", "ref": path, "title": Path(path).name,
-            "duration": None, "is_live": False,
+            "duration": _probe_duration(full), "is_live": False,
+            "subtitle_idx": sub_idx,
         }]
     elif t == "url":
         url = (data.get("url") or "").strip()
@@ -1379,8 +1841,12 @@ def api_settings_set():
 
 @app.route("/admin/api/queue/<int:idx>/move", methods=["POST"])
 def api_queue_move(idx: int):
+    """Move a queue item. Supports legacy {direction: "up"|"down"} for the
+    arrow buttons and {to: N} for drag-drop reordering (where N is the new
+    index, with the item removed first). Out-of-range targets clamp."""
     data = request.get_json(silent=True) or {}
-    direction = data.get("direction")  # "up" or "down"
+    direction = data.get("direction")
+    to = data.get("to")
     with playlist_lock:
         n = len(playlist)
         if not (0 <= idx < n):
@@ -1389,6 +1855,18 @@ def api_queue_move(idx: int):
             playlist[idx - 1], playlist[idx] = playlist[idx], playlist[idx - 1]
         elif direction == "down" and idx < n - 1:
             playlist[idx + 1], playlist[idx] = playlist[idx], playlist[idx + 1]
+        elif to is not None:
+            try:
+                to_i = int(to)
+            except (TypeError, ValueError):
+                return jsonify({"error": "to must be an integer"}), 400
+            # Clamp to a valid post-removal index. After removing `idx`, the
+            # list has n-1 slots, so the destination is in [0, n-1].
+            to_i = max(0, min(n - 1, to_i))
+            if to_i == idx:
+                return jsonify({"ok": True})
+            item = playlist.pop(idx)
+            playlist.insert(to_i, item)
         else:
             return jsonify({"ok": True})
         _save_playlist()

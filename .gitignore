@@ -1,0 +1,8 @@
+# Python compile cache — built at runtime, never source-of-truth.
+__pycache__/
+*.pyc
+
+# Local secrets / state — runtime artifacts the container holds in /data,
+# but if anyone runs the app outside Docker these shouldn't get committed.
+state/
+*.local

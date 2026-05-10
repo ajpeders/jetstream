@@ -154,16 +154,44 @@
     display: flex; align-items: center; gap: 0.5rem;
     padding: 0.4rem 0; border-top: 1px solid #1a1a1a;
     font-size: 0.85rem;
+    /* Drag-and-drop visual cues */
+    cursor: grab;
+    transition: background 0.1s, opacity 0.1s;
   }
+  #queue-panel li:active { cursor: grabbing; }
   #queue-panel li:first-child { border-top: none; }
+  /* Source-being-dragged: dim it slightly so the user can track what's moving. */
+  #queue-panel li.dragging { opacity: 0.35; }
+  /* Drop target line — a thin highlighted top border when an item is hovering. */
+  #queue-panel li.drag-over { border-top: 2px solid #6cb6ff; padding-top: calc(0.4rem - 1px); }
   #queue-panel .pos { color: #555; font-variant-numeric: tabular-nums; min-width: 1.5em; text-align: right; }
-  #queue-panel .qicon { color: #6cb6ff; width: 1.2em; text-align: center; }
-  #queue-panel .qicon.url { color: #c66; }
+  /* Source-type chip. Color-coded per provider (file vs YouTube vs other URL)
+     so admin can scan a long queue and see what's coming from where. */
+  #queue-panel .qchip {
+    flex-shrink: 0; font-size: 0.65rem; letter-spacing: 0.04em; font-weight: 600;
+    padding: 0.08rem 0.4rem; border-radius: 3px;
+    background: #1a3050; color: #6cb6ff; border: 1px solid #244266;
+  }
+  #queue-panel .qchip.yt { background: #3a1818; color: #ff7676; border-color: #5a2424; }
+  #queue-panel .qchip.url { background: #2a2030; color: #c693e8; border-color: #3e2e50; }
+  /* CC badge — flagged on items whose subtitle_idx is set, so admin can see
+     at a glance which queue entries will have burned-in subs. */
+  #queue-panel .qcc {
+    flex-shrink: 0; font-size: 0.6rem; letter-spacing: 0.05em; font-weight: 700;
+    padding: 0.05rem 0.35rem; border-radius: 2px;
+    background: #1f3326; color: #7dcc99; border: 1px solid #2c4a37;
+  }
   #queue-panel .qtitle { flex: 1; color: #ccc; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Duration badge — right-aligned, tabular nums so 1:23:45 doesn't wobble. */
+  #queue-panel .qdur {
+    color: #777; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+    flex-shrink: 0; min-width: 3em; text-align: right;
+  }
+  #queue-panel .qdur.live { color: #c33; font-weight: 600; }
   #queue-panel button {
     padding: 0.2rem 0.5rem; font-size: 0.75rem;
   }
-  #queue-panel .empty-q { color: #555; padding: 0.4rem 0; font-size: 0.85rem; }
+  #queue-panel .empty-q { color: #555; padding: 0.7rem 0; font-size: 0.85rem; line-height: 1.4; }
   /* "Queue" button alongside file rows */
   ul#list li button.queue-btn {
     padding: 0.2rem 0.55rem; font-size: 0.75rem; flex-shrink: 0;
@@ -266,6 +294,67 @@
     width: 12em;
     font-family: inherit;
   }
+  /* Anonymous chat panel — same shape as the viewer's, just scoped to admin
+     styling. Sits at the bottom of the page, collapsible. */
+  #chat-panel {
+    margin: 1rem 1.2rem;
+    background: #0e0e0e;
+    border: 1px solid #1f1f1f; border-radius: 4px;
+    display: flex; flex-direction: column;
+    max-height: 22rem;
+    transition: max-height 0.15s;
+  }
+  #chat-panel.collapsed { max-height: 2.4rem; overflow: hidden; }
+  #chat-header {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.5rem 0.85rem;
+    cursor: pointer; user-select: none;
+    border-bottom: 1px solid #1a1a1a;
+  }
+  #chat-panel.collapsed #chat-header { border-bottom: none; }
+  #chat-header h2 {
+    margin: 0; font-size: 0.9rem; font-weight: 500; color: #ccc;
+    letter-spacing: 0.02em; flex: 1;
+  }
+  #chat-header .toggle { color: #666; font-size: 0.8rem; }
+  #chat-messages {
+    flex: 1; overflow-y: auto;
+    padding: 0.5rem 0.85rem;
+    font-size: 0.85rem;
+    min-height: 6rem;
+  }
+  #chat-messages .empty { color: #555; padding: 0.5rem 0; }
+  .chat-msg { display: flex; gap: 0.5rem; padding: 0.18rem 0; align-items: flex-start; }
+  .chat-dot { flex-shrink: 0; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-top: 0.45rem; }
+  .chat-name { color: #aaa; font-weight: 600; flex-shrink: 0; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-msg.self .chat-name { color: #ddd; }
+  .chat-text { flex: 1; color: #ddd; word-wrap: break-word; overflow-wrap: anywhere; }
+  .chat-msg.self .chat-text { color: #fff; }
+  #chat-form {
+    display: flex; gap: 0.5rem; align-items: center;
+    padding: 0.5rem 0.85rem;
+    border-top: 1px solid #1a1a1a;
+  }
+  #chat-name-input {
+    background: #1a1a1a; color: #cda;
+    border: 1px solid #2a2a2a; border-radius: 4px;
+    padding: 0.4rem 0.55rem; font-size: 0.8rem; font-family: inherit;
+    width: 8em; min-width: 0;
+  }
+  #chat-name-input:focus { outline: none; border-color: #444; }
+  #chat-input {
+    flex: 1;
+    background: #1a1a1a; color: #eee;
+    border: 1px solid #2a2a2a; border-radius: 4px;
+    padding: 0.4rem 0.6rem; font-size: 0.85rem; font-family: inherit;
+    min-width: 0;
+  }
+  #chat-input:focus { outline: none; border-color: #444; }
+  #chat-input:disabled { opacity: 0.5; }
+  #chat-send {
+    padding: 0.35rem 0.9rem; font-size: 0.85rem;
+  }
+  #chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -345,6 +434,21 @@
 </div>
 <div id="breadcrumb"></div>
 <ul id="list"><li class="empty">Loading…</li></ul>
+
+<section id="chat-panel">
+  <div id="chat-header">
+    <h2>Chat</h2>
+    <span class="toggle" id="chat-toggle">▾</span>
+  </div>
+  <div id="chat-messages"><div class="empty">No messages yet.</div></div>
+  <form id="chat-form" autocomplete="off">
+    <input id="chat-name-input" type="text" maxlength="24" placeholder="name"
+           aria-label="Display name (optional, anonymous if blank)">
+    <input id="chat-input" type="text" maxlength="500" placeholder="Type a message…">
+    <button id="chat-send" type="submit">send</button>
+  </form>
+</section>
+
 <div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
@@ -487,11 +591,14 @@ async function play(path, name) {
 
 async function stop() {
   if (!confirm("Stop the current stream?")) return;
+  // Optimistic UI: tear the player down immediately so the admin sees the
+  // stop reflected on the click, not after the next poll. The server call
+  // catches up async — pollStatus reconciles either way.
+  nowPlaying = null;
+  teardownPlayer();
+  showToast("Stopping…");
   try {
     await fetch("/admin/api/stop", { method: "POST" });
-    nowPlaying = null;
-    teardownPlayer();
-    showToast("Stopped");
   } catch (e) {
     showToast("Failed: " + e.message);
   }
@@ -503,17 +610,21 @@ let skipInFlight = false;
 async function skipNext() {
   if (skipInFlight) return;
   skipInFlight = true;
+  // Optimistic disable — the button visually commits before the network
+  // round-trip. pollStatus updates the title once the new source is up.
+  skipBtn.disabled = true;
+  showToast("Skipping…");
   try {
     const res = await fetch("/admin/api/skip", { method: "POST" });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || ("HTTP " + res.status));
     }
-    showToast("Skipping…");
   } catch (e) {
     showToast("Failed: " + e.message);
   } finally {
     skipInFlight = false;
+    skipBtn.disabled = false;
   }
 }
 skipBtn.addEventListener("click", skipNext);
@@ -522,6 +633,15 @@ let pauseInFlight = false;
 async function togglePause(currentlyPaused) {
   if (pauseInFlight) return;
   pauseInFlight = true;
+  // Optimistic flip — the button label + dataset change instantly so admin
+  // doesn't see "Pause" stay "Pause" until the next /api/status poll. The
+  // poll reconciles if the server rejected the toggle (unlikely, basically
+  // only happens on double-click races, which the in-flight guard absorbs).
+  const willBePaused = !currentlyPaused;
+  pauseBtn.textContent = willBePaused ? "Resume" : "Pause";
+  pauseBtn.dataset.paused = willBePaused ? "1" : "0";
+  serverPaused = willBePaused;
+  if (willBePaused && !video.paused) video.pause();
   try {
     const url = currentlyPaused ? "/admin/api/resume" : "/admin/api/pause";
     const res = await fetch(url, { method: "POST" });
@@ -646,8 +766,17 @@ function setupPlayer() {
     video.play().catch(() => {});
   } else if (window.Hls && Hls.isSupported()) {
     // liveSyncDurationCount: 1 keeps admin within ~one segment of live so it
+    // chases the broadcast it controls. backBufferLength: 1 drops old segments
+    // immediately so admin can't accidentally watch a stale buffer after
+    // pausing/resuming. liveMaxLatencyDurationCount caps how far behind we'll
+    // ever drift before forcing a snap.
     // matches viewer (and matches the loadedmetadata snap below).
-    hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 1 });
+    hls = new Hls({
+      lowLatencyMode: true,
+      liveSyncDurationCount: 1,
+      liveMaxLatencyDurationCount: 3,
+      backBufferLength: 1,
+    });
     hls.loadSource(src);
     hls.attachMedia(video);
     // iOS Safari sometimes leaves the element paused after attachMedia
@@ -796,10 +925,11 @@ function snapToLive() {
   }
 }
 video.addEventListener("loadedmetadata", snapToLive);
-// Continuous server-time sync — same logic as the viewer page. PDT-tagged
-// segments + a periodic clock-offset update from /api/status mean every
-// device targets the same wall-clock playhead.
-const TARGET_LAG_S = 2.5;
+// Continuous server-time sync — same logic as the viewer page, but with a
+// tighter target. Admin watches what they're broadcasting; the closer to
+// the live edge the better, since every command (pause / seek / skip)
+// otherwise feels delayed by the lag visible on screen.
+const TARGET_LAG_S = 1.5;
 let serverClockOffsetMs = 0;
 
 function currentPlayingDateMs() {
@@ -824,14 +954,16 @@ setInterval(() => {
   }
   const serverNowMs = Date.now() + serverClockOffsetMs;
   const drift = (serverNowMs - playing) / 1000 - TARGET_LAG_S;
-  if (Math.abs(drift) > 5) {
+  // Tighter snap threshold for admin (was 5s) — admin's player drifting
+  // beyond ~2s of target makes every control click feel laggy.
+  if (Math.abs(drift) > 2) {
     snapToLive();
     video.playbackRate = 1.0;
     return;
   }
   let target = 1.0;
-  if (drift > 0.5) target = 1.015;
-  else if (drift < -0.5) target = 0.985;
+  if (drift > 0.3) target = 1.015;
+  else if (drift < -0.3) target = 0.985;
   if (video.playbackRate !== target) video.playbackRate = target;
 }, 2000);
 
@@ -959,29 +1091,111 @@ async function queueAddFile(path, name) {
   }
 }
 
+function fmtDur(sec) {
+  if (!sec || !isFinite(sec) || sec < 0) return "";
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const pad = n => String(n).padStart(2, "0");
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+function chipForItem(it) {
+  // FILE: local library. YOUTUBE: youtube.com / youtu.be. URL: anything else
+  // yt-dlp can resolve. Provider detection is intentionally narrow — adding
+  // dedicated chips for every yt-dlp extractor would clutter the panel.
+  if (it.type === "file") return { cls: "", text: "FILE" };
+  const ref = it.ref || "";
+  if (/^https?:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\b/i.test(ref)) {
+    return { cls: "yt", text: "YOUTUBE" };
+  }
+  return { cls: "url", text: "URL" };
+}
+
 function renderQueue(items) {
   queueCount.textContent = items.length;
   if (!items.length) {
-    queueList.innerHTML = '<li class="empty-q">Queue is empty. Add a file or URL to auto-play after the current item ends.</li>';
+    queueList.innerHTML = '<li class="empty-q">Queue is empty.<br>Add a file from the library or paste a URL above to auto-play after the current item.</li>';
     return;
   }
   queueList.innerHTML = "";
   items.forEach((it, i) => {
     const li = document.createElement("li");
-    const isUrl = it.type === "url";
+    li.draggable = true;
+    li.dataset.i = i;
+    const chip = chipForItem(it);
+    const durHtml = it.is_live
+      ? '<span class="qdur live">LIVE</span>'
+      : `<span class="qdur">${escapeHtml(fmtDur(it.duration))}</span>`;
+    // CC badge: shown only when the source dict has a non-null subtitle_idx
+    // (i.e. an English text track was auto-picked or admin requested one).
+    const hasSubs = it.subtitle_idx !== null && it.subtitle_idx !== undefined;
+    const ccHtml = hasSubs ? '<span class="qcc" title="Subtitles will be burned in">CC</span>' : "";
     li.innerHTML = `
       <span class="pos">${i + 1}.</span>
-      <span class="qicon ${isUrl ? "url" : "file"}">${isUrl ? "🔗" : "▶"}</span>
+      <span class="qchip ${chip.cls}">${chip.text}</span>
+      ${ccHtml}
       <span class="qtitle"></span>
-      <button data-action="up"  data-i="${i}" ${i === 0 ? "disabled" : ""}>↑</button>
-      <button data-action="dn"  data-i="${i}" ${i === items.length - 1 ? "disabled" : ""}>↓</button>
-      <button data-action="rm"  data-i="${i}" class="danger">×</button>
+      ${durHtml}
+      <button data-action="up"  data-i="${i}" ${i === 0 ? "disabled" : ""} title="Move up">↑</button>
+      <button data-action="dn"  data-i="${i}" ${i === items.length - 1 ? "disabled" : ""} title="Move down">↓</button>
+      <button data-action="rm"  data-i="${i}" class="danger" title="Remove">×</button>
     `;
     li.querySelector(".qtitle").textContent = it.title || it.ref;
     li.querySelector(".qtitle").title = it.ref;
     queueList.appendChild(li);
   });
 }
+
+// Drag-and-drop reordering. dragstart stamps the source index on the
+// dataTransfer; dragover marks the row under the cursor as a drop target;
+// drop POSTs `{to: N}` to /admin/api/queue/<idx>/move. We only refresh the
+// list after the server confirms the move so we never paint a different
+// order than what's persisted.
+let dragSrcIndex = null;
+queueList.addEventListener("dragstart", e => {
+  const li = e.target.closest("li[draggable]");
+  if (!li) return;
+  // Buttons inside the row also bubble dragstart — skip those.
+  if (e.target.closest("button")) { e.preventDefault(); return; }
+  dragSrcIndex = parseInt(li.dataset.i, 10);
+  li.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+  // Firefox needs *some* dataTransfer payload to actually dispatch drop.
+  try { e.dataTransfer.setData("text/plain", String(dragSrcIndex)); } catch {}
+});
+queueList.addEventListener("dragend", e => {
+  const li = e.target.closest("li[draggable]");
+  if (li) li.classList.remove("dragging");
+  queueList.querySelectorAll("li.drag-over").forEach(el => el.classList.remove("drag-over"));
+  dragSrcIndex = null;
+});
+queueList.addEventListener("dragover", e => {
+  if (dragSrcIndex == null) return;
+  e.preventDefault();
+  const li = e.target.closest("li[draggable]");
+  if (!li) return;
+  queueList.querySelectorAll("li.drag-over").forEach(el => {
+    if (el !== li) el.classList.remove("drag-over");
+  });
+  li.classList.add("drag-over");
+});
+queueList.addEventListener("drop", async e => {
+  e.preventDefault();
+  const li = e.target.closest("li[draggable]");
+  if (!li || dragSrcIndex == null) return;
+  const dst = parseInt(li.dataset.i, 10);
+  const src = dragSrcIndex;
+  dragSrcIndex = null;
+  li.classList.remove("drag-over");
+  if (src === dst) return;
+  try {
+    await fetch(`/admin/api/queue/${src}/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: dst }),
+    });
+    loadQueue();
+  } catch (err) { showToast("Move failed: " + err.message); }
+});
 
 async function loadQueue() {
   try {
@@ -1080,7 +1294,10 @@ friendForm.addEventListener("submit", async e => {
 // starts the instant the page renders.
 setupPlayer();
 pollStatus();
-setInterval(pollStatus, 2500);
+// 1s poll on admin — controls feel responsive when state propagates within
+// a tick of clicking. /api/status is ~1ms server-side; gunicorn handles it
+// with thread to spare.
+setInterval(pollStatus, 1000);
 browse("");
 loadTokens();
 loadQueue();
@@ -1113,6 +1330,7 @@ async function refreshViewers() {
     const now = Date.now() / 1000;
     viewersList.innerHTML = list.map(v => `
       <li style="padding:0.3rem 0;border-bottom:1px solid #1a1a1a;display:flex;gap:0.5rem;align-items:baseline">
+        <span style="color:${v.who ? "#cda" : "#666"};flex:0 0 7rem;font-style:${v.who ? "normal" : "italic"}">${escapeHtml(v.who || "anonymous")}</span>
         <span style="color:#9c9;flex:0 0 9rem;font-family:monospace">${escapeHtml(v.ip)}</span>
         <span style="color:#aaa;flex:1">${escapeHtml(v.loc || "?")}</span>
         <span style="color:#666;font-size:0.75rem">${escapeHtml(fmtAgo(now - v.last_seen))}</span>
@@ -1152,6 +1370,109 @@ viewersHistoryBtn.addEventListener("click", async () => {
   } catch (e) {
     viewersHistory.textContent = "Failed: " + e.message;
   }
+});
+
+// ---- Anonymous chat (admin) -------------------------------------------
+// Same shape as the viewer panel — admin posts as just-another-anon. There's
+// no admin-specific styling on the message side; the panel itself is admin-
+// scoped (sits below the file browser). For now there's no moderation UI;
+// rate-limit + 500-char cap on the server are the only guardrails.
+let chatSid = localStorage.getItem("jetstream_chatsid");
+if (!chatSid) {
+  chatSid = [...crypto.getRandomValues(new Uint8Array(6))]
+    .map(b => b.toString(16).padStart(2, "0")).join("");
+  localStorage.setItem("jetstream_chatsid", chatSid);
+}
+function chatColor(sid) {
+  let h = 0;
+  for (let i = 0; i < sid.length; i++) h = ((h << 5) - h + sid.charCodeAt(i)) | 0;
+  return `hsl(${((h % 360) + 360) % 360}, 65%, 60%)`;
+}
+const chatPanelEl = document.getElementById("chat-panel");
+const chatToggle = document.getElementById("chat-toggle");
+const chatMessages = document.getElementById("chat-messages");
+const chatForm = document.getElementById("chat-form");
+const chatInput = document.getElementById("chat-input");
+const chatNameInput = document.getElementById("chat-name-input");
+const chatSend = document.getElementById("chat-send");
+let chatMaxId = 0;
+let chatHasMessages = false;
+
+chatNameInput.value = localStorage.getItem("jetstream_chatname") || "";
+chatNameInput.addEventListener("change", () => {
+  localStorage.setItem("jetstream_chatname", chatNameInput.value.trim().slice(0, 24));
+});
+
+if (localStorage.getItem("jetstream_chat_collapsed") === "1") {
+  chatPanelEl.classList.add("collapsed");
+  chatToggle.textContent = "▸";
+}
+document.getElementById("chat-header").addEventListener("click", () => {
+  const collapsed = chatPanelEl.classList.toggle("collapsed");
+  chatToggle.textContent = collapsed ? "▸" : "▾";
+  localStorage.setItem("jetstream_chat_collapsed", collapsed ? "1" : "0");
+});
+
+function chatRender(msgs) {
+  if (!chatHasMessages) {
+    chatMessages.innerHTML = "";
+    chatHasMessages = true;
+  }
+  const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop
+                      - chatMessages.clientHeight < 50;
+  for (const m of msgs) {
+    const li = document.createElement("div");
+    li.className = "chat-msg" + (m.sid === chatSid ? " self" : "");
+    li.innerHTML = `<span class="chat-dot"></span><span class="chat-name"></span><span class="chat-text"></span>`;
+    li.querySelector(".chat-dot").style.background = chatColor(m.sid);
+    li.querySelector(".chat-name").textContent = (m.name || "anonymous") + ":";
+    li.querySelector(".chat-text").textContent = m.text;
+    chatMessages.appendChild(li);
+  }
+  if (wasNearBottom) chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+async function chatPoll() {
+  try {
+    const r = await fetch("/chat/recent?since=" + chatMaxId);
+    if (!r.ok) return;
+    const j = await r.json();
+    if (typeof j.max_id === "number") chatMaxId = j.max_id;
+    if (Array.isArray(j.messages) && j.messages.length) chatRender(j.messages);
+  } catch {}
+}
+setInterval(chatPoll, 2500);
+chatPoll();
+
+chatForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  const text = chatInput.value.trim();
+  if (!text) return;
+  chatSend.disabled = true;
+  chatInput.disabled = true;
+  try {
+    const r = await fetch("/chat/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: text,
+        sid: chatSid,
+        name: chatNameInput.value.trim(),
+      }),
+    });
+    if (r.ok) {
+      chatInput.value = "";
+      chatPoll();
+    } else {
+      const j = await r.json().catch(() => ({}));
+      const prev = chatInput.placeholder;
+      chatInput.placeholder = j.error === "rate limited"
+        ? "slow down — too many messages" : (j.error || "send failed");
+      setTimeout(() => { chatInput.placeholder = prev; }, 1500);
+    }
+  } catch {}
+  chatSend.disabled = false;
+  chatInput.disabled = false;
+  chatInput.focus();
 });
 </script>
 </body>
