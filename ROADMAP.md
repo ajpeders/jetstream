@@ -5,12 +5,10 @@ v1 is feature-complete. Only one item still open, gated on hardware:
 ## Open
 
 - **Firefox playback.** Currently flaky / non-working on FF despite existing tweaks (fmp4 segments, AUD insertion, explicit BT.709 color tagging). Need to repro and diagnose. Likely suspects: Hls.js path differences in FF MSE, segment boundary IDR handling, fmp4 init segment compatibility, or PDT-based live-edge convergence misbehaving on FF's playback clock. Chrome and Safari work today.
-- **HW VAAPI decode + colorspace handling.** Workaround pinned: `USE_VAAPI_DECODE=0` everywhere; CPU decode handles everything correctly. Real fix would unlock ~135% → ~30% CPU on 4K HEVC. Two paths:
-  - **Software fix on existing iGPU** (Intel UHD 630 / Coffee Lake). Bug is isolated: HW decode chain runs at 0.995× realtime against `-f null` but produces 100×-oversized segments under `-f hls` — so the bug is in HLS-muxer/timestamp interaction with VAAPI-source PTS, not in decode/scale/encode. Untested fix candidates: `-fps_mode passthrough`, `-output_ts_offset 0`, `-bsf:v setts=pts=PTS-FIRST_PTS`. Needs a session of focused ffmpeg debugging.
-  - **Hardware swap.** Intel ≥11th gen iGPU has `VAEntrypointVideoProc` (VPP), so `scale_vaapi` runs natively and the broken `hwdownload→CPU scale→hwupload` filter chain isn't needed. NVIDIA + NVENC is a different software stack entirely (`hevc_cuvid`, `h264_nvenc`) that sidesteps VAAPI. Either swap likely fixes it without code changes beyond an ffmpeg-cmdline branch. Needs `nvidia-container-toolkit` for NVIDIA.
 
 ## Closed (won't-do)
 
+- **HW VAAPI decode + colorspace handling** — superseded by the NVENC pipeline. The original motivation was unlocking HW decode on the Intel UHD 630 iGPU to drop 4K HEVC from ~135% CPU to ~30%. The host got an RTX 3050 and the NVDEC+NVENC path delivers a stronger win (4K HEVC HDR at ~17% CPU on prod, full GPU decode + encode). VAAPI code stays in the codebase for portability to Intel-iGPU hosts but the 100×-oversized-segment bug isn't worth chasing.
 - **CC sidecar / WebVTT** — burn-in via #11 covers the friends-and-family case. Toggle/multi-language don't justify the composer rework.
 - **Live voice chat / WebRTC** — was the v2 reason-to-exist; v2 scrapped, voice product not being built. v1's HLS at ~1.7 s sync is fine for co-watching.
 
@@ -33,6 +31,9 @@ v1 is feature-complete. Only one item still open, gated on hardware:
 | 16 | `/admin/api/perf` | ffmpeg PID + uptime, run state, segment count, viewer count. |
 | 17 | Library scan cache | mtime-invalidated. 26 ms cold → 0.03 ms warm. |
 | 18 | Viewer `MANIFEST_PARSED` snap fallback | Belt-and-suspenders for cases where `loadedmetadata` fired before live edge was computable. |
+| 19 | NVENC pipeline (NVDEC + h264_nvenc) | Third HW encode branch, picked when `USE_NVENC=1`. Full GPU decode + scale + encode. 4K HEVC HDR on prod runs ~17% CPU vs ~135% on libx264. |
+| 20 | GPU overlay + CPU fallback | Compose split into CPU-only base + `docker-compose.gpu.yml` overlay; `bin/install` detects nvidia and chains via `COMPOSE_FILE`. Stack now runs on any host. |
+| 21 | Tear down `jetstream-dev` | NVENC was the reason it existed; with NVENC live on prod the dev sister-service is gone. |
 
 Plus, off-list:
 - YouTube DASH dual-input fix (separate video + audio URLs through ffmpeg as two `-i` inputs — was 360p, now 1080p).
