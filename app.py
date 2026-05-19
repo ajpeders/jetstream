@@ -33,8 +33,17 @@ HLS_DIR = Path(os.environ.get("HLS_DIR", "/hls")).resolve()
 VAAPI_DEVICE = os.environ.get("VAAPI_DEVICE", "/dev/dri/renderD128")
 USE_VAAPI = os.environ.get("USE_VAAPI", "1") == "1"
 USE_VAAPI_DECODE = os.environ.get("USE_VAAPI_DECODE", "1") == "1"
+# NVIDIA NVENC/NVDEC path. When on, takes precedence over VAAPI: decode on
+# GPU via CUDA when the source codec is supported, encode via h264_nvenc.
+# Requires nvidia-container-toolkit and a `--gpus all` / `deploy.resources`
+# block on the container.
+USE_NVENC = os.environ.get("USE_NVENC", "0") == "1"
 # ffmpeg codec_name values supported by VAAPI VLD on this GPU (verified via vainfo).
 HWACCEL_DECODE_CODECS = {"h264", "hevc", "vp8", "vp9", "mpeg2video"}
+# Codecs the NVDEC engine on this card (Ampere GA106 / RTX 3050) decodes.
+# AV1 decode landed on Ampere; 10-bit HEVC is fine. Dolby Vision (dvhe) falls
+# through to CPU — NVDEC ignores DV metadata and would tonemap incorrectly.
+NVDEC_DECODE_CODECS = {"h264", "hevc", "vp8", "vp9", "mpeg2video", "av1"}
 VIDEO_BITRATE = os.environ.get("VIDEO_BITRATE", "5M")
 VIDEO_QP = os.environ.get("VIDEO_QP", "23")
 AUDIO_BITRATE = os.environ.get("AUDIO_BITRATE", "160k")
@@ -221,7 +230,7 @@ _load_settings()
 NO_TOKEN_PAGE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>livestream — invite required</title>
+<title>jetstream — invite required</title>
 <style>
   body { background: #0a0a0a; color: #888; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
          display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
@@ -232,7 +241,7 @@ NO_TOKEN_PAGE = """<!DOCTYPE html>
 </style>
 </head><body>
 <div class="card">
-  <h1>LIVESTREAM</h1>
+  <h1>JETSTREAM</h1>
   <p>You need an invite link to watch.</p>
   <p class="small">Ask the host for one — it'll look like<br><code>live.thelunadog.com/?t=…</code></p>
 </div></body></html>"""
@@ -283,7 +292,7 @@ def _geo_lookup(ip: str) -> str:
         try:
             req = urllib.request.Request(
                 f"https://ipinfo.io/{ip}/json",
-                headers={"User-Agent": "homelab-livestream/1"},
+                headers={"User-Agent": "homelab-jetstream/1"},
             )
             with urllib.request.urlopen(req, timeout=2.0) as resp:
                 data = json.loads(resp.read())
@@ -411,6 +420,22 @@ def _cleanup_hls():
 
 def _run_dir(run_id: int) -> Path:
     return RUN_DIR_BASE / str(run_id)
+
+
+def _spawn_ffmpeg(cmd: list[str], log_path: Path) -> subprocess.Popen:
+    """Launch ffmpeg with stdout+stderr redirected to a per-run log file.
+    start_new_session detaches from the gunicorn worker's process group so
+    signals aimed at the worker don't propagate to ffmpeg (and vice versa).
+    The log file is accessible at /hls/run/<id>/ffmpeg.log for postmortems."""
+    log = open(log_path, "wb")
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.DEVNULL,
+        stdout=log, stderr=log,
+        close_fds=True,
+        start_new_session=True,
+    )
+    log.close()  # Popen dup'd the fd; ours can go.
+    return proc
 
 
 def _terminate_proc_locked():
@@ -597,7 +622,7 @@ def _probe_video_info(input_path: str) -> dict | None:
             [
                 "ffprobe", "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,width,height,color_transfer,color_primaries",
+                "-show_entries", "stream=codec_name,width,height,color_transfer,color_primaries,r_frame_rate,avg_frame_rate",
                 "-of", "json",
                 input_path,
             ],
@@ -616,6 +641,23 @@ def _probe_video_info(input_path: str) -> dict | None:
     # HDR: PQ/HLG transfer is the canonical signal. bt2020 primaries alone
     # aren't enough — some BT.2020-tagged sources are still SDR.
     is_hdr = transfer in HDR_TRANSFERS
+
+    # Parse ffprobe's "num/den" fps strings. Prefer r_frame_rate (declared)
+    # over avg_frame_rate (computed), falling back to None when both are
+    # unparseable. Used to set NVENC's GOP size — h264_nvenc ignores
+    # -force_key_frames, so we need an explicit -g for 1s segments to land
+    # on keyframe boundaries.
+    def _parse_fps(rate: str | None) -> float | None:
+        if not rate or "/" not in rate:
+            return None
+        try:
+            num, den = rate.split("/", 1)
+            num_f, den_f = float(num), float(den)
+            return num_f / den_f if den_f > 0 else None
+        except (ValueError, ZeroDivisionError):
+            return None
+    fps = _parse_fps(s.get("r_frame_rate")) or _parse_fps(s.get("avg_frame_rate"))
+
     return {
         "codec": (s.get("codec_name") or "").lower() or None,
         "width": s.get("width"),
@@ -623,6 +665,7 @@ def _probe_video_info(input_path: str) -> dict | None:
         "transfer": transfer or None,
         "primaries": primaries or None,
         "is_hdr": is_hdr,
+        "fps": fps,
     }
 
 
@@ -790,8 +833,17 @@ def _build_ffmpeg_cmd(
         and src_codec in HWACCEL_DECODE_CODECS
         and not is_hdr
     )
+    # NVDEC decode is eligible whenever the source codec is supported. HDR
+    # frames stay on the GPU after decode and get tonemapped via a quick
+    # hwdownload→zscale→hwupload_cuda round-trip in the filter chain below.
+    nv_decode = USE_NVENC and src_codec in NVDEC_DECODE_CODECS
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin"]
-    if USE_VAAPI:
+    if USE_NVENC:
+        # Frames are kept in `cuda` hw frames format when NVDEC is used so the
+        # whole pipeline (decode → optional scale_cuda → nvenc) stays on-GPU.
+        if nv_decode:
+            cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+    elif USE_VAAPI:
         # Bind a named device "va" to our renderD128 and pin the filter chain
         # to it explicitly. Without -filter_hw_device, scale_vaapi/hwupload
         # picks the default vaapi device, which may be a second iGPU/driver
@@ -800,9 +852,9 @@ def _build_ffmpeg_cmd(
             "-init_hw_device", f"vaapi=va:{VAAPI_DEVICE}",
             "-filter_hw_device", "va",
         ]
-    if hw_decode:
-        cmd += ["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi",
-                "-hwaccel_device", "va"]
+        if hw_decode:
+            cmd += ["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi",
+                    "-hwaccel_device", "va"]
     if start_seconds > 0:
         cmd += ["-ss", f"{start_seconds:.3f}"]
     cmd += ["-re", "-i", input_str]
@@ -830,7 +882,76 @@ def _build_ffmpeg_cmd(
         _subtitles_filter(input_str, subtitle_idx)
         if subtitle_idx is not None else None
     )
-    if USE_VAAPI:
+    if USE_NVENC:
+        # NVENC encode + (when codec is supported) NVDEC decode. Filter chain:
+        #   - SDR fast path (NVDEC + no subs): scale_cuda only, frames never
+        #     leave the GPU.
+        #   - SDR + subs: hwdownload → burn → hwupload_cuda (libass is CPU-only).
+        #   - HDR: tonemap chain is CPU-side (zscale). Frames come down via
+        #     hwdownload, tonemap to BT.709 SDR, optional sub burn-in, then
+        #     scale and re-upload to CUDA for nvenc.
+        #   - CPU-decode + NVENC encode: CPU filter chain ends with
+        #     hwupload_cuda so the encoder receives CUDA frames.
+        if is_hdr:
+            tonemap = (
+                "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+                "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
+            )
+            pre = f"hwdownload,format=p010le,{tonemap}" if nv_decode else tonemap
+            post = f"scale=-2:{out_h},format=nv12,hwupload_cuda"
+            vf = (
+                f"{pre},{sub_filter},{post}"
+                if sub_filter else f"{pre},{post}"
+            )
+        elif nv_decode:
+            if sub_filter:
+                # hwdownload pix_fmt must match the GPU surface — 8-bit sources
+                # arrive as nv12, 10-bit (HEVC Main10, AV1 10-bit) as p010le.
+                # The trailing format=nv12 forces 8-bit before nvenc's main profile.
+                vf = (
+                    f"hwdownload,format=nv12|p010le,{sub_filter},"
+                    f"scale=-2:{out_h},format=nv12,hwupload_cuda"
+                )
+            else:
+                vf = f"scale_cuda=-2:{out_h}:format=nv12"
+        else:
+            post = f"scale=-2:{out_h},format=nv12,hwupload_cuda"
+            vf = f"{sub_filter},{post}" if sub_filter else post
+        # Compute GOP size for NVENC. h264_nvenc silently ignores
+        # -force_key_frames, so without an explicit -g it picks its own
+        # huge GOP (~250 frames default), the HLS muxer never sees a
+        # keyframe at the segment boundary, and no segments get finalized
+        # until ffmpeg exits. Multiply the source's fps by the desired
+        # segment duration to land an IDR on each segment. Fallback to 30
+        # when fps is unparseable.
+        gop = max(1, int(round((info.get("fps") or 30) * float(HLS_SEG_TIME))))
+        cmd += [
+            "-vf", vf,
+            "-c:v", "h264_nvenc",
+            # p1..p7 quality/speed dial: p4 is the balanced middle. ll tune
+            # keeps latency low for live HLS (b-frames off, single-frame look-
+            # ahead). cbr keeps segment sizes predictable for HLS.
+            "-preset", "p4",
+            "-tune", "ll",
+            "-rc", "cbr",
+            "-b:v", VIDEO_BITRATE,
+            "-maxrate", VIDEO_BITRATE,
+            "-bufsize", "10M",
+            "-profile:v", "main",
+            "-g", str(gop),
+            "-forced-idr", "1",
+            "-no-scenecut", "1",
+            # NOTE: h264_metadata BSF was here to insert AUDs (Firefox) and
+            # to tag BT.709 color in the SPS VUI. It corrupted the fmp4 init
+            # segment's avcC box — the SPS/PPS were not extracted into the
+            # MP4 container's codec configuration record (profile=unknown,
+            # level=-99 in ffprobe on init.mp4 alone). Chrome's MSE needs a
+            # valid `codecs="avc1.xxxxxx"` derived from avcC to create a
+            # SourceBuffer, and silently fails to play the stream when that
+            # string can't be built. Firefox color tagging tracked under the
+            # "Firefox playback" ROADMAP item.
+        ]
+    elif USE_VAAPI:
         # When hw_decode is on, frames are already in vaapi format on the GPU,
         # so scale_vaapi runs entirely on the GPU. Otherwise hwupload moves
         # CPU-decoded frames onto the GPU before encode.
@@ -1356,7 +1477,7 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
             ffmpeg_input, run_dir, start_seconds, audio_idx, subtitle_idx,
             audio_input=audio_input,
         )
-        current_proc = subprocess.Popen(cmd)
+        current_proc = _spawn_ffmpeg(cmd, run_dir / "ffmpeg.log")
         active_run_id = run_id
         current_source = source
         current_start_offset = start_seconds
@@ -1404,8 +1525,8 @@ def _restore_state_on_startup():
 # orphaned run dirs + composer state would otherwise show up in the master.
 _cleanup_hls()
 _restore_state_on_startup()
-threading.Thread(target=_composer_thread, daemon=True, name="livestream-composer").start()
-threading.Thread(target=_watcher, daemon=True, name="livestream-watcher").start()
+threading.Thread(target=_composer_thread, daemon=True, name="jetstream-composer").start()
+threading.Thread(target=_watcher, daemon=True, name="jetstream-watcher").start()
 
 
 @app.before_request
