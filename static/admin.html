@@ -401,6 +401,10 @@
   </label>
   <form id="friend-form">
     <input id="friend-name" type="text" placeholder="Friend's name" maxlength="40" required>
+    <select id="friend-level" title="What this link can do">
+      <option value="viewer">Viewer — watch only</option>
+      <option value="friend">Friend — can control playback</option>
+    </select>
     <button type="submit">Generate link</button>
   </form>
   <ul id="tokens-list"></ul>
@@ -454,6 +458,13 @@
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script>
 const ROOT = "";
+// This page serves two roles from one file:
+//   /admin    → host (Traefik basicauth). Full surface, API at /admin/api/*.
+//   /controls → friend (cookie-gated). Playback + queue only, API at
+//               /api/control/*; host-only panels (invites, settings, viewer
+//               list) are hidden below.
+const IS_ADMIN = !location.pathname.startsWith("/controls");
+const API = IS_ADMIN ? "/admin/api" : "/api/control";
 const player = document.getElementById("player");
 const video = document.getElementById("video");
 const list = document.getElementById("list");
@@ -531,7 +542,7 @@ async function browse(path) {
   renderBreadcrumb();
   list.innerHTML = '<li class="empty">Loading…</li>';
   try {
-    const res = await fetch(`/admin/api/browse?path=${encodeURIComponent(currentDir)}`);
+    const res = await fetch(`${API}/browse?path=${encodeURIComponent(currentDir)}`);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const items = await res.json();
     renderItems(items);
@@ -576,7 +587,7 @@ async function play(path, name) {
   if (!confirm(`Broadcast "${name}"? This replaces any current stream.`)) return;
   showToast("Starting stream…");
   try {
-    const res = await fetch("/admin/api/play", {
+    const res = await fetch(`${API}/play`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path }),
@@ -598,7 +609,7 @@ async function stop() {
   teardownPlayer();
   showToast("Stopping…");
   try {
-    await fetch("/admin/api/stop", { method: "POST" });
+    await fetch(`${API}/stop`, { method: "POST" });
   } catch (e) {
     showToast("Failed: " + e.message);
   }
@@ -615,7 +626,7 @@ async function skipNext() {
   skipBtn.disabled = true;
   showToast("Skipping…");
   try {
-    const res = await fetch("/admin/api/skip", { method: "POST" });
+    const res = await fetch(`${API}/skip`, { method: "POST" });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || ("HTTP " + res.status));
@@ -643,7 +654,7 @@ async function togglePause(currentlyPaused) {
   serverPaused = willBePaused;
   if (willBePaused && !video.paused) video.pause();
   try {
-    const url = currentlyPaused ? "/admin/api/resume" : "/admin/api/pause";
+    const url = currentlyPaused ? `${API}/resume` : `${API}/pause`;
     const res = await fetch(url, { method: "POST" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     showToast(currentlyPaused ? "Resumed" : "Paused");
@@ -685,7 +696,7 @@ function flushDelta() {
   const delta = pendingDelta;
   pendingDelta = 0;
   seekInFlight = true;
-  fetch("/admin/api/seek", {
+  fetch(`${API}/seek`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ delta_seconds: delta }),
@@ -707,7 +718,7 @@ async function seekTo(seconds) {
   if (seekInFlight) { showToast("Hold on…"); return; }
   seekInFlight = true;
   try {
-    const res = await fetch("/admin/api/seek", {
+    const res = await fetch(`${API}/seek`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ to_seconds: seconds }),
@@ -980,13 +991,16 @@ function renderTokens(items) {
   for (const t of items) {
     const li = document.createElement("li");
     const url = tokenUrl(t.id);
+    const isFriend = t.level === "friend";
     li.innerHTML = `
       <span class="label"></span>
+      <span class="tlevel" style="flex-shrink:0;font-size:0.65rem;letter-spacing:0.04em;font-weight:600;padding:0.08rem 0.4rem;border-radius:3px;${isFriend ? 'background:#1f3326;color:#7dcc99;border:1px solid #2c4a37' : 'background:#1a3050;color:#6cb6ff;border:1px solid #244266'}"></span>
       <span class="url"></span>
       <button data-action="copy">Copy</button>
       <button data-action="revoke" class="danger">Revoke</button>
     `;
     li.querySelector(".label").textContent = t.label;
+    li.querySelector(".tlevel").textContent = isFriend ? "CONTROL" : "VIEW";
     const urlEl = li.querySelector(".url");
     urlEl.textContent = url;
     urlEl.title = url;
@@ -1029,7 +1043,7 @@ urlForm.addEventListener("submit", async e => {
   urlSubmit.textContent = "Resolving…";
   showToast("Resolving with yt-dlp…");
   try {
-    const res = await fetch("/admin/api/play_url", {
+    const res = await fetch(`${API}/play_url`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
@@ -1054,7 +1068,7 @@ urlQueueBtn.addEventListener("click", async () => {
   urlQueueBtn.disabled = true;
   urlQueueBtn.textContent = "…";
   try {
-    const res = await fetch("/admin/api/queue", {
+    const res = await fetch(`${API}/queue`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "url", url }),
@@ -1077,7 +1091,7 @@ urlQueueBtn.addEventListener("click", async () => {
 
 async function queueAddFile(path, name) {
   try {
-    const res = await fetch("/admin/api/queue", {
+    const res = await fetch(`${API}/queue`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "file", path }),
@@ -1188,7 +1202,7 @@ queueList.addEventListener("drop", async e => {
   li.classList.remove("drag-over");
   if (src === dst) return;
   try {
-    await fetch(`/admin/api/queue/${src}/move`, {
+    await fetch(`${API}/queue/${src}/move`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ to: dst }),
@@ -1199,7 +1213,7 @@ queueList.addEventListener("drop", async e => {
 
 async function loadQueue() {
   try {
-    const res = await fetch("/admin/api/queue");
+    const res = await fetch(`${API}/queue`);
     if (!res.ok) throw new Error("HTTP " + res.status);
     renderQueue(await res.json());
   } catch (e) {
@@ -1214,9 +1228,9 @@ queueList.addEventListener("click", async e => {
   const action = btn.dataset.action;
   try {
     if (action === "rm") {
-      await fetch(`/admin/api/queue/${idx}`, { method: "DELETE" });
+      await fetch(`${API}/queue/${idx}`, { method: "DELETE" });
     } else if (action === "up" || action === "dn") {
-      await fetch(`/admin/api/queue/${idx}/move`, {
+      await fetch(`${API}/queue/${idx}/move`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ direction: action === "up" ? "up" : "down" }),
@@ -1229,7 +1243,7 @@ queueList.addEventListener("click", async e => {
 queueClearBtn.addEventListener("click", async () => {
   if (!confirm("Clear the entire queue?")) return;
   try {
-    await fetch("/admin/api/queue/clear", { method: "POST" });
+    await fetch(`${API}/queue/clear`, { method: "POST" });
     showToast("Queue cleared");
     loadQueue();
   } catch (e) { showToast("Failed: " + e.message); }
@@ -1237,7 +1251,7 @@ queueClearBtn.addEventListener("click", async () => {
 
 queueShuffleBtn.addEventListener("click", async () => {
   try {
-    const res = await fetch("/admin/api/queue/shuffle", { method: "POST" });
+    const res = await fetch(`${API}/queue/shuffle`, { method: "POST" });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(j.error || ("HTTP " + res.status));
     showToast(`Shuffled ${j.queue_length} item${j.queue_length === 1 ? "" : "s"}`);
@@ -1273,22 +1287,37 @@ friendForm.addEventListener("submit", async e => {
   e.preventDefault();
   const label = friendNameInput.value.trim();
   if (!label) return;
+  const level = document.getElementById("friend-level").value;
   try {
     const res = await fetch("/admin/api/tokens", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label }),
+      body: JSON.stringify({ label, level }),
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const t = await res.json();
     friendNameInput.value = "";
     try {
       await navigator.clipboard.writeText(tokenUrl(t.id));
-      showToast(`Link for ${label} copied`);
+      showToast(`${level === "friend" ? "Control" : "Viewer"} link for ${label} copied`);
     } catch { showToast(`Link for ${label} ready`); }
     loadTokens();
   } catch (e) { showToast("Failed: " + e.message); }
 });
+
+// Friend mode (/controls): strip the host-only surface. Invites, the
+// public-mode toggle, and the viewer list are all admin concerns; a friend
+// just gets playback + queue. Hiding (not deleting) keeps the element refs
+// valid so the rest of the script doesn't need null guards.
+if (!IS_ADMIN) {
+  for (const id of ["friends-panel", "viewers-panel"]) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = "none";
+  }
+  document.title = "jetstream — controls";
+  const sub = document.querySelector("header h1 span");
+  if (sub) sub.textContent = "/ controls";
+}
 
 // Kick the player up before the first /api/status round-trip so playback
 // starts the instant the page renders.
@@ -1299,10 +1328,14 @@ pollStatus();
 // with thread to spare.
 setInterval(pollStatus, 1000);
 browse("");
-loadTokens();
 loadQueue();
 setInterval(loadQueue, 5000);
-loadSettings();
+// Host-only panels (invites, public-mode toggle, viewer list) only exist on
+// the /admin surface. On /controls they're hidden and their pollers skipped.
+if (IS_ADMIN) {
+  loadTokens();
+  loadSettings();
+}
 
 // --- Viewers panel ---
 const viewersList = document.getElementById("viewers-list");
@@ -1337,8 +1370,10 @@ async function refreshViewers() {
       </li>`).join("");
   } catch {}
 }
-setInterval(refreshViewers, 5000);
-refreshViewers();
+if (IS_ADMIN) {
+  setInterval(refreshViewers, 5000);
+  refreshViewers();
+}
 
 let historyVisible = false;
 viewersHistoryBtn.addEventListener("click", async () => {

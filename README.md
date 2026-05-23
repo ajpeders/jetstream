@@ -52,11 +52,20 @@ Don't rely on `docker cp` for `app.py` on prod — it survives until the next `d
 
 ## Endpoints
 
+Three access tiers. **Viewer** and **friend** are both invite tokens (the `lt` cookie, minted from the admin page, no password); **admin** is Traefik basicauth. A token's tier is its `level` field in `tokens.json` (`viewer` | `friend`; tokens predating the field default to `viewer`). The admin token (`_admin_`) is the implicit top tier.
+
 Viewer (token-gated unless `viewer_public=true`):
-- `GET /` — viewer page
-- `GET /api/status` — current source, position, viewer count, `server_unix` for client clock-sync
+- `GET /` — viewer page. Shows a "🎛 Controls" link when the token can control (`can_control` in `/api/status`).
+- `GET /api/status` — current source, position, viewer count, `server_unix` for client clock-sync, plus `can_control` + `level` for the calling token
 - `GET /hls/stream.m3u8`, `/hls/run/<id>/init_av.mp4`, `/hls/run/<id>/seg_av_NNNNN.m4s` — HLS manifest + segments (served by nginx, auth-gated via subrequest to Flask)
 - `GET /api/_authcheck` — internal nginx `auth_request` target. Also fires `_track_viewer` so the active-viewers list keeps working with `/hls/*` no longer hitting Flask.
+
+Friend (a `friend`-level invite token; never needs the admin password):
+- `GET /controls` — the admin control UI with the host-only panels (invites, settings, viewer list) stripped. Same `admin.html`, served here too; it points its calls at `/api/control/*`.
+- `POST /api/control/{play,play_url,seek,pause,resume,stop,skip}` — same payloads as the `/admin/api/*` twins below
+- `GET / POST /api/control/queue`, `DELETE /api/control/queue/<idx>`, `POST /api/control/queue/<idx>/move`, `/api/control/queue/clear`, `/api/control/queue/shuffle`
+- `GET /api/control/browse?path=…`
+- These are the same view functions as the matching `/admin/api/*` routes (a second route alias), gated to `friend`+`admin` tokens by the request gate. Host-only surface (settings, tokens, viewers, perf) is **not** aliased.
 
 Admin (Traefik basicauth on prod; open on dev):
 - `POST /admin/api/play` `{path, start_seconds, subtitle_idx?}`
@@ -65,7 +74,7 @@ Admin (Traefik basicauth on prod; open on dev):
 - `POST /admin/api/pause`, `/admin/api/resume`, `/admin/api/stop`, `/admin/api/skip`
 - `GET / POST /admin/api/queue`, `DELETE /admin/api/queue/<idx>`, `POST /admin/api/queue/<idx>/move` `{direction|to}`, `POST /admin/api/queue/clear`, `POST /admin/api/queue/shuffle`
 - `GET / POST /admin/api/settings` (`viewer_public`, `auto_fill`)
-- `GET / POST / DELETE /admin/api/tokens` — invite-token CRUD
+- `GET / POST / DELETE /admin/api/tokens` — invite-token CRUD. `POST` takes `{label, level?}` where `level` is `viewer` (default) or `friend`.
 - `GET /admin/api/viewers`, `GET /admin/api/viewers/history` — active viewers + 200-line tail of the connect log
 - `GET /admin/api/perf` — ffmpeg PID + uptime, segment count, run state, viewer count
 - `GET /admin/api/browse?path=…`

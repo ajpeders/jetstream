@@ -202,6 +202,9 @@
   <span id="status">waiting…</span>
   <span id="position" style="color:#888;font-size:0.85rem;font-variant-numeric:tabular-nums"></span>
   <span id="viewers"></span>
+  <!-- Shown only for friend/admin tokens (see can_control in /api/status). -->
+  <a id="controls-link" href="/controls"
+     style="display:none;margin-left:auto;font-size:0.85rem;color:#6cb6ff;text-decoration:none;border:1px solid #244266;background:#1a3050;padding:0.25rem 0.6rem;border-radius:4px">🎛 Controls</a>
 </header>
 <main id="main">
   <div id="player-wrap">
@@ -540,6 +543,11 @@ async function pollStatus() {
   try {
     const res = await fetch("/api/status");
     const s = await res.json();
+    // Reveal the Controls link once we know this token can drive playback.
+    if (s.can_control) {
+      const cl = document.getElementById("controls-link");
+      if (cl) cl.style.display = "";
+    }
     if (s.playing) {
       // No more per-source-change teardown: the server's composer keeps
       // /hls/stream.m3u8 live across seeks, queue advances, pause/resume,

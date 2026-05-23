@@ -23,6 +23,13 @@ TOKEN_COOKIE_MAX_AGE = 60 * 60 * 24 * 90  # 90 days
 # Hidden from the friends list so it never surfaces as a public invite.
 ADMIN_TOKEN_ID = "_admin_"
 TOKENS_FILE = Path(os.environ.get("TOKENS_FILE", "/data/tokens.json"))
+# Invite-token permission tiers. "viewer" tokens can only watch + chat;
+# "friend" tokens additionally unlock the playback/queue controls exposed
+# under /api/control/* (and the /controls page). The admin token is implicitly
+# the top tier. Tokens minted before this field existed default to "viewer".
+TOKEN_LEVELS = ("viewer", "friend")
+# Levels permitted to hit /api/control/* and load /controls.
+CONTROL_LEVELS = frozenset({"friend", "admin"})
 PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
 SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", "/data/settings.json"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "/data/state.json"))
@@ -153,6 +160,26 @@ def _valid_token(t: str | None) -> bool:
         return False
     with tokens_lock:
         return any(x["id"] == t for x in tokens)
+
+
+def _token_level(t: str | None) -> str | None:
+    """Permission tier for a token id: "admin", "friend", or "viewer".
+    None if the token is missing/unknown. Tokens predating the level field
+    are treated as "viewer"."""
+    if not t:
+        return None
+    if t == ADMIN_TOKEN_ID:
+        return "admin"
+    with tokens_lock:
+        for x in tokens:
+            if x["id"] == t:
+                return x.get("level", "viewer")
+    return None
+
+
+def _caller_can_control() -> bool:
+    """True if the request's token cookie grants playback control."""
+    return _token_level(request.cookies.get(TOKEN_COOKIE)) in CONTROL_LEVELS
 
 
 def _load_playlist():
@@ -1536,6 +1563,27 @@ def _gate_viewer_routes():
         return None  # Traefik handles admin auth
     if p == "/api/_authcheck":
         return None  # nginx subrequest endpoint — has its own logic below
+    # Control surface (the /controls page + /api/control/* endpoints) requires
+    # a friend-or-admin token regardless of public mode — viewers and the
+    # anonymous public can watch but never drive playback. Check this before
+    # the public-mode short-circuit so public mode can't leak controls.
+    if p == "/controls" or p.startswith("/api/control/"):
+        # Honor a ?t= invite on the control page the same way viewer routes do,
+        # so a friend link lands straight on /controls with the cookie set.
+        qs_t = request.args.get("t")
+        if p == "/controls" and qs_t and _token_level(qs_t) in CONTROL_LEVELS:
+            resp = redirect(p)
+            resp.set_cookie(
+                TOKEN_COOKIE, qs_t,
+                max_age=TOKEN_COOKIE_MAX_AGE,
+                httponly=True, secure=True, samesite="Lax",
+            )
+            return resp
+        if _caller_can_control():
+            return None
+        if p == "/controls":
+            return NO_TOKEN_PAGE, 401
+        return ("", 403)
     with settings_lock:
         if settings.get("viewer_public"):
             return None  # public mode — anyone can watch
@@ -1656,6 +1704,16 @@ def viewer_page():
     return send_from_directory("static", "viewer.html")
 
 
+@app.route("/controls")
+def controls_page():
+    # Friend control surface. Serves the same admin.html as /admin but the
+    # page detects it was loaded here (not /admin), points its API calls at
+    # /api/control/* instead of /admin/api/*, and hides the host-only panels
+    # (invites, settings, viewer list). Access is gated to friend+admin tokens
+    # by _gate_viewer_routes; reaching here means the cookie already checked out.
+    return send_from_directory("static", "admin.html")
+
+
 @app.route("/admin")
 @app.route("/admin/")
 def admin_page():
@@ -1681,11 +1739,13 @@ def admin_page():
 
 
 @app.route("/admin/api/browse")
+@app.route("/api/control/browse")
 def api_browse():
     return jsonify(_list_dir(request.args.get("path", "")))
 
 
 @app.route("/admin/api/play", methods=["POST"])
+@app.route("/api/control/play", methods=["POST"])
 def api_play():
     data = request.get_json(silent=True) or {}
     path = data.get("path")
@@ -1717,6 +1777,7 @@ def api_play():
 
 
 @app.route("/admin/api/play_url", methods=["POST"])
+@app.route("/api/control/play_url", methods=["POST"])
 def api_play_url():
     data = request.get_json(silent=True) or {}
     url = (data.get("url") or "").strip()
@@ -1748,7 +1809,10 @@ def api_play_url():
 def api_list_tokens():
     with tokens_lock:
         return jsonify([
-            {"id": t["id"], "label": t["label"], "created": t.get("created")}
+            {
+                "id": t["id"], "label": t["label"], "created": t.get("created"),
+                "level": t.get("level", "viewer"),
+            }
             for t in tokens
             if t.get("id") != ADMIN_TOKEN_ID
         ])
@@ -1760,7 +1824,13 @@ def api_create_token():
     label = (data.get("label") or "").strip()
     if not label:
         return jsonify({"error": "label required"}), 400
-    new = {"id": secrets.token_urlsafe(12), "label": label, "created": time.time()}
+    level = (data.get("level") or "viewer").strip()
+    if level not in TOKEN_LEVELS:
+        return jsonify({"error": f"level must be one of {TOKEN_LEVELS}"}), 400
+    new = {
+        "id": secrets.token_urlsafe(12), "label": label,
+        "created": time.time(), "level": level,
+    }
     with tokens_lock:
         tokens.append(new)
         _save_tokens()
@@ -1857,12 +1927,14 @@ def api_viewers_history():
 
 
 @app.route("/admin/api/queue", methods=["GET"])
+@app.route("/api/control/queue", methods=["GET"])
 def api_queue_list():
     with playlist_lock:
         return jsonify(list(playlist))
 
 
 @app.route("/admin/api/queue", methods=["POST"])
+@app.route("/api/control/queue", methods=["POST"])
 def api_queue_add():
     data = request.get_json(silent=True) or {}
     t = data.get("type")
@@ -1912,6 +1984,7 @@ def api_queue_add():
 
 
 @app.route("/admin/api/queue/<int:idx>", methods=["DELETE"])
+@app.route("/api/control/queue/<int:idx>", methods=["DELETE"])
 def api_queue_remove(idx: int):
     with playlist_lock:
         if not (0 <= idx < len(playlist)):
@@ -1922,6 +1995,7 @@ def api_queue_remove(idx: int):
 
 
 @app.route("/admin/api/queue/clear", methods=["POST"])
+@app.route("/api/control/queue/clear", methods=["POST"])
 def api_queue_clear():
     with playlist_lock:
         playlist.clear()
@@ -1930,6 +2004,7 @@ def api_queue_clear():
 
 
 @app.route("/admin/api/queue/shuffle", methods=["POST"])
+@app.route("/api/control/queue/shuffle", methods=["POST"])
 def api_queue_shuffle():
     with playlist_lock:
         random.shuffle(playlist)
@@ -1961,6 +2036,7 @@ def api_settings_set():
 
 
 @app.route("/admin/api/queue/<int:idx>/move", methods=["POST"])
+@app.route("/api/control/queue/<int:idx>/move", methods=["POST"])
 def api_queue_move(idx: int):
     """Move a queue item. Supports legacy {direction: "up"|"down"} for the
     arrow buttons and {to: N} for drag-drop reordering (where N is the new
@@ -1995,6 +2071,7 @@ def api_queue_move(idx: int):
 
 
 @app.route("/admin/api/seek", methods=["POST"])
+@app.route("/api/control/seek", methods=["POST"])
 def api_seek():
     data = request.get_json(silent=True) or {}
     if current_source is None:
@@ -2014,6 +2091,7 @@ def api_seek():
 
 
 @app.route("/admin/api/stop", methods=["POST"])
+@app.route("/api/control/stop", methods=["POST"])
 def api_stop():
     with state_lock:
         _stop_locked()
@@ -2024,6 +2102,7 @@ def api_stop():
 
 
 @app.route("/admin/api/skip", methods=["POST"])
+@app.route("/api/control/skip", methods=["POST"])
 def api_skip():
     """Skip to the next item: terminate ffmpeg without clearing source state and
     let the watcher pick the next thing (queue first, then auto_fill if on)."""
@@ -2043,6 +2122,7 @@ def api_skip():
 
 
 @app.route("/admin/api/pause", methods=["POST"])
+@app.route("/api/control/pause", methods=["POST"])
 def api_pause():
     global current_paused, paused_position, active_run_id
     with state_lock:
@@ -2079,6 +2159,7 @@ def api_pause():
 
 
 @app.route("/admin/api/resume", methods=["POST"])
+@app.route("/api/control/resume", methods=["POST"])
 def api_resume():
     with state_lock:
         if current_source is None or not current_paused:
@@ -2118,6 +2199,11 @@ def api_status():
             # the "play whatever PDT == server_now − 2s" target lands at the
             # same moment on every device.
             "server_unix": time.time(),
+            # Permission hints for the viewer page: show a "Controls" link
+            # when this token can drive playback. is_admin distinguishes the
+            # host (full control surface) from a friend.
+            "can_control": _caller_can_control(),
+            "level": _token_level(request.cookies.get(TOKEN_COOKIE)),
         })
 
 
