@@ -1827,6 +1827,24 @@ def api_reaction_recent():
     return jsonify({"reactions": out, "max_id": max_id, "emojis": list(REACTION_EMOJIS)})
 
 
+@app.route("/api/queue")
+def api_queue_public():
+    """Read-only queue for viewers: just enough to show "up next" (title,
+    source type, duration). No control — adding/removing/reordering stays on
+    the admin/friend control surface. Token-gated by the viewer route gate."""
+    with playlist_lock:
+        items = [
+            {
+                "title": it.get("title"),
+                "type": it.get("type"),
+                "duration": it.get("duration"),
+                "is_live": it.get("is_live", False),
+            }
+            for it in playlist
+        ]
+    return jsonify({"queue": items})
+
+
 @app.route("/")
 def viewer_page():
     return send_from_directory("static", "viewer.html")

@@ -157,6 +157,34 @@
     padding: 3rem;
     text-align: center;
   }
+  /* Read-only "up next" queue for viewers. Collapsible like chat. */
+  #queue-panel {
+    background: #0e0e0e;
+    border-top: 1px solid #1f1f1f;
+    max-height: 30vh; overflow-y: auto;
+  }
+  #queue-panel.collapsed { max-height: 2.4rem; overflow: hidden; }
+  #queue-head {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.5rem 1rem; cursor: pointer; user-select: none;
+    position: sticky; top: 0; background: #0e0e0e;
+    border-bottom: 1px solid #1a1a1a;
+  }
+  #queue-head h2 { margin: 0; font-size: 0.85rem; font-weight: 500; color: #ccc; letter-spacing: 0.02em; }
+  #queue-count {
+    flex: 1; color: #666; font-size: 0.78rem; font-variant-numeric: tabular-nums;
+  }
+  #queue-head .toggle { color: #666; font-size: 0.8rem; }
+  #queue-panel.collapsed #queue-head { border-bottom: none; }
+  #queue-list { list-style: none; margin: 0; padding: 0.3rem 0 0.5rem; }
+  #queue-list li {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.3rem 1rem; font-size: 0.85rem; color: #ccc;
+  }
+  #queue-list .qpos { color: #555; font-variant-numeric: tabular-nums; min-width: 1.4em; text-align: right; }
+  #queue-list .qtitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #queue-list .qdur { color: #777; font-size: 0.78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  #queue-list .empty { color: #555; padding: 0.4rem 1rem; }
   /* Anonymous chat panel — collapsible. Sits below the player, takes the
      remaining viewport height up to 40vh. No usernames; each session gets a
      small color dot derived from a localStorage-stored opaque id. */
@@ -259,6 +287,15 @@
     <div id="reaction-bar"></div>
   </div>
 </main>
+
+<section id="queue-panel" style="display:none">
+  <div id="queue-head">
+    <h2>up next</h2>
+    <span id="queue-count"></span>
+    <span class="toggle" id="queue-toggle">▾</span>
+  </div>
+  <ol id="queue-list"></ol>
+</section>
 
 <section id="chat">
   <div id="chat-header">
@@ -861,6 +898,45 @@ async function reactionPoll() {
 }
 setInterval(reactionPoll, 1000);
 reactionPoll();
+
+// ---- Up-next queue (read-only) ----------------------------------------
+// Viewers see what's coming but can't touch it — adding/reordering stays on
+// the control surface. Panel hides itself when the queue is empty.
+const queuePanel = document.getElementById("queue-panel");
+const queueList = document.getElementById("queue-list");
+const queueCount = document.getElementById("queue-count");
+const queueToggle = document.getElementById("queue-toggle");
+if (localStorage.getItem("jetstream_queue_collapsed") === "1") {
+  queuePanel.classList.add("collapsed");
+  queueToggle.textContent = "▸";
+}
+document.getElementById("queue-head").addEventListener("click", () => {
+  const c = queuePanel.classList.toggle("collapsed");
+  queueToggle.textContent = c ? "▸" : "▾";
+  localStorage.setItem("jetstream_queue_collapsed", c ? "1" : "0");
+});
+async function queuePoll() {
+  try {
+    const r = await fetch("/api/queue");
+    if (!r.ok) return;
+    const q = (await r.json()).queue || [];
+    if (!q.length) { queuePanel.style.display = "none"; return; }
+    queuePanel.style.display = "";
+    queueCount.textContent = q.length + (q.length === 1 ? " item" : " items");
+    queueList.innerHTML = "";
+    q.forEach((it, i) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="qpos"></span><span class="qtitle"></span><span class="qdur"></span>`;
+      li.querySelector(".qpos").textContent = i + 1;
+      li.querySelector(".qtitle").textContent = it.title || "(untitled)";
+      li.querySelector(".qdur").textContent =
+        it.is_live ? "LIVE" : (it.duration ? formatTime(it.duration) : "");
+      queueList.appendChild(li);
+    });
+  } catch {}
+}
+setInterval(queuePoll, 5000);
+queuePoll();
 
 </script>
 </body>
