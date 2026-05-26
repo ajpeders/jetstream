@@ -197,6 +197,26 @@
     padding: 0.2rem 0.55rem; font-size: 0.75rem; flex-shrink: 0;
   }
   ul#list li.dir button.queue-btn { display: none; }
+  #search-row {
+    display: flex; gap: 0.5rem; align-items: center;
+    padding: 0.6rem 1.2rem; background: #131313;
+    border-bottom: 1px solid #1f1f1f;
+  }
+  #search-input {
+    flex: 1; min-width: 0;
+    background: #1a1a1a; color: #eee;
+    border: 1px solid #2a2a2a; border-radius: 4px;
+    padding: 0.45rem 0.7rem; font-size: 0.9rem; font-family: inherit;
+  }
+  #search-input:focus { outline: none; border-color: #444; }
+  #search-clear {
+    background: #2a2a2a; color: #ccc; border: 1px solid #333;
+    border-radius: 4px; padding: 0.4rem 0.7rem; cursor: pointer; font-size: 0.85rem;
+  }
+  #search-info {
+    padding: 0.5rem 1.2rem; background: #161616; color: #888;
+    font-size: 0.82rem; border-bottom: 1px solid #1f1f1f;
+  }
   #breadcrumb {
     padding: 0.7rem 1.2rem;
     background: #161616;
@@ -436,7 +456,12 @@
   <ul id="viewers-list" style="list-style:none;padding:0;margin:0.5rem 0 0;font-size:0.85rem"></ul>
   <div id="viewers-history" style="display:none;margin-top:0.6rem;max-height:18rem;overflow:auto;font-size:0.8rem;background:#111;padding:0.5rem;border-radius:4px"></div>
 </div>
+<div id="search-row">
+  <input id="search-input" type="search" placeholder="🔍 Search the whole library…" autocomplete="off">
+  <button id="search-clear" type="button" style="display:none">✕</button>
+</div>
 <div id="breadcrumb"></div>
+<div id="search-info" style="display:none"></div>
 <ul id="list"><li class="empty">Loading…</li></ul>
 
 <section id="chat-panel">
@@ -550,6 +575,52 @@ async function browse(path) {
     list.innerHTML = `<li class="empty">Error: ${escapeHtml(e.message)}</li>`;
   }
 }
+
+// ---- Library search ---------------------------------------------------
+// Recursive filename search across the whole library, shown in the same list
+// as browse. Available on /admin and /controls alike (both hit ${API}/search).
+const searchInput = document.getElementById("search-input");
+const searchClear = document.getElementById("search-clear");
+const searchInfo = document.getElementById("search-info");
+let searchSeq = 0;
+
+function exitSearch() {
+  searchInfo.style.display = "none";
+  searchClear.style.display = "none";
+  breadcrumb.style.display = "";
+  browse(currentDir);  // back to the folder we were in
+}
+
+async function doSearch(q) {
+  const seq = ++searchSeq;
+  searchClear.style.display = "";
+  breadcrumb.style.display = "none";
+  searchInfo.style.display = "";
+  searchInfo.textContent = "Searching…";
+  list.innerHTML = '<li class="empty">Searching…</li>';
+  try {
+    const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const j = await res.json();
+    if (seq !== searchSeq) return;  // a newer keystroke superseded this
+    const results = j.results || [];
+    searchInfo.textContent = results.length
+      ? `${results.length}${j.truncated ? "+" : ""} result${results.length === 1 ? "" : "s"} for “${q}”`
+      : `No matches for “${q}”`;
+    renderItems(results);
+  } catch (e) {
+    if (seq === searchSeq) list.innerHTML = `<li class="empty">Error: ${escapeHtml(e.message)}</li>`;
+  }
+}
+
+let searchDebounce = null;
+searchInput.addEventListener("input", () => {
+  const q = searchInput.value.trim();
+  clearTimeout(searchDebounce);
+  if (!q) { exitSearch(); return; }
+  searchDebounce = setTimeout(() => doSearch(q), 250);
+});
+searchClear.addEventListener("click", () => { searchInput.value = ""; exitSearch(); searchInput.focus(); });
 
 function renderItems(items) {
   if (!items.length) {
