@@ -436,6 +436,35 @@ def _list_dir(rel: str):
     return items
 
 
+def _search_library(query: str, limit: int = 300) -> tuple[list[dict], bool]:
+    """Filter the (cached) library scan by a query. Space-separated terms are
+    AND-matched, case-insensitively, against each file's path relative to
+    MEDIA_ROOT — so "office s02" finds files with both. Returns file entries in
+    the same shape as _list_dir (name/path/type/size) plus a truncated flag."""
+    terms = [t for t in query.lower().split() if t]
+    if not terms:
+        return [], False
+    matched = [
+        p for p in _scan_library()
+        if all(t in str(p.relative_to(MEDIA_ROOT)).lower() for t in terms)
+    ]
+    matched.sort(key=lambda p: p.name.lower())
+    truncated = len(matched) > limit
+    items = []
+    for p in matched[:limit]:
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = None
+        items.append({
+            "name": p.name,
+            "path": str(p.relative_to(MEDIA_ROOT)),
+            "type": "file",
+            "size": size,
+        })
+    return items, truncated
+
+
 def _cleanup_hls():
     """Wipe ALL HLS state — master playlist, every run dir, every segment.
     Used on full stop / idle, and on startup before any ffmpeg spawns.
@@ -810,26 +839,23 @@ def _probe_subtitle_tracks(input_path: str) -> list[dict]:
     return tracks
 
 
-# Above this source size, skip auto subtitle burn-in. The `subtitles=` filter
-# (and any pre-extraction) has to demux the whole container to pull subtitle
-# packets, which are interleaved throughout the file — on an 18 GB 4K remux
-# that's a ~100 s disk scan that runs the encode at ~0.007x and stalls the
-# live stream. Files this large are 4K rips whose subs are usually just a
-# forced/signs track anyway. Admin can still force subs on a big file via an
-# explicit subtitle_idx (accepting the slow start); this only gates the
-# automatic pick used on play/queue/restore.
-SUBTITLE_AUTOPICK_MAX_BYTES = 12 * 1024**3  # 12 GiB
+# Subtitle burn-in is OFF for now (default; flip USE_SUBTITLES=1 to re-enable).
+# The libass `subtitles=` filter loads the *entire* subtitle track before it
+# renders the first frame, which forces ffmpeg to demux the whole container to
+# EOF up front. On a multi-GB source that's a full-file disk scan that runs the
+# encode at a tiny fraction of realtime (~0.007x on an 18 GB remux, and a 5.6 GB
+# movie stalled just as badly) — the stream never reaches its first segment and
+# appears frozen. No cheap fix lives inside the filter; a real fix needs cached
+# pre-extraction (see ROADMAP). Until then we don't burn subs at all.
+SUBTITLE_BURN_IN = os.environ.get("USE_SUBTITLES", "0") == "1"
 
 
 def _pick_default_subtitle(input_path: str) -> int | None:
     """Auto-pick a sub track index for burn-in: prefer English-tagged, fall
-    back to the first text-based track. None when nothing is usable, or when
-    the source is too large to scan for subs without stalling the stream."""
-    try:
-        if os.path.getsize(input_path) > SUBTITLE_AUTOPICK_MAX_BYTES:
-            return None
-    except OSError:
-        pass
+    back to the first text-based track. Returns None while burn-in is disabled
+    (the default — see SUBTITLE_BURN_IN) or when nothing usable is present."""
+    if not SUBTITLE_BURN_IN:
+        return None
     tracks = _probe_subtitle_tracks(input_path)
     if not tracks:
         return None
@@ -965,9 +991,11 @@ def _build_ffmpeg_cmd(
         "-map", audio_map,
         "-sn",
     ]
+    # Burn-in gated globally (SUBTITLE_BURN_IN) so a stale subtitle_idx left in
+    # an old state.json / queue entry can't reintroduce the full-file-scan stall.
     sub_filter = (
         _subtitles_filter(input_str, subtitle_idx)
-        if subtitle_idx is not None else None
+        if SUBTITLE_BURN_IN and subtitle_idx is not None else None
     )
     if USE_NVENC:
         # NVENC encode + (when codec is supported) NVDEC decode. Filter chain:
@@ -1888,6 +1916,16 @@ def admin_page():
 @app.route("/api/control/browse")
 def api_browse():
     return jsonify(_list_dir(request.args.get("path", "")))
+
+
+@app.route("/admin/api/search")
+@app.route("/api/control/search")
+def api_search():
+    """Recursive filename search across the whole library (cached scan).
+    Returns file entries in the same shape as /browse so the UI renders them
+    with the existing list renderer."""
+    items, truncated = _search_library(request.args.get("q", "").strip())
+    return jsonify({"results": items, "truncated": truncated})
 
 
 @app.route("/admin/api/play", methods=["POST"])
