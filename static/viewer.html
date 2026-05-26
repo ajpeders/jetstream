@@ -88,6 +88,39 @@
     z-index: 1;
   }
   #unmute-overlay.hidden { display: none; }
+  /* Emoji reactions: a non-interactive layer the floats animate in, plus a
+     tap bar mirroring the volume controls on the opposite corner. */
+  #reaction-layer {
+    position: absolute; inset: 0; overflow: hidden;
+    pointer-events: none; z-index: 5;
+  }
+  .reaction-float {
+    position: absolute; bottom: 64px;
+    font-size: 2.1rem; line-height: 1;
+    will-change: transform, opacity;
+    animation: reaction-rise 2.6s ease-out forwards;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.5);
+  }
+  @keyframes reaction-rise {
+    0%   { transform: translateY(0) scale(0.5); opacity: 0; }
+    14%  { transform: translateY(-14px) scale(1.15); opacity: 1; }
+    100% { transform: translateY(-230px) scale(1); opacity: 0; }
+  }
+  #reaction-bar {
+    position: absolute; bottom: 12px; left: 12px;
+    display: flex; gap: 0.25rem;
+    background: rgba(0,0,0,0.55);
+    padding: 0.3rem 0.45rem; border-radius: 4px;
+    opacity: 0.7; transition: opacity 0.15s; z-index: 6;
+  }
+  #reaction-bar:hover { opacity: 1; }
+  #reaction-bar button {
+    background: transparent; border: none; cursor: pointer;
+    font-size: 1.2rem; line-height: 1; padding: 0.1rem 0.25rem;
+    transition: transform 0.1s;
+  }
+  #reaction-bar button:hover { transform: scale(1.3); }
+  #reaction-bar button:active { transform: scale(0.9); }
   #vol-controls {
     position: absolute;
     bottom: 12px;
@@ -217,6 +250,8 @@
       <button id="fs-btn" title="Fullscreen" style="display:none">⛶</button>
     </div>
     <div id="unmute-overlay">tap to unmute</div>
+    <div id="reaction-layer"></div>
+    <div id="reaction-bar"></div>
   </div>
 </main>
 
@@ -720,6 +755,67 @@ chatForm.addEventListener("submit", async e => {
   chatInput.disabled = false;
   chatInput.focus();
 });
+
+// ---- Emoji reactions --------------------------------------------------
+// Tap an emoji → it floats up over the video for everyone watching. Rides a
+// dedicated ephemeral feed (/reactions/recent), polled faster than chat for
+// responsiveness. Reuses chatSid so a client skips re-animating its own
+// reaction (it spawns that one optimistically on tap).
+const reactionLayer = document.getElementById("reaction-layer");
+const reactionBar = document.getElementById("reaction-bar");
+let reactionMaxId = 0;
+
+function spawnReaction(emoji) {
+  const el = document.createElement("span");
+  el.className = "reaction-float";
+  el.textContent = emoji;
+  // Random horizontal start across the middle band so floats don't all stack.
+  el.style.left = (8 + Math.random() * 78) + "%";
+  el.addEventListener("animationend", () => el.remove());
+  reactionLayer.appendChild(el);
+  // Safety net in case animationend never fires (tab backgrounded mid-anim).
+  setTimeout(() => el.remove(), 3000);
+}
+
+async function sendReaction(emoji) {
+  spawnReaction(emoji); // optimistic — tapper sees it instantly
+  try {
+    await fetch("/reactions/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emoji, sid: chatSid }),
+    });
+  } catch {}
+}
+
+function buildReactionBar(emojis) {
+  if (reactionBar.childElementCount) return; // build once
+  for (const e of emojis) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = e;
+    b.title = "React " + e;
+    b.addEventListener("click", () => sendReaction(e));
+    reactionBar.appendChild(b);
+  }
+}
+
+async function reactionPoll() {
+  try {
+    const r = await fetch("/reactions/recent?since=" + reactionMaxId);
+    if (!r.ok) return;
+    const j = await r.json();
+    if (Array.isArray(j.emojis) && j.emojis.length) buildReactionBar(j.emojis);
+    if (typeof j.max_id === "number") reactionMaxId = j.max_id;
+    if (Array.isArray(j.reactions)) {
+      for (const x of j.reactions) {
+        if (x.sid !== chatSid) spawnReaction(x.emoji); // skip our own echo
+      }
+    }
+  } catch {}
+}
+setInterval(reactionPoll, 1000);
+reactionPoll();
 
 </script>
 </body>

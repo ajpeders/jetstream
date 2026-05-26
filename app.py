@@ -132,6 +132,22 @@ chat_next_id = 1
 # IP -> [timestamps within CHAT_RATE_WINDOW]. Pruned lazily on each send.
 chat_rate: dict[str, list[float]] = {}
 
+# Emoji reactions — ephemeral floaty taps shown over everyone's video. Same
+# ring-buffer + poll shape as chat, but /reactions/recent only returns ones
+# from the last REACTION_RECENT_WINDOW seconds so a fresh poller animates each
+# reaction once and a late joiner doesn't get a backlog dumped on them.
+# The allowed set is fixed server-side so a client can't inject arbitrary
+# (or oversized) strings into everyone's overlay.
+REACTION_EMOJIS = ("😂", "❤️", "🔥", "😮", "👏", "💀")
+REACTION_BUFFER_SIZE = 100
+REACTION_RECENT_WINDOW = 6  # seconds of lookback in /reactions/recent
+REACTION_RATE_WINDOW = 10
+REACTION_RATE_MAX = 25      # per-IP reactions per window (spammy by nature)
+reactions_lock = threading.Lock()
+reactions = _collections.deque(maxlen=REACTION_BUFFER_SIZE)
+reaction_next_id = 1
+reaction_rate: dict[str, list[float]] = {}
+
 tokens_lock = threading.Lock()
 tokens: list[dict] = []
 
@@ -1749,6 +1765,57 @@ def api_chat_send():
         chat_next_id += 1
         chat_messages.append(msg)
     return jsonify({"ok": True, "id": msg["id"]})
+
+
+def _reaction_rate_check(ip: str) -> bool:
+    """Per-IP token-bucket-ish check, same shape as _chat_rate_check but with
+    its own (more permissive) limits. True if allowed; records the timestamp."""
+    now = time.time()
+    cutoff = now - REACTION_RATE_WINDOW
+    with reactions_lock:
+        ts = [t for t in reaction_rate.get(ip, []) if t > cutoff]
+        if len(ts) >= REACTION_RATE_MAX:
+            reaction_rate[ip] = ts
+            return False
+        ts.append(now)
+        reaction_rate[ip] = ts
+        return True
+
+
+@app.route("/reactions/send", methods=["POST"])
+def api_reaction_send():
+    """Append an emoji reaction to the ephemeral ring. `emoji` must be one of
+    REACTION_EMOJIS; `sid` is the same opaque client tag chat uses (so a client
+    can skip re-animating its own reaction). Per-IP rate-limited."""
+    data = request.get_json(silent=True) or {}
+    emoji = (data.get("emoji") or "").strip()
+    if emoji not in REACTION_EMOJIS:
+        return jsonify({"error": "unknown emoji"}), 400
+    if not _reaction_rate_check(_client_ip()):
+        return jsonify({"error": "rate limited"}), 429
+    sid = (data.get("sid") or "").strip()[:32] or "anon"
+    global reaction_next_id
+    with reactions_lock:
+        r = {"id": reaction_next_id, "ts": time.time(), "emoji": emoji, "sid": sid}
+        reaction_next_id += 1
+        reactions.append(r)
+    return jsonify({"ok": True, "id": r["id"]})
+
+
+@app.route("/reactions/recent")
+def api_reaction_recent():
+    """Reactions with id > `since` AND newer than REACTION_RECENT_WINDOW. The
+    recency filter keeps this an ephemeral feed — clients animate each reaction
+    once and late joiners don't get a backlog."""
+    try:
+        since = int(request.args.get("since", 0))
+    except ValueError:
+        since = 0
+    fresh = time.time() - REACTION_RECENT_WINDOW
+    with reactions_lock:
+        out = [r for r in reactions if r["id"] > since and r["ts"] >= fresh]
+        max_id = reactions[-1]["id"] if reactions else since
+    return jsonify({"reactions": out, "max_id": max_id, "emojis": list(REACTION_EMOJIS)})
 
 
 @app.route("/")
