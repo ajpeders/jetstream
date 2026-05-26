@@ -649,7 +649,9 @@ def _probe_video_info(input_path: str) -> dict | None:
             [
                 "ffprobe", "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,width,height,color_transfer,color_primaries,r_frame_rate,avg_frame_rate",
+                "-show_entries",
+                "stream=codec_name,width,height,color_transfer,color_primaries,r_frame_rate,avg_frame_rate"
+                ":stream_side_data=side_data_type",
                 "-of", "json",
                 input_path,
             ],
@@ -685,6 +687,18 @@ def _probe_video_info(input_path: str) -> dict | None:
             return None
     fps = _parse_fps(s.get("r_frame_rate")) or _parse_fps(s.get("avg_frame_rate"))
 
+    # Dolby Vision detection. DV streams carry a "DOVI configuration record"
+    # side-data entry. NVDEC on consumer cards can't decode the DV
+    # enhancement layer — it emits a "Dolby Vision enhancement-layer HEVC
+    # configuration" error and produces zero output, stalling the stream.
+    # Flagged so the decode path forces CPU decode (the HEVC software decoder
+    # reads the base layer fine; HDR tonemap then runs as usual).
+    is_dovi = any(
+        "dovi" in (sd.get("side_data_type") or "").lower()
+        or "dolby vision" in (sd.get("side_data_type") or "").lower()
+        for sd in (s.get("side_data_list") or [])
+    )
+
     return {
         "codec": (s.get("codec_name") or "").lower() or None,
         "width": s.get("width"),
@@ -692,6 +706,7 @@ def _probe_video_info(input_path: str) -> dict | None:
         "transfer": transfer or None,
         "primaries": primaries or None,
         "is_hdr": is_hdr,
+        "is_dovi": is_dovi,
         "fps": fps,
     }
 
@@ -773,9 +788,26 @@ def _probe_subtitle_tracks(input_path: str) -> list[dict]:
     return tracks
 
 
+# Above this source size, skip auto subtitle burn-in. The `subtitles=` filter
+# (and any pre-extraction) has to demux the whole container to pull subtitle
+# packets, which are interleaved throughout the file — on an 18 GB 4K remux
+# that's a ~100 s disk scan that runs the encode at ~0.007x and stalls the
+# live stream. Files this large are 4K rips whose subs are usually just a
+# forced/signs track anyway. Admin can still force subs on a big file via an
+# explicit subtitle_idx (accepting the slow start); this only gates the
+# automatic pick used on play/queue/restore.
+SUBTITLE_AUTOPICK_MAX_BYTES = 12 * 1024**3  # 12 GiB
+
+
 def _pick_default_subtitle(input_path: str) -> int | None:
     """Auto-pick a sub track index for burn-in: prefer English-tagged, fall
-    back to the first text-based track. None when nothing is usable."""
+    back to the first text-based track. None when nothing is usable, or when
+    the source is too large to scan for subs without stalling the stream."""
+    try:
+        if os.path.getsize(input_path) > SUBTITLE_AUTOPICK_MAX_BYTES:
+            return None
+    except OSError:
+        pass
     tracks = _probe_subtitle_tracks(input_path)
     if not tracks:
         return None
@@ -863,7 +895,13 @@ def _build_ffmpeg_cmd(
     # NVDEC decode is eligible whenever the source codec is supported. HDR
     # frames stay on the GPU after decode and get tonemapped via a quick
     # hwdownload→zscale→hwupload_cuda round-trip in the filter chain below.
-    nv_decode = USE_NVENC and src_codec in NVDEC_DECODE_CODECS
+    # Dolby Vision is excluded: NVDEC chokes on the DV enhancement layer and
+    # produces no output, so DV sources fall back to CPU decode (still NVENC
+    # encoded). The is_hdr branch below handles the nv_decode=False case.
+    nv_decode = (
+        USE_NVENC and src_codec in NVDEC_DECODE_CODECS
+        and not info.get("is_dovi")
+    )
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin"]
     if USE_NVENC:
         # Frames are kept in `cuda` hw frames format when NVDEC is used so the
@@ -924,8 +962,22 @@ def _build_ffmpeg_cmd(
                 "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
                 "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
             )
-            pre = f"hwdownload,format=p010le,{tonemap}" if nv_decode else tonemap
-            post = f"scale=-2:{out_h},format=nv12,hwupload_cuda"
+            # Scale to the output height BEFORE the tonemap (and subtitle
+            # burn-in). The zscale tonemap is CPU-only and dominates cost:
+            # at 4K it runs ~0.5x realtime and stalls the live stream; at
+            # 1080p it's ~1.9x. For NVDEC input the downscale happens on the
+            # GPU (scale_cuda) so only the smaller frames get pulled to system
+            # memory; for CPU decode (e.g. Dolby Vision, which NVDEC can't
+            # handle) the `scale` filter downsizes first. Subs burn in after
+            # tonemap onto the SDR 1080p frames.
+            if nv_decode:
+                pre = (
+                    f"scale_cuda=-2:{out_h}:format=p010le,"
+                    f"hwdownload,format=p010le,{tonemap}"
+                )
+            else:
+                pre = f"scale=-2:{out_h},{tonemap}"
+            post = "format=nv12,hwupload_cuda"
             vf = (
                 f"{pre},{sub_filter},{post}"
                 if sub_filter else f"{pre},{post}"
