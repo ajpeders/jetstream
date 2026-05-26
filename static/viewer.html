@@ -235,9 +235,14 @@
   <span id="status">waiting…</span>
   <span id="position" style="color:#888;font-size:0.85rem;font-variant-numeric:tabular-nums"></span>
   <span id="viewers"></span>
-  <!-- Shown only for friend/admin tokens (see can_control in /api/status). -->
-  <a id="controls-link" href="/controls"
-     style="display:none;margin-left:auto;font-size:0.85rem;color:#6cb6ff;text-decoration:none;border:1px solid #244266;background:#1a3050;padding:0.25rem 0.6rem;border-radius:4px">🎛 Controls</a>
+  <span style="margin-left:auto;display:flex;gap:0.6rem;align-items:center">
+    <!-- Vote-to-skip: shown to everyone while something's playing. -->
+    <button id="voteskip-btn" type="button" title="Vote to skip the current item"
+            style="display:none;font-size:0.85rem;color:#e8b96c;background:#332615;border:1px solid #5a4422;padding:0.25rem 0.6rem;border-radius:4px;cursor:pointer">⏭ Vote skip <span id="voteskip-tally"></span></button>
+    <!-- Shown only for friend/admin tokens (see can_control in /api/status). -->
+    <a id="controls-link" href="/controls"
+       style="display:none;font-size:0.85rem;color:#6cb6ff;text-decoration:none;border:1px solid #244266;background:#1a3050;padding:0.25rem 0.6rem;border-radius:4px">🎛 Controls</a>
+  </span>
 </header>
 <main id="main">
   <div id="player-wrap">
@@ -624,6 +629,7 @@ async function pollStatus() {
     }
     const v = s.viewers || 0;
     viewersEl.textContent = v ? `${v} viewer${v === 1 ? "" : "s"}` : "";
+    updateVoteSkip(s);
     // Refresh the client/server clock offset so the sync interval can target
     // an absolute server moment instead of the device's potentially-skewed
     // local clock. Recomputed every poll so drift and NTP corrections track.
@@ -632,6 +638,45 @@ async function pollStatus() {
     }
   } catch (e) {}
 }
+
+// ---- Vote to skip -----------------------------------------------------
+// Everyone watching can vote; a majority of active viewers skips the item.
+// The button toggles the local vote; the tally comes from /api/status so all
+// clients see it converge. `myVote` is per-tab UI state (the server keys votes
+// by IP, so it's authoritative — this just styles the button).
+const voteSkipBtn = document.getElementById("voteskip-btn");
+const voteSkipTally = document.getElementById("voteskip-tally");
+let myVote = false;
+
+function updateVoteSkip(s) {
+  if (!s || !s.playing) {
+    voteSkipBtn.style.display = "none";
+    myVote = false;
+    return;
+  }
+  voteSkipBtn.style.display = "";
+  const votes = s.skip_votes || 0, needed = s.skip_needed || 1;
+  voteSkipTally.textContent = `${votes}/${needed}`;
+  // Once the tally drops to 0 (item skipped / votes reset), clear our local
+  // "voted" highlight.
+  if (votes === 0) myVote = false;
+  voteSkipBtn.style.background = myVote ? "#5a4422" : "#332615";
+}
+
+voteSkipBtn.addEventListener("click", async () => {
+  voteSkipBtn.disabled = true;
+  try {
+    const r = await fetch("/api/vote_skip", { method: "POST" });
+    if (r.ok) {
+      const j = await r.json();
+      myVote = !!j.voted;
+      voteSkipTally.textContent = `${j.votes}/${j.needed}`;
+      voteSkipBtn.style.background = myVote ? "#5a4422" : "#332615";
+      if (j.skipped) myVote = false;
+    }
+  } catch {}
+  voteSkipBtn.disabled = false;
+});
 
 // Kick the player up before the first /api/status round-trip so playback
 // starts the instant the page renders. If the manifest 404s (server idle),

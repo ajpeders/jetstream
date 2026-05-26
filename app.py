@@ -95,6 +95,12 @@ active_run_id: int | None = None
 next_run_id: int = 1
 finished_run_ids: set[int] = set()  # runs whose ffmpeg has exited; composer cleans dirs once their segments roll out
 
+# Vote-to-skip: client IPs that have voted to skip the *current* item. Keyed by
+# IP to match _viewer_count()'s denominator (both IP-based, so a NAT'd house
+# counts as one). Cleared whenever a new source starts (see _start_stream).
+skip_votes_lock = threading.Lock()
+skip_votes: set[str] = set()
+
 # Composer's view: which media-sequence numbers we've assigned per (run, file)
 # and which discontinuity-sequence each run corresponds to. Persistent so
 # MEDIA-SEQUENCE / DISCONTINUITY-SEQUENCE advance monotonically across composer
@@ -1584,6 +1590,9 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
             "position_seconds": current_start_offset,
             "paused": False,
         }
+    # New item playing — wipe any skip votes from the last one.
+    with skip_votes_lock:
+        skip_votes.clear()
     _save_state(snapshot)
 
 
@@ -2222,22 +2231,65 @@ def api_stop():
 
 @app.route("/admin/api/skip", methods=["POST"])
 @app.route("/api/control/skip", methods=["POST"])
+def _skip_locked():
+    """Terminate ffmpeg + retire the run so the watcher advances to the next
+    item (queue first, then auto_fill). Caller must hold state_lock."""
+    global current_paused, active_run_id
+    _terminate_proc_locked()
+    # Retire the run so the next _start_stream draws an EXT-X-DISCONTINUITY
+    # boundary in the master.
+    if active_run_id is not None:
+        finished_run_ids.add(active_run_id)
+        active_run_id = None
+    # Un-pause so the watcher's `if paused: continue` doesn't block advance.
+    current_paused = False
+
+
 def api_skip():
     """Skip to the next item: terminate ffmpeg without clearing source state and
     let the watcher pick the next thing (queue first, then auto_fill if on)."""
-    global current_paused, active_run_id
     with state_lock:
         if current_source is None:
             return jsonify({"error": "nothing playing"}), 400
-        _terminate_proc_locked()
-        # Retire the run so the next _start_stream draws an EXT-X-DISCONTINUITY
-        # boundary in the master.
-        if active_run_id is not None:
-            finished_run_ids.add(active_run_id)
-            active_run_id = None
-        # Un-pause so the watcher's `if paused: continue` doesn't block advance.
-        current_paused = False
+        _skip_locked()
     return jsonify({"ok": True})
+
+
+def _skip_threshold(active: int) -> int:
+    """Votes needed to skip: a strict majority of active viewers (IP-based,
+    matching _viewer_count). 1 viewer → 1, 2 → 2, 3 → 2, 4 → 3, 5 → 3."""
+    return active // 2 + 1
+
+
+@app.route("/api/vote_skip", methods=["POST"])
+def api_vote_skip():
+    """Toggle the calling viewer's skip vote for the current item. When votes
+    reach a majority of active viewers, the item is skipped and votes reset.
+    Keyed by client IP (same basis as the viewer count)."""
+    with state_lock:
+        playing = current_source is not None
+    if not playing:
+        return jsonify({"error": "nothing playing"}), 400
+    ip = _client_ip()
+    active = _viewer_count()
+    needed = _skip_threshold(active)
+    with skip_votes_lock:
+        if ip in skip_votes:
+            skip_votes.discard(ip)
+            voted = False
+        else:
+            skip_votes.add(ip)
+            voted = True
+        votes = len(skip_votes)
+        passed = voted and votes >= needed
+        if passed:
+            skip_votes.clear()
+    if passed:
+        with state_lock:
+            if current_source is not None:
+                _skip_locked()
+    return jsonify({"votes": 0 if passed else votes, "needed": needed,
+                    "voted": voted, "skipped": passed})
 
 
 @app.route("/admin/api/pause", methods=["POST"])
@@ -2323,6 +2375,9 @@ def api_status():
             # host (full control surface) from a friend.
             "can_control": _caller_can_control(),
             "level": _token_level(request.cookies.get(TOKEN_COOKIE)),
+            # Vote-to-skip tally for the current item (viewer-facing button).
+            "skip_votes": len(skip_votes),
+            "skip_needed": _skip_threshold(_viewer_count()),
         })
 
 
