@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jetstream — admin</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -406,16 +407,357 @@
     padding: 0.35rem 0.9rem; font-size: 0.85rem;
   }
   #chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
+  :root {
+    color-scheme: dark;
+    --pico-font-family: Inter, "Segoe UI", "Avenir Next", "Helvetica Neue", sans-serif;
+    --pico-border-radius: 18px;
+    --pico-form-element-spacing-vertical: 0.7rem;
+    --pico-form-element-spacing-horizontal: 0.9rem;
+    --pico-nav-element-spacing-vertical: 0.65rem;
+    --pico-nav-element-spacing-horizontal: 0.85rem;
+    --pico-muted-color: #95a8c5;
+    --pico-color: #f3f7ff;
+    --pico-background-color: #050913;
+    --pico-card-background-color: rgba(11, 21, 35, 0.74);
+    --pico-card-border-color: rgba(157, 198, 255, 0.16);
+    --pico-form-element-background-color: rgba(6, 11, 19, 0.7);
+    --pico-form-element-border-color: rgba(139, 214, 255, 0.14);
+    --pico-primary: #8ad4ff;
+    --pico-primary-background: #2e5b87;
+    --pico-primary-border: #4c88be;
+    --pico-primary-hover-background: #3871a5;
+    --pico-primary-hover-border: #58a1dd;
+    --bg-0: #050913;
+    --bg-1: #0b1321;
+    --bg-2: rgba(10, 18, 30, 0.78);
+    --panel: rgba(11, 21, 35, 0.74);
+    --border: rgba(157, 198, 255, 0.16);
+    --border-strong: rgba(157, 198, 255, 0.28);
+    --text: #f3f7ff;
+    --muted: #95a8c5;
+    --shadow: 0 30px 80px rgba(0, 0, 0, 0.42);
+    --shadow-soft: 0 18px 36px rgba(0, 0, 0, 0.2);
+    --radius-xl: 32px;
+    --radius-lg: 24px;
+    --radius-md: 16px;
+  }
+  body.admin-page button,
+  body.admin-page input,
+  body.admin-page select,
+  body.admin-page textarea {
+    margin-bottom: 0;
+  }
+  body.admin-page {
+    font-family: Inter, "Segoe UI", "Avenir Next", "Helvetica Neue", sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(74, 150, 255, 0.22), transparent 26%),
+      radial-gradient(circle at top right, rgba(255, 191, 102, 0.13), transparent 18%),
+      linear-gradient(180deg, #060b14 0%, #0a1120 46%, #050a12 100%);
+    color: var(--text);
+  }
+  body.admin-page::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(135deg, rgba(255,255,255,0.02), transparent 28%),
+      radial-gradient(circle at 20% 10%, rgba(139, 214, 255, 0.08), transparent 26%);
+  }
+  .admin-shell {
+    position: relative;
+    z-index: 1;
+    width: min(1540px, calc(100vw - 32px));
+    margin: 0 auto;
+    padding: 20px 0 36px;
+  }
+  .admin-shell > header {
+    position: relative;
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(18px);
+    overflow: hidden;
+  }
+  .admin-shell > header::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.06), transparent 38%);
+    pointer-events: none;
+  }
+  .admin-shell > header h1 {
+    font-family: Inter, "Segoe UI", sans-serif;
+    font-size: 1.08rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: lowercase;
+  }
+  .admin-shell > header h1 span {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.66rem !important;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted) !important;
+  }
+  .admin-layout { display: grid; gap: 20px; }
+  .admin-grid {
+    display: grid;
+    grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+  .admin-column { display: grid; gap: 20px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(18px);
+    overflow: hidden;
+    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  }
+  .panel h2 {
+    font-size: 0.82rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.18em !important;
+    text-transform: uppercase;
+    color: #dce9fb !important;
+  }
+  #status,
+  #viewers,
+  #search-info,
+  #breadcrumb,
+  .badge,
+  #broadcast-bar #duration,
+  #queue-panel .qdur,
+  #requests-panel .rwho,
+  #friends-panel .url { color: var(--muted); }
+  #status .live {
+    background: linear-gradient(135deg, #ff7347, #ffb36f);
+    color: #1b0700;
+    border-radius: 999px;
+    padding: 0.24rem 0.62rem;
+    font-weight: 800;
+    box-shadow: 0 10px 24px rgba(255, 122, 71, 0.22);
+  }
+  button,
+  #search-clear,
+  #chat-send {
+    border-radius: 999px;
+    border-color: rgba(139, 214, 255, 0.16);
+    background: linear-gradient(135deg, rgba(56, 85, 124, 0.95), rgba(37, 61, 95, 0.72));
+    box-shadow: var(--shadow-soft);
+  }
+  button:hover,
+  #search-clear:hover,
+  #chat-send:hover { background: linear-gradient(135deg, rgba(72, 104, 148, 0.98), rgba(46, 73, 112, 0.88)); }
+  button.danger {
+    background: rgba(102, 41, 41, 0.76);
+    border-color: rgba(255, 143, 122, 0.22);
+    color: #ffe5df;
+  }
+  input[type="text"],
+  input[type="search"],
+  input[type="url"],
+  select,
+  #seek-bar input {
+    background: rgba(6, 11, 19, 0.7);
+    color: var(--text);
+    border: 1px solid rgba(139, 214, 255, 0.12);
+    border-radius: 14px;
+    transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+  }
+  input[type="text"]:focus,
+  input[type="search"]:focus,
+  input[type="url"]:focus,
+  select:focus,
+  #seek-bar input:focus {
+    outline: none;
+    border-color: rgba(87, 188, 255, 0.42);
+    box-shadow: 0 0 0 4px rgba(87, 188, 255, 0.12);
+    background: rgba(8, 14, 24, 0.92);
+  }
+  #player.hero-panel {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    overflow: visible;
+  }
+  #player-wrap {
+    position: relative;
+    overflow: hidden;
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    background:
+      radial-gradient(circle at top, rgba(86, 170, 255, 0.12), transparent 35%),
+      linear-gradient(180deg, #02060b 0%, #050a13 100%);
+  }
+  #player-wrap::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.28) 100%);
+  }
+  #player video { max-height: min(68vh, 880px); }
+  #vol-controls {
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 999px;
+    padding: 0.5rem 0.72rem;
+    background: rgba(6, 11, 18, 0.62);
+    backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-soft);
+    right: 16px;
+    bottom: 16px;
+  }
+  #broadcast-bar,
+  #seek-bar {
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: rgba(7, 14, 24, 0.82);
+    padding: 0.8rem 1rem;
+  }
+  #friends-panel,
+  #url-panel,
+  #queue-panel,
+  #requests-panel,
+  #viewers-panel,
+  .library-tools,
+  .library-panel,
+  #chat-panel {
+    margin: 0;
+    padding: 1rem 1.1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+  }
+  #friends-panel form,
+  #url-panel form,
+  #search-row {
+    display: grid;
+    gap: 0.55rem;
+  }
+  .library-tools { display: grid; gap: 0.8rem; }
+  #search-row {
+    padding: 0;
+    background: transparent;
+    border: 0;
+  }
+  #public-toggle-wrap {
+    padding: 0.75rem 0.9rem;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+  }
+  #queue-panel .head,
+  #requests-panel .head,
+  #viewers-panel .head { margin-bottom: 0.85rem !important; }
+  #queue-panel li,
+  #requests-panel li,
+  #friends-panel li,
+  #viewers-list li {
+    padding: 0.6rem 0;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  #queue-panel li:first-child,
+  #requests-panel li:first-child,
+  #friends-panel li:first-child,
+  #viewers-list li:first-child { border-top: none; }
+  .library-panel {
+    padding: 0;
+    overflow: hidden;
+  }
+  #breadcrumb,
+  #search-info {
+    padding: 0;
+    background: transparent;
+    border: 0;
+  }
+  ul#list li {
+    padding: 0.95rem 1.1rem;
+  }
+  ul#list li:hover { background: rgba(255,255,255,0.03); }
+  ul#list li.now { background: rgba(86, 165, 112, 0.16); }
+  #chat-panel { max-height: 30rem; }
+  #toast {
+    border-radius: 999px;
+    background: rgba(8, 15, 25, 0.9);
+    border: 1px solid rgba(139, 214, 255, 0.14);
+    box-shadow: var(--shadow);
+  }
+  .panel:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-strong);
+    box-shadow: 0 34px 90px rgba(0, 0, 0, 0.42);
+  }
+  .admin-shell > header,
+  #player-wrap,
+  #broadcast-bar,
+  #seek-bar,
+  .panel {
+    animation: rise-in 280ms ease both;
+  }
+  @keyframes rise-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @media (min-width: 1100px) {
+    #friend-form,
+    #url-form {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+    }
+    #search-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+    }
+    #friend-form select { min-width: 15rem; }
+  }
+  @media (max-width: 1099px) {
+    .admin-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .admin-shell {
+      width: min(100vw - 20px, 100%);
+      padding-top: 10px;
+    }
+    .admin-shell > header {
+      flex-wrap: wrap;
+      gap: 0.7rem;
+      border-radius: 18px;
+    }
+    #player-wrap { border-radius: 20px; }
+    #broadcast-bar,
+    #seek-bar,
+    #friends-panel,
+    #url-panel,
+    #queue-panel,
+    #requests-panel,
+    #viewers-panel,
+    .library-tools,
+    .library-panel,
+    #chat-panel { border-radius: 18px; }
+  }
 </style>
 </head>
-<body>
+<body class="admin-page">
+<main class="admin-shell container-fluid">
 <header>
   <h1>jetstream <span style="color:#888;font-weight:400;font-size:0.85rem">/ admin</span></h1>
   <span id="status">idle</span>
   <span id="viewers" title="Active viewers" style="color:#888;font-size:0.85rem"></span>
   <button id="stop-btn" class="danger" style="display:none">Stop</button>
 </header>
-<div id="player">
+<div class="admin-layout">
+<div id="player" class="hero-panel">
   <div id="player-wrap">
     <video id="video" autoplay playsinline muted disablepictureinpicture
            controlslist="nodownload nofullscreen noremoteplayback noplaybackrate"></video>
@@ -444,7 +786,9 @@
     <button id="seek-btn">Seek</button>
   </div>
 </div>
-<div id="friends-panel">
+<div class="admin-grid">
+<div class="admin-column">
+<div id="friends-panel" class="panel">
   <h2>Friends</h2>
   <label id="public-toggle-wrap" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.7rem;font-size:0.85rem;color:#aaa;cursor:pointer">
     <input type="checkbox" id="public-toggle">
@@ -460,7 +804,7 @@
   </form>
   <ul id="tokens-list"></ul>
 </div>
-<div id="url-panel">
+<div id="url-panel" class="panel">
   <h2>Stream from URL</h2>
   <form id="url-form">
     <input id="url-input" type="url" placeholder="https://www.youtube.com/watch?v=…" required>
@@ -469,7 +813,7 @@
   </form>
   <div class="hint">YouTube, Twitch, Vimeo, anything yt-dlp supports. Live streams won't be seekable.</div>
 </div>
-<div id="queue-panel">
+<div id="queue-panel" class="panel">
   <div class="head">
     <h2>Up next</h2>
     <span class="badge" id="queue-count">0</span>
@@ -478,14 +822,14 @@
   </div>
   <ul id="queue-list"></ul>
 </div>
-<div id="requests-panel">
+<div id="requests-panel" class="panel">
   <div class="head">
     <h2>Requests</h2>
     <span class="badge" id="requests-count">0</span>
   </div>
   <ul id="requests-list"><li class="empty-r">No pending requests.</li></ul>
 </div>
-<div id="viewers-panel" style="margin-top:1rem">
+<div id="viewers-panel" class="panel" style="margin-top:1rem">
   <div class="head" style="display:flex;align-items:center;gap:0.5rem">
     <h2 style="margin:0">Viewers</h2>
     <span class="badge" id="viewers-count">0</span>
@@ -494,15 +838,22 @@
   <ul id="viewers-list" style="list-style:none;padding:0;margin:0.5rem 0 0;font-size:0.85rem"></ul>
   <div id="viewers-history" style="display:none;margin-top:0.6rem;max-height:18rem;overflow:auto;font-size:0.8rem;background:#111;padding:0.5rem;border-radius:4px"></div>
 </div>
-<div id="search-row">
-  <input id="search-input" type="search" placeholder="🔍 Search the whole library…" autocomplete="off">
-  <button id="search-clear" type="button" style="display:none">✕</button>
-</div>
-<div id="breadcrumb"></div>
-<div id="search-info" style="display:none"></div>
-<ul id="list"><li class="empty">Loading…</li></ul>
 
-<section id="chat-panel">
+<div class="admin-column">
+  <div class="library-tools panel">
+    <div id="search-row">
+      <input id="search-input" type="search" placeholder="Search the whole library…" autocomplete="off">
+      <button id="search-clear" type="button" style="display:none">Clear</button>
+    </div>
+    <div id="breadcrumb"></div>
+    <div id="search-info" style="display:none"></div>
+  </div>
+
+  <div class="library-panel panel">
+    <ul id="list"><li class="empty">Loading…</li></ul>
+  </div>
+
+<section id="chat-panel" class="panel">
   <div id="chat-header">
     <h2>Chat</h2>
     <span class="toggle" id="chat-toggle">▾</span>
@@ -515,8 +866,12 @@
     <button id="chat-send" type="submit">send</button>
   </form>
 </section>
+</div>
+</div>
+</div>
 
 <div id="toast"></div>
+</main>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script>
