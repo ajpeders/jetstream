@@ -31,6 +31,7 @@ TOKEN_LEVELS = ("viewer", "friend")
 # Levels permitted to hit /api/control/* and load /controls.
 CONTROL_LEVELS = frozenset({"friend", "admin"})
 PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
+REQUESTS_FILE = Path(os.environ.get("REQUESTS_FILE", "/data/requests.json"))
 SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", "/data/settings.json"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "/data/state.json"))
 VIEWER_LOG_FILE = Path(os.environ.get("VIEWER_LOG_FILE", "/data/viewer_log.jsonl"))
@@ -160,6 +161,18 @@ tokens: list[dict] = []
 playlist_lock = threading.Lock()
 playlist: list[dict] = []
 
+# Viewer "request to queue": watch-only viewers can't drive playback, but they
+# can suggest media that lands in a pending list the host approves/denies. Each
+# request: {"id", "ts", "path", "title", "requester", "ip"}. Persisted so a
+# restart doesn't drop a backlog the host hasn't gotten to yet.
+REQUEST_RATE_WINDOW = 60    # seconds
+REQUEST_RATE_MAX = 10       # per-IP requests per window
+requests_lock = threading.Lock()
+media_requests: list[dict] = []
+request_next_id = 1
+# IP -> [timestamps within REQUEST_RATE_WINDOW]. Pruned lazily on each request.
+request_rate: dict[str, list[float]] = {}
+
 
 def _load_tokens():
     global tokens
@@ -220,6 +233,25 @@ def _save_playlist():
     PLAYLIST_FILE.write_text(json.dumps(playlist, indent=2))
 
 
+def _load_requests():
+    global media_requests, request_next_id
+    if REQUESTS_FILE.exists():
+        try:
+            media_requests = json.loads(REQUESTS_FILE.read_text())
+            # Resume the id counter past the highest persisted id so approvals
+            # by id stay unambiguous across restarts.
+            request_next_id = max((r.get("id", 0) for r in media_requests), default=0) + 1
+            return
+        except Exception:
+            pass
+    media_requests = []
+
+
+def _save_requests():
+    REQUESTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REQUESTS_FILE.write_text(json.dumps(media_requests, indent=2))
+
+
 settings_lock = threading.Lock()
 settings: dict = {"viewer_public": False, "auto_fill": True}
 
@@ -273,6 +305,7 @@ def _load_state() -> dict | None:
 
 _load_tokens()
 _load_playlist()
+_load_requests()
 _load_settings()
 
 
@@ -1855,6 +1888,75 @@ def api_reaction_recent():
     return jsonify({"reactions": out, "max_id": max_id, "emojis": list(REACTION_EMOJIS)})
 
 
+def _request_rate_check(ip: str) -> bool:
+    """Per-IP token-bucket-ish check, same shape as _chat_rate_check. True if
+    this IP can file one more request within the rolling window; records the
+    timestamp on success. Pruned lazily."""
+    now = time.time()
+    cutoff = now - REQUEST_RATE_WINDOW
+    with requests_lock:
+        ts = [t for t in request_rate.get(ip, []) if t > cutoff]
+        if len(ts) >= REQUEST_RATE_MAX:
+            request_rate[ip] = ts
+            return False
+        ts.append(now)
+        request_rate[ip] = ts
+        return True
+
+
+@app.route("/api/library/browse")
+def api_library_browse():
+    """Viewer-facing library browse — same payload as the control-gated
+    /admin/api/browse, but reachable by a plain viewer token (the viewer gate
+    applies since this is neither /admin nor /api/control). Read-only: viewers
+    use it to find something to request, not to play."""
+    return jsonify(_list_dir(request.args.get("path", "")))
+
+
+@app.route("/api/library/search")
+def api_library_search():
+    """Viewer-facing recursive search, same shape as /admin/api/search."""
+    items, truncated = _search_library(request.args.get("q", "").strip())
+    return jsonify({"results": items, "truncated": truncated})
+
+
+@app.route("/api/request", methods=["POST"])
+def api_request_add():
+    """A viewer asks the host to queue a file. Validates the path, rate-limits
+    per IP, and appends to the pending list — it does NOT touch the playlist
+    (the host approves via /admin/api/requests/<id>/approve). Duplicate pending
+    requests for the same path are folded into a no-op so a double-tap doesn't
+    stack the list."""
+    data = request.get_json(silent=True) or {}
+    path = data.get("path")
+    if not path:
+        return jsonify({"error": "path required"}), 400
+    try:
+        _safe_resolve(path, must_be_file=True)
+    except Exception:
+        return jsonify({"error": "file not found"}), 400
+    if not _request_rate_check(_client_ip()):
+        return jsonify({"error": "rate limited"}), 429
+    requester = _clean_chat_name(data.get("name"))
+    global request_next_id
+    with requests_lock:
+        existing = next((r for r in media_requests if r["path"] == path), None)
+        if existing:
+            return jsonify({"ok": True, "duplicate": True, "request": existing})
+        req = {
+            "id": request_next_id,
+            "ts": time.time(),
+            "path": path,
+            "title": Path(path).name,
+            "requester": requester,
+            "ip": _client_ip(),
+        }
+        request_next_id += 1
+        media_requests.append(req)
+        _save_requests()
+    return jsonify({"ok": True, "request": req})
+
+
 @app.route("/api/queue")
 def api_queue_public():
     """Read-only queue for viewers: just enough to show "up next" (title,
@@ -2167,6 +2269,58 @@ def api_queue_add():
     })
 
 
+@app.route("/admin/api/requests", methods=["GET"])
+def api_requests_list():
+    """Pending viewer requests, oldest first (insertion order). Host-only —
+    only the /admin path serves it (no /api/control alias), so friends on
+    /controls don't see or act on the queue-request backlog."""
+    with requests_lock:
+        return jsonify(list(media_requests))
+
+
+@app.route("/admin/api/requests/<int:rid>/approve", methods=["POST"])
+def api_request_approve(rid: int):
+    """Approve a pending request: pop it and append a real file item to the
+    playlist, mirroring api_queue_add's file branch (probe duration, subtitle
+    pick — which returns None while burn-in is disabled). Idempotent against a
+    missing id (404)."""
+    with requests_lock:
+        req = next((r for r in media_requests if r["id"] == rid), None)
+        if req is None:
+            return jsonify({"error": "request not found"}), 404
+        media_requests.remove(req)
+        _save_requests()
+    path = req["path"]
+    try:
+        full = _safe_resolve(path, must_be_file=True)
+    except Exception:
+        # The file vanished between request and approval — the request is gone
+        # either way, so report it rather than leaving a dangling entry.
+        return jsonify({"error": "file not found"}), 400
+    item = {
+        "type": "file", "ref": path, "title": Path(path).name,
+        "duration": _probe_duration(full), "is_live": False,
+        "subtitle_idx": _pick_default_subtitle(str(full)),
+    }
+    with playlist_lock:
+        playlist.append(item)
+        _save_playlist()
+        length = len(playlist)
+    return jsonify({"ok": True, "queue_length": length})
+
+
+@app.route("/admin/api/requests/<int:rid>", methods=["DELETE"])
+def api_request_deny(rid: int):
+    """Deny a pending request: drop it without touching the playlist."""
+    with requests_lock:
+        req = next((r for r in media_requests if r["id"] == rid), None)
+        if req is None:
+            return jsonify({"error": "request not found"}), 404
+        media_requests.remove(req)
+        _save_requests()
+    return jsonify({"ok": True})
+
+
 @app.route("/admin/api/queue/<int:idx>", methods=["DELETE"])
 @app.route("/api/control/queue/<int:idx>", methods=["DELETE"])
 def api_queue_remove(idx: int):
@@ -2434,6 +2588,9 @@ def api_status():
             # Vote-to-skip tally for the current item (viewer-facing button).
             "skip_votes": len(skip_votes),
             "skip_needed": _skip_threshold(_viewer_count()),
+            # Pending viewer requests — lets the admin UI badge the count
+            # without polling /admin/api/requests when nothing's waiting.
+            "requests_pending": len(media_requests),
         })
 
 

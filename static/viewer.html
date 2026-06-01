@@ -121,6 +121,10 @@
   }
   #reaction-bar button:hover { transform: scale(1.3); }
   #reaction-bar button:active { transform: scale(0.9); }
+  /* Twemoji <img> replacements, sized to match the emoji text they stand in
+     for. Without this they'd render at the natural SVG size (huge). */
+  .reaction-float img.emoji { width: 2.1rem; height: 2.1rem; vertical-align: middle; }
+  #reaction-bar button img.emoji { width: 1.2rem; height: 1.2rem; vertical-align: middle; pointer-events: none; }
   #vol-controls {
     position: absolute;
     bottom: 12px;
@@ -185,6 +189,45 @@
   #queue-list .qtitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #queue-list .qdur { color: #777; font-size: 0.78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
   #queue-list .empty { color: #555; padding: 0.4rem 1rem; }
+  /* "Request something" — same collapsible chrome as the up-next panel, but
+     interactive: viewers search and tap "Request" to suggest media to the host. */
+  #request-panel {
+    background: #0e0e0e;
+    border-top: 1px solid #1f1f1f;
+    max-height: 32vh; overflow-y: auto;
+  }
+  #request-panel.collapsed { max-height: 2.4rem; overflow: hidden; }
+  #request-head {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.5rem 1rem; cursor: pointer; user-select: none;
+    position: sticky; top: 0; background: #0e0e0e;
+    border-bottom: 1px solid #1a1a1a;
+  }
+  #request-head h2 { margin: 0; font-size: 0.85rem; font-weight: 500; color: #ccc; letter-spacing: 0.02em; flex: 1; }
+  #request-head .toggle { color: #666; font-size: 0.8rem; }
+  #request-panel.collapsed #request-head { border-bottom: none; }
+  #request-search {
+    width: calc(100% - 2rem); margin: 0.5rem 1rem;
+    background: #1a1a1a; color: #eee;
+    border: 1px solid #2a2a2a; border-radius: 4px;
+    padding: 0.4rem 0.6rem; font-size: 0.85rem; font-family: inherit;
+  }
+  #request-search:focus { outline: none; border-color: #444; }
+  #request-results { list-style: none; margin: 0; padding: 0 0 0.5rem; }
+  #request-results li {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.3rem 1rem; font-size: 0.85rem; color: #ccc;
+  }
+  #request-results .rtitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #request-results button {
+    background: #2a2a2a; color: #eee; border: 1px solid #333;
+    padding: 0.2rem 0.6rem; font-size: 0.78rem; border-radius: 4px;
+    cursor: pointer; font-family: inherit; flex-shrink: 0;
+  }
+  #request-results button:hover { background: #333; }
+  #request-results button:disabled { opacity: 0.5; cursor: default; }
+  #request-results button.done { background: #1f3326; color: #7dcc99; border-color: #2c4a37; }
+  #request-results .empty { color: #555; padding: 0.4rem 1rem; }
   /* Anonymous chat panel — collapsible. Sits below the player, takes the
      remaining viewport height up to 40vh. No usernames; each session gets a
      small color dot derived from a localStorage-stored opaque id. */
@@ -297,6 +340,15 @@
   <ol id="queue-list"></ol>
 </section>
 
+<section id="request-panel">
+  <div id="request-head">
+    <h2>request something</h2>
+    <span class="toggle" id="request-toggle">▸</span>
+  </div>
+  <input id="request-search" type="search" placeholder="🔍 Search the library…" autocomplete="off">
+  <ul id="request-results"><li class="empty">Search the library, then tap Request to ask the host to queue it.</li></ul>
+</section>
+
 <section id="chat">
   <div id="chat-header">
     <h2>chat</h2>
@@ -312,6 +364,11 @@
 </section>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<!-- Twemoji: render reaction emoji as images so they show identically on
+     devices that lack a color-emoji font (where they'd otherwise be blank
+     "tofu" circles). If this CDN is blocked, twemojify() no-ops and the
+     plain emoji text is used as-is. -->
+<script src="https://cdn.jsdelivr.net/npm/@twemoji/api@15.1.0/dist/twemoji.min.js" crossorigin="anonymous"></script>
 <script>
 const video = document.getElementById("video");
 const statusEl = document.getElementById("status");
@@ -847,10 +904,20 @@ const reactionLayer = document.getElementById("reaction-layer");
 const reactionBar = document.getElementById("reaction-bar");
 let reactionMaxId = 0;
 
+// Swap emoji text → Twemoji <img> so it renders on devices without a color-
+// emoji font (where it'd be a blank "tofu" circle). No-op if the CDN script
+// didn't load, leaving the plain emoji text in place.
+function twemojify(el) {
+  if (window.twemoji) {
+    try { twemoji.parse(el, { folder: "svg", ext: ".svg" }); } catch {}
+  }
+}
+
 function spawnReaction(emoji) {
   const el = document.createElement("span");
   el.className = "reaction-float";
   el.textContent = emoji;
+  twemojify(el);
   // Random horizontal start across the middle band so floats don't all stack.
   el.style.left = (8 + Math.random() * 78) + "%";
   el.addEventListener("animationend", () => el.remove());
@@ -877,6 +944,7 @@ function buildReactionBar(emojis) {
     b.type = "button";
     b.textContent = e;
     b.title = "React " + e;
+    twemojify(b);
     b.addEventListener("click", () => sendReaction(e));
     reactionBar.appendChild(b);
   }
@@ -937,6 +1005,97 @@ async function queuePoll() {
 }
 setInterval(queuePoll, 5000);
 queuePoll();
+
+// ---- Request something -------------------------------------------------
+// Watch-only viewers can't drive playback, but they can search the library
+// and ask the host to queue an item. The request lands in a pending list the
+// host approves/denies (see admin.html "Requests"). Collapsed by default so
+// it stays out of the way until a viewer goes looking. Reuses the chat name
+// (jetstream_chatname) as the requester so the host sees who asked.
+const requestPanel = document.getElementById("request-panel");
+const requestToggle = document.getElementById("request-toggle");
+const requestSearch = document.getElementById("request-search");
+const requestResults = document.getElementById("request-results");
+if (localStorage.getItem("jetstream_request_collapsed") !== "0") {
+  // Default collapsed — only expand if the viewer explicitly opened it before.
+  requestPanel.classList.add("collapsed");
+  requestToggle.textContent = "▸";
+} else {
+  requestToggle.textContent = "▾";
+}
+document.getElementById("request-head").addEventListener("click", () => {
+  const c = requestPanel.classList.toggle("collapsed");
+  requestToggle.textContent = c ? "▸" : "▾";
+  localStorage.setItem("jetstream_request_collapsed", c ? "1" : "0");
+});
+
+let requestSeq = 0;
+async function requestDoSearch(q) {
+  const seq = ++requestSeq;
+  requestResults.innerHTML = '<li class="empty">Searching…</li>';
+  try {
+    const r = await fetch("/api/library/search?q=" + encodeURIComponent(q));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (seq !== requestSeq) return;  // a newer keystroke superseded this
+    const results = j.results || [];
+    if (!results.length) {
+      requestResults.innerHTML = `<li class="empty">No matches for “${escapeHtml(q)}”</li>`;
+      return;
+    }
+    requestResults.innerHTML = "";
+    for (const it of results) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="rtitle"></span><button type="button">Request</button>`;
+      li.querySelector(".rtitle").textContent = it.name;
+      const btn = li.querySelector("button");
+      btn.addEventListener("click", () => sendRequest(it.path, btn));
+      requestResults.appendChild(li);
+    }
+  } catch {
+    if (seq === requestSeq) requestResults.innerHTML = '<li class="empty">Search failed.</li>';
+  }
+}
+
+let requestDebounce = null;
+requestSearch.addEventListener("input", () => {
+  const q = requestSearch.value.trim();
+  clearTimeout(requestDebounce);
+  if (!q) {
+    requestResults.innerHTML = '<li class="empty">Search the library, then tap Request to ask the host to queue it.</li>';
+    return;
+  }
+  requestDebounce = setTimeout(() => requestDoSearch(q), 250);
+});
+
+async function sendRequest(path, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path,
+        name: localStorage.getItem("jetstream_chatname") || "",
+      }),
+    });
+    if (r.ok) {
+      // Same inline confirmation whether it's new or a fold-into-existing dup —
+      // the viewer just needs to know it's been registered.
+      btn.textContent = "Requested ✓";
+      btn.classList.add("done");
+    } else {
+      const j = await r.json().catch(() => ({}));
+      btn.textContent = j.error === "rate limited" ? "slow down" : "failed";
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = "Request"; }, 1800);
+    }
+  } catch {
+    btn.textContent = "failed";
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = "Request"; }, 1800);
+  }
+}
 
 </script>
 </body>

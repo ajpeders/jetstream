@@ -192,6 +192,37 @@
     padding: 0.2rem 0.5rem; font-size: 0.75rem;
   }
   #queue-panel .empty-q { color: #555; padding: 0.7rem 0; font-size: 0.85rem; line-height: 1.4; }
+  /* Requests panel — pending viewer "request to queue" suggestions. Host-only
+     (hidden on /controls); same chrome as the queue panel. */
+  #requests-panel {
+    padding: 0.85rem 1.2rem;
+    background: #0e0e0e;
+    border-bottom: 1px solid #1f1f1f;
+  }
+  #requests-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+  #requests-panel h2 {
+    margin: 0; font-size: 0.9rem; font-weight: 500; color: #ccc;
+    letter-spacing: 0.02em; flex: 1;
+  }
+  #requests-panel .badge {
+    background: #1a1a1a; color: #888;
+    border: 1px solid #2a2a2a; border-radius: 3px;
+    padding: 0.05rem 0.4rem; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+  }
+  /* Highlight the badge when something's actually waiting. */
+  #requests-panel .badge.waiting { background: #332615; color: #e8b96c; border-color: #5a4422; }
+  #requests-panel ul { list-style: none; padding: 0; margin: 0; }
+  #requests-panel li {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.4rem 0; border-top: 1px solid #1a1a1a;
+    font-size: 0.85rem;
+  }
+  #requests-panel li:first-child { border-top: none; }
+  #requests-panel .rwho { color: #cda; flex-shrink: 0; max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #requests-panel .rtitle { flex: 1; color: #ccc; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #requests-panel button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
+  #requests-panel button.approve { background: #1f3326; color: #7dcc99; border-color: #2c4a37; }
+  #requests-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
   /* "Queue" button alongside file rows */
   ul#list li button.queue-btn {
     padding: 0.2rem 0.55rem; font-size: 0.75rem; flex-shrink: 0;
@@ -446,6 +477,13 @@
     <button id="queue-clear">Clear</button>
   </div>
   <ul id="queue-list"></ul>
+</div>
+<div id="requests-panel">
+  <div class="head">
+    <h2>Requests</h2>
+    <span class="badge" id="requests-count">0</span>
+  </div>
+  <ul id="requests-list"><li class="empty-r">No pending requests.</li></ul>
 </div>
 <div id="viewers-panel" style="margin-top:1rem">
   <div class="head" style="display:flex;align-items:center;gap:0.5rem">
@@ -1381,7 +1419,7 @@ friendForm.addEventListener("submit", async e => {
 // just gets playback + queue. Hiding (not deleting) keeps the element refs
 // valid so the rest of the script doesn't need null guards.
 if (!IS_ADMIN) {
-  for (const id of ["friends-panel", "viewers-panel"]) {
+  for (const id of ["friends-panel", "viewers-panel", "requests-panel"]) {
     const el = document.getElementById(id);
     if (el) el.style.display = "none";
   }
@@ -1477,6 +1515,64 @@ viewersHistoryBtn.addEventListener("click", async () => {
     viewersHistory.textContent = "Failed: " + e.message;
   }
 });
+
+// ---- Requests panel (host-only) ---------------------------------------
+// Watch-only viewers can "request to queue" a file; those land here pending
+// the host's approval. Approve appends the file to the real queue; deny drops
+// it. Only polled on /admin (the panel is hidden on /controls). The count
+// badge highlights when anything's waiting.
+const requestsList = document.getElementById("requests-list");
+const requestsCount = document.getElementById("requests-count");
+
+async function refreshRequests() {
+  try {
+    const res = await fetch("/admin/api/requests");
+    if (!res.ok) return;
+    const reqs = await res.json();
+    requestsCount.textContent = reqs.length;
+    requestsCount.classList.toggle("waiting", reqs.length > 0);
+    if (!reqs.length) {
+      requestsList.innerHTML = '<li class="empty-r">No pending requests.</li>';
+      return;
+    }
+    requestsList.innerHTML = "";
+    for (const r of reqs) {
+      const li = document.createElement("li");
+      li.innerHTML = `
+        <span class="rwho"></span>
+        <span class="rtitle"></span>
+        <button class="approve" type="button" data-action="approve" data-id="${r.id}">Add</button>
+        <button type="button" data-action="deny" data-id="${r.id}">Deny</button>`;
+      li.querySelector(".rwho").textContent = r.requester || "anonymous";
+      li.querySelector(".rtitle").textContent = r.title || basename(r.path);
+      requestsList.appendChild(li);
+    }
+  } catch {}
+}
+
+requestsList.addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-action]");
+  if (!btn) return;
+  const id = parseInt(btn.dataset.id, 10);
+  const action = btn.dataset.action;
+  btn.disabled = true;
+  try {
+    if (action === "approve") {
+      const r = await fetch(`/admin/api/requests/${id}/approve`, { method: "POST" });
+      showToast(r.ok ? "Added to queue" : "Approve failed");
+      if (r.ok) loadQueue();
+    } else {
+      const r = await fetch(`/admin/api/requests/${id}`, { method: "DELETE" });
+      showToast(r.ok ? "Request denied" : "Deny failed");
+    }
+    refreshRequests();
+  } catch (e) { showToast("Failed: " + e.message); btn.disabled = false; }
+});
+
+if (IS_ADMIN) {
+  setInterval(refreshRequests, 5000);
+  refreshRequests();
+}
 
 // ---- Anonymous chat (admin) -------------------------------------------
 // Same shape as the viewer panel — admin posts as just-another-anon. There's
