@@ -275,7 +275,12 @@
   ul#list li .icon { width: 1.4em; text-align: center; flex-shrink: 0; color: #888; }
   ul#list li.dir .icon { color: #6cb6ff; }
   ul#list li.now .icon { color: #6c6; }
-  ul#list li .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  ul#list li .name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; overflow: hidden; }
+  ul#list li .name .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Parent-dir context — shown for search results so meaningless scene-rip
+     filenames (clue-sun401.avi) reveal which show they belong to. Hidden in
+     normal browse since the breadcrumb already shows where you are. */
+  ul#list li .name .parent { color: #666; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   ul#list li .meta { color: #666; font-size: 0.8rem; flex-shrink: 0; }
   .empty {
     padding: 2.5rem 1.2rem;
@@ -665,6 +670,10 @@ function renderItems(items) {
     list.innerHTML = '<li class="empty">Empty</li>';
     return;
   }
+  // Show the parent dir line only when searching — in normal browse the
+  // breadcrumb already tells you which folder you're in, so a per-row repeat
+  // is just noise. Detected by whether the search-info banner is visible.
+  const inSearch = searchInfo.style.display !== "none";
   list.innerHTML = "";
   for (const item of items) {
     const isDir = item.type === "directory";
@@ -673,11 +682,19 @@ function renderItems(items) {
     if (!isDir && item.path === nowPlaying) li.classList.add("now");
     li.innerHTML = `
       <span class="icon">${isDir ? "▸" : (item.path === nowPlaying ? "●" : "▶")}</span>
-      <span class="name"></span>
+      <span class="name"><span class="title"></span><span class="parent"></span></span>
       <span class="meta">${isDir ? "" : escapeHtml(formatSize(item.size))}</span>
       ${isDir ? "" : '<button class="queue-btn" type="button">+ Queue</button>'}
     `;
-    li.querySelector(".name").textContent = item.name;
+    li.querySelector(".name .title").textContent = item.name;
+    // For files in search results, fish the parent directory out of the path
+    // (e.g. "tv/It's Always Sunny in Philadelphia/Season 4/clue-sun401.avi"
+    // → "tv/It's Always Sunny in Philadelphia/Season 4") so the user can tell
+    // which show a mystery scene-rip filename belongs to.
+    if (inSearch && !isDir && item.path && item.path.includes("/")) {
+      li.querySelector(".name .parent").textContent =
+        "↳ " + item.path.substring(0, item.path.lastIndexOf("/"));
+    }
     li.addEventListener("click", e => {
       if (e.target.closest(".queue-btn")) return;
       isDir ? browse(item.path) : play(item.path, item.name);
