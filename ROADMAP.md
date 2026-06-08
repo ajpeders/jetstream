@@ -1,13 +1,17 @@
 # jetstream roadmap
 
-v1 is feature-complete. Only one item still open, gated on hardware:
+v1 + a viewer-interaction pass are feature-complete. Small cleanup items remain:
 
 ## Open
 
 - **Subtitle burn-in without stalling the stream.** Burn-in is currently OFF (`SUBTITLE_BURN_IN`/`USE_SUBTITLES=0`). The libass `subtitles=` filter loads the *entire* subtitle track before rendering its first frame, so ffmpeg must demux the whole container to EOF before producing segment 0. On multi-GB sources this is a full-file disk scan that runs the encode at a tiny fraction of realtime — measured ~0.007× on an 18 GB DV remux (17 frames in 80 s), and a 5.6 GB 1080p movie (Asteroid City) stalled identically. Pre-extracting the track to a sidecar `.srt` is no faster up front (still ~100 s on the 18 GB file, ~30 s on 5.6 GB) — same full-file read. **Real fix:** cache-extract subs to `state/subs/<path+mtime hash>.srt` in the background on first play (start without subs), then burn from the tiny cached file on subsequent plays. Optionally a per-source size cutoff for the auto-pick. Filename-vs-stream-index mapping already exists (`_probe_subtitle_tracks` returns the `si=` index). Re-enable via `USE_SUBTITLES=1` once cached extraction lands.
-- **Firefox playback.** Currently flaky / non-working on FF despite existing tweaks (fmp4 segments, AUD insertion, explicit BT.709 color tagging). Need to repro and diagnose. Likely suspects: Hls.js path differences in FF MSE, segment boundary IDR handling, fmp4 init segment compatibility, or PDT-based live-edge convergence misbehaving on FF's playback clock. Chrome and Safari work today.
+- **Coarse library-scan invalidation.** `_scan_library` only re-scans when `MEDIA_ROOT.stat().st_mtime` changes — i.e. when a *top-level* movies/tv folder is added/removed. New files added *inside* an existing series folder (Sonarr drop, new episode) don't bust the cache; the admin browse and the filename search show stale results until something touches the top level. Cheap fix: also hash the mtimes of the first level of subdirectories, or walk and use the max mtime across the tree. Inotify is overkill for a personal library.
+- **Requests have no TTL or cleanup.** `media_requests` persists to `/data/requests.json` and only shrinks when the host explicitly Approves or Denies. A forgotten "Add" pile builds up over time. Either auto-expire entries older than ~7 days, or add an admin "Clear all" button, or both.
+- **No chat moderation.** A chatter behaving badly can be soft-handled by revoking their token, but the admin can't delete a single bad message in-place or temporarily mute a `sid`. Two thin endpoints (`DELETE /admin/api/chat/<id>` + `POST /admin/api/chat/mute {sid, seconds}`) plus a row-hover delete in the admin chat panel would cover it.
 
-## Closed (won't-do)
+## Closed (works in practice / won't-do)
+
+- **Firefox playback** — works in practice on current main. Defensive fixes parked locally on the `firefox-playback` branch (NVENC AUD BSF + FF-tuned Hls.js config + wider PDT lag) if a regression surfaces; tested-in-Firefox-OK but unshipped while there's nothing to fix. Branch can be rebased + deployed later if needed.
 
 - **Now-playing info card** + **metadata-aware library search (actor / director)** — both required a TMDB API key + a per-file metadata cache. Not worth the friction for a personal co-watching setup. Filename search (`/admin/api/search`, `/api/control/search`) covers the realistic case; viewers still see the title + duration in the up-next panel.
 - **HW VAAPI decode + colorspace handling** — superseded by the NVENC pipeline. The original motivation was unlocking HW decode on the Intel UHD 630 iGPU to drop 4K HEVC from ~135% CPU to ~30%. The host got an RTX 3050 and the NVDEC+NVENC path delivers a stronger win (4K HEVC HDR at ~17% CPU on prod, full GPU decode + encode). VAAPI code stays in the codebase for portability to Intel-iGPU hosts but the 100×-oversized-segment bug isn't worth chasing.
@@ -26,7 +30,7 @@ v1 is feature-complete. Only one item still open, gated on hardware:
 |  8 | gunicorn replacing Werkzeug | `gunicorn 23.0 -w 1 -k gthread --threads 16 --timeout 120`. |
 |  9 | nginx sidecar for `/hls/*` | Shared tmpfs volume, auth via subrequest to `/api/_authcheck`. |
 | 10 | Non-YouTube yt-dlp audit | Vimeo / Dailymotion / SoundCloud / direct mp4 / direct m3u8 / Twitch / Reddit verified. README documents the supported set. |
-| 11 | Per-source subtitle burn-in | `subtitles=` filter; auto-picks English text track; HDR/HW/CPU branches all wired. |
+| 11 | Per-source subtitle burn-in | `subtitles=` filter; auto-picks English text track; HDR/HW/CPU branches all wired. **Currently disabled** in prod (`USE_SUBTITLES=0`) pending the cache-extract Open item — the filter pre-loads the full subtitle track and stalls multi-GB sources. |
 | 12 | Anonymous live text chat | In-memory ring (200 messages), per-IP rate-limited, sid-color-dotted, polling-based. Optional display name (24-char, defaults to "anonymous", server strips control chars / zero-widths). |
 | 13 | Low-latency mode | 1 s segments → ~1.7 s sync floor (was ~3-5 s). Real LL-HLS would need ffmpeg `EXT-X-PART` support. |
 | 15 | 4K passthrough + HDR tonemap | `TARGET_HEIGHT` env knob (source-bounded), zscale Hable tonemap for PQ/HLG sources. |
@@ -36,8 +40,18 @@ v1 is feature-complete. Only one item still open, gated on hardware:
 | 19 | NVENC pipeline (NVDEC + h264_nvenc) | Third HW encode branch, picked when `USE_NVENC=1`. Full GPU decode + scale + encode. 4K HEVC HDR on prod runs ~17% CPU vs ~135% on libx264. |
 | 20 | GPU overlay + CPU fallback | Compose split into CPU-only base + `docker-compose.gpu.yml` overlay; `bin/install` detects nvidia and chains via `COMPOSE_FILE`. Stack now runs on any host. |
 | 21 | Tear down `jetstream-dev` | NVENC was the reason it existed; with NVENC live on prod the dev sister-service is gone. |
+| 22 | Friend control tier | Invite tokens get a `level` field (`viewer` / `friend`). Friend links unlock playback + queue control via `/api/control/*` and a `/controls` page (same `admin.html`, host-only panels hidden). No login — same invite-link model. |
+| 23 | Emoji reactions | Tap an emoji, it floats up over everyone's video. Ephemeral `/reactions/recent` feed (id + 6 s recency filter). Twemoji renders the floats as SVG images so devices without a color-emoji font still see them. |
+| 24 | Vote to skip | Any viewer can vote; passes at a strict majority of active viewers (IP-keyed, matches `_viewer_count`). Tally surfaced in `/api/status`; resets on every new source. Friends/admin keep outright Skip. |
+| 25 | Viewers see the queue | Read-only "Up next" panel in `viewer.html` polls `/api/queue` every 5 s and hides itself when empty. Collapsible like chat. |
+| 26 | Library search (filename) | `/admin/api/search` + `/api/control/search`. Space-separated terms AND-matched against each file's path. Debounced search input on both `/admin` and `/controls`, capped at 300 results with a truncated flag. |
+| 27 | Request to queue | Viewers submit a path; lands in a pending list the host approves/denies. New routes: viewer-gated `/api/library/{browse,search}` + `POST /api/request`; admin `GET/POST/DELETE /admin/api/requests/...`. Persisted to `/data/requests.json`. Rate-limited 10/60 s per IP, dedups on same-path. |
+| 28 | Search results show parent folder | Scene-rip filenames (e.g. `clue-sun401.avi`) reveal which show they belong to (`↳ tv/It's Always Sunny in Philadelphia/Season 4`) in both admin search and the viewer request panel — until Sonarr cleans the names. |
 
 Plus, off-list:
 - YouTube DASH dual-input fix (separate video + audio URLs through ffmpeg as two `-i` inputs — was 360p, now 1080p).
 - Spacebar in chat input no longer eaten by the document-level pause-prevent handler.
 - Volume slider on viewer.
+- NVENC HDR scale-first tonemap + Dolby Vision detection (subsidiary fixes to #19) — the zscale tonemap ran at 4K on CPU (~0.5× realtime, stalled) and NVDEC couldn't decode the DV enhancement layer at all; scaling before tonemap (1.9–2.2× realtime) plus an `is_dovi` flag that forces CPU decode for DV files unstuck 4K HDR content.
+- Token-only viewing (settings `viewer_public=false`) durably enabled on prod; bare URL returns the invite page without a valid `?t=` / cookie.
+- Subtitle burn-in disabled globally (`SUBTITLE_BURN_IN`) to stop the `subtitles=`-filter full-file scan; real fix tracked under the Open item.
