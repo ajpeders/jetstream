@@ -386,6 +386,20 @@
   .chat-msg.self .chat-name { color: #ddd; }
   .chat-text { flex: 1; color: #ddd; word-wrap: break-word; overflow-wrap: anywhere; }
   .chat-msg.self .chat-text { color: #fff; }
+  /* Hover-reveal moderation buttons on each row (admin only — script adds
+     the .mod-actions div only when IS_ADMIN). Stay invisible until the row
+     is hovered so the panel doesn't look like a button farm. */
+  .chat-msg .mod-actions {
+    flex-shrink: 0; display: none; gap: 0.3rem;
+    align-self: center;
+  }
+  .chat-msg:hover .mod-actions { display: flex; }
+  .chat-msg .mod-actions button {
+    background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a;
+    border-radius: 3px; padding: 0.1rem 0.4rem; font-size: 0.7rem;
+    cursor: pointer; font-family: inherit;
+  }
+  .chat-msg .mod-actions button:hover { background: #2a1515; color: #e88; border-color: #4a2828; }
   #chat-form {
     display: flex; gap: 0.5rem; align-items: center;
     padding: 0.5rem 0.85rem;
@@ -1665,13 +1679,33 @@ function chatRender(msgs) {
   for (const m of msgs) {
     const li = document.createElement("div");
     li.className = "chat-msg" + (m.sid === chatSid ? " self" : "");
+    li.dataset.id = m.id;
+    li.dataset.sid = m.sid;
     li.innerHTML = `<span class="chat-dot"></span><span class="chat-name"></span><span class="chat-text"></span>`;
     li.querySelector(".chat-dot").style.background = chatColor(m.sid);
     li.querySelector(".chat-name").textContent = (m.name || "anonymous") + ":";
     li.querySelector(".chat-text").textContent = m.text;
+    // Moderation actions only on the admin page (host moderates; friends on
+    // /controls don't get to delete each other's messages). Self-messages
+    // also get the actions — the host might want to undo their own slip.
+    if (IS_ADMIN) {
+      const actions = document.createElement("span");
+      actions.className = "mod-actions";
+      actions.innerHTML = `
+        <button type="button" data-mod="delete" title="Delete message">✕</button>
+        <button type="button" data-mod="mute" title="Mute this sid">mute</button>`;
+      li.appendChild(actions);
+    }
     chatMessages.appendChild(li);
   }
   if (wasNearBottom) chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+function chatApplyDeletions(ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const seen = new Set(ids);
+  for (const el of chatMessages.querySelectorAll(".chat-msg")) {
+    if (seen.has(parseInt(el.dataset.id, 10))) el.remove();
+  }
 }
 async function chatPoll() {
   try {
@@ -1680,7 +1714,52 @@ async function chatPoll() {
     const j = await r.json();
     if (typeof j.max_id === "number") chatMaxId = j.max_id;
     if (Array.isArray(j.messages) && j.messages.length) chatRender(j.messages);
+    chatApplyDeletions(j.deleted_ids);
   } catch {}
+}
+
+// Admin moderation handlers: delete a single message, or mute its sid.
+// Wired on the parent for event delegation — chatRender stamps each row
+// with data-id / data-sid.
+if (IS_ADMIN) {
+  chatMessages.addEventListener("click", async e => {
+    const btn = e.target.closest("button[data-mod]");
+    if (!btn) return;
+    const row = btn.closest(".chat-msg");
+    if (!row) return;
+    const id = parseInt(row.dataset.id, 10);
+    const sid = row.dataset.sid;
+    if (btn.dataset.mod === "delete") {
+      btn.disabled = true;
+      try {
+        const r = await fetch(`/admin/api/chat/${id}`, { method: "DELETE" });
+        if (r.ok) row.remove();
+        else showToast("Delete failed");
+      } catch (err) { showToast("Delete failed: " + err.message); }
+      return;
+    }
+    if (btn.dataset.mod === "mute") {
+      const raw = prompt("Mute this sid for how many minutes? (0 to unmute)", "5");
+      if (raw === null) return;
+      const minutes = parseInt(raw, 10);
+      if (!Number.isFinite(minutes) || minutes < 0) {
+        showToast("Invalid duration");
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const r = await fetch("/admin/api/chat/mute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sid, seconds: minutes * 60 }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) showToast(j.muted ? `Muted ${minutes}m` : "Unmuted");
+        else showToast(j.error || "Mute failed");
+      } catch (err) { showToast("Mute failed: " + err.message); }
+      finally { btn.disabled = false; }
+    }
+  });
 }
 setInterval(chatPoll, 2500);
 chatPoll();
@@ -1707,8 +1786,14 @@ chatForm.addEventListener("submit", async e => {
     } else {
       const j = await r.json().catch(() => ({}));
       const prev = chatInput.placeholder;
-      chatInput.placeholder = j.error === "rate limited"
-        ? "slow down — too many messages" : (j.error || "send failed");
+      if (j.error === "muted") {
+        const mins = Math.max(1, Math.ceil((j.remaining || 0) / 60));
+        chatInput.placeholder = `muted (${mins}m left)`;
+      } else if (j.error === "rate limited") {
+        chatInput.placeholder = "slow down — too many messages";
+      } else {
+        chatInput.placeholder = j.error || "send failed";
+      }
       setTimeout(() => { chatInput.placeholder = prev; }, 1500);
     }
   } catch {}

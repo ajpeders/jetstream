@@ -840,6 +840,7 @@ function chatRender(msgs) {
   for (const m of msgs) {
     const li = document.createElement("div");
     li.className = "chat-msg" + (m.sid === chatSid ? " self" : "");
+    li.dataset.id = m.id;
     li.innerHTML = `<span class="chat-dot"></span><span class="chat-name"></span><span class="chat-text"></span>`;
     li.querySelector(".chat-dot").style.background = chatColor(m.sid);
     // Older messages may not have a name field yet (server pre-rename) — fall back.
@@ -850,6 +851,17 @@ function chatRender(msgs) {
   if (wasNearBottom) chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
+function chatApplyDeletions(ids) {
+  // Host moderation pulls a message after it was already painted — /chat/recent
+  // returns the surviving deleted-ids list every poll so the viewer can drop
+  // any rows it had already rendered.
+  if (!Array.isArray(ids) || !ids.length) return;
+  const seen = new Set(ids);
+  for (const el of chatMessages.querySelectorAll(".chat-msg")) {
+    if (seen.has(parseInt(el.dataset.id, 10))) el.remove();
+  }
+}
+
 async function chatPoll() {
   try {
     const r = await fetch("/chat/recent?since=" + chatMaxId);
@@ -857,6 +869,7 @@ async function chatPoll() {
     const j = await r.json();
     if (typeof j.max_id === "number") chatMaxId = j.max_id;
     if (Array.isArray(j.messages) && j.messages.length) chatRender(j.messages);
+    chatApplyDeletions(j.deleted_ids);
   } catch {}
 }
 setInterval(chatPoll, 2500);
@@ -887,8 +900,14 @@ chatForm.addEventListener("submit", async e => {
       const j = await r.json().catch(() => ({}));
       // Toast-y inline error: reuse the placeholder for 1.5s.
       const prev = chatInput.placeholder;
-      chatInput.placeholder = j.error === "rate limited"
-        ? "slow down — too many messages" : (j.error || "send failed");
+      if (j.error === "muted") {
+        const mins = Math.max(1, Math.ceil((j.remaining || 0) / 60));
+        chatInput.placeholder = `muted (${mins}m left)`;
+      } else if (j.error === "rate limited") {
+        chatInput.placeholder = "slow down — too many messages";
+      } else {
+        chatInput.placeholder = j.error || "send failed";
+      }
       setTimeout(() => { chatInput.placeholder = prev; }, 1500);
     }
   } catch {}

@@ -144,6 +144,14 @@ chat_messages = _collections.deque(maxlen=CHAT_BUFFER_SIZE)
 chat_next_id = 1
 # IP -> [timestamps within CHAT_RATE_WINDOW]. Pruned lazily on each send.
 chat_rate: dict[str, list[float]] = {}
+# sid -> wall-clock expiry. Empty after restart (chat is intentionally
+# in-memory; mutes are short-term moderation, not durable bans).
+chat_mutes: dict[str, float] = {}
+# Ids the admin deleted from `chat_messages`. Surfaces via /chat/recent so
+# clients that already saw the message hide it on next poll. Kept small by
+# trimming anything older than the oldest live ring entry (clients can't
+# show ids outside that window anyway).
+chat_deleted_ids: set[int] = set()
 
 # Emoji reactions — ephemeral floaty taps shown over everyone's video. Same
 # ring-buffer + poll shape as chat, but /reactions/recent only returns ones
@@ -1828,15 +1836,26 @@ def _chat_rate_check(ip: str) -> bool:
 def api_chat_recent():
     """Long-poll-friendly catch-up endpoint. `?since=N` returns every message
     with id > N (ring-buffer-bounded — late joiners get up to CHAT_BUFFER_SIZE
-    of history). Both the viewer and admin pages poll this."""
+    of history). Also returns `deleted_ids` so clients that already painted a
+    message hide it on next poll when the admin removed it. Both viewer and
+    admin pages poll this."""
     try:
         since = int(request.args.get("since", 0))
     except ValueError:
         since = 0
     with chat_lock:
         messages = [m for m in chat_messages if m["id"] > since]
+        # Trim deleted-ids to ids still potentially visible to any client:
+        # the live ring's id range. Anything older has been evicted and no
+        # poller will ever ask about it.
+        if chat_messages:
+            oldest = chat_messages[0]["id"]
+            chat_deleted_ids.intersection_update(
+                {i for i in chat_deleted_ids if i >= oldest}
+            )
+        deleted = sorted(chat_deleted_ids)
     max_id = messages[-1]["id"] if messages else since
-    return jsonify({"messages": messages, "max_id": max_id})
+    return jsonify({"messages": messages, "max_id": max_id, "deleted_ids": deleted})
 
 
 def _clean_chat_name(raw: str | None) -> str:
@@ -1867,6 +1886,19 @@ def api_chat_send():
         return jsonify({"error": f"message exceeds {CHAT_MSG_MAX_LEN} chars"}), 413
     sid = (data.get("sid") or "").strip()[:32] or "anon"
     name = _clean_chat_name(data.get("name"))
+    # Mute check before rate-limit so the muted sid doesn't burn its IP's
+    # rate budget on rejected sends.
+    now = time.time()
+    with chat_lock:
+        mute_until = chat_mutes.get(sid)
+        if mute_until is not None:
+            if mute_until > now:
+                return jsonify({
+                    "error": "muted",
+                    "until": mute_until,
+                    "remaining": int(mute_until - now),
+                }), 403
+            del chat_mutes[sid]
     if not _chat_rate_check(_client_ip()):
         return jsonify({"error": "rate limited"}), 429
     global chat_next_id
@@ -1881,6 +1913,51 @@ def api_chat_send():
         chat_next_id += 1
         chat_messages.append(msg)
     return jsonify({"ok": True, "id": msg["id"]})
+
+
+# Chat moderation — host-only (Traefik basicauth gates /admin, so no extra
+# token check needed here). Deletes use the message id; mutes target the
+# opaque client sid (one browser tab = one sid). Both are in-memory and
+# don't survive a restart, matching the chat ring itself.
+@app.route("/admin/api/chat/<int:msg_id>", methods=["DELETE"])
+def api_chat_delete(msg_id: int):
+    """Drop a single message from the ring and remember its id so clients
+    that already painted it hide it on next /chat/recent poll."""
+    with chat_lock:
+        # deque has no .remove(predicate); rebuild without the target. Cheap
+        # at maxlen=200. Preserves the maxlen on the new deque.
+        before = len(chat_messages)
+        kept = [m for m in chat_messages if m["id"] != msg_id]
+        if len(kept) == before:
+            return jsonify({"error": "message not found"}), 404
+        chat_messages.clear()
+        chat_messages.extend(kept)
+        chat_deleted_ids.add(msg_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/api/chat/mute", methods=["POST"])
+def api_chat_mute():
+    """Mute a sid for N seconds. Body: {sid, seconds}. Seconds <=0 unmutes.
+    sid is what the offender's tab sends to /chat/send — copy it out of the
+    message dict in the admin chat panel."""
+    data = request.get_json(silent=True) or {}
+    sid = (data.get("sid") or "").strip()[:32]
+    if not sid:
+        return jsonify({"error": "sid required"}), 400
+    try:
+        seconds = int(data.get("seconds", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "seconds must be an int"}), 400
+    with chat_lock:
+        if seconds <= 0:
+            chat_mutes.pop(sid, None)
+            return jsonify({"ok": True, "muted": False})
+        # Cap at a week — anything longer should be a token revoke instead.
+        seconds = min(seconds, 7 * 24 * 60 * 60)
+        until = time.time() + seconds
+        chat_mutes[sid] = until
+    return jsonify({"ok": True, "muted": True, "until": until, "seconds": seconds})
 
 
 def _reaction_rate_check(ip: str) -> bool:
