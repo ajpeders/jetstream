@@ -32,6 +32,12 @@ TOKEN_LEVELS = ("viewer", "friend")
 CONTROL_LEVELS = frozenset({"friend", "admin"})
 PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
 REQUESTS_FILE = Path(os.environ.get("REQUESTS_FILE", "/data/requests.json"))
+# Pending viewer "request to queue" entries auto-expire after this many seconds
+# if the host hasn't approved or denied them. Without this the list grows
+# forever (the only way it shrinks is explicit host action), and a friend who
+# requested something weeks ago has long since lost interest. Swept lazily on
+# every list view — no background timer.
+REQUEST_TTL_SECS = 7 * 24 * 60 * 60  # 7 days
 SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", "/data/settings.json"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "/data/state.json"))
 VIEWER_LOG_FILE = Path(os.environ.get("VIEWER_LOG_FILE", "/data/viewer_log.jsonl"))
@@ -250,6 +256,21 @@ def _load_requests():
 def _save_requests():
     REQUESTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     REQUESTS_FILE.write_text(json.dumps(media_requests, indent=2))
+
+
+def _expire_old_requests() -> int:
+    """Drop pending requests older than REQUEST_TTL_SECS. Lazy sweep called
+    from /admin/api/requests (admin view) and api_request_add (so a fresh
+    request never collides with a ghost duplicate). Caller holds
+    requests_lock. Returns count expired."""
+    global media_requests
+    cutoff = time.time() - REQUEST_TTL_SECS
+    before = len(media_requests)
+    media_requests = [r for r in media_requests if r.get("ts", 0) >= cutoff]
+    expired = before - len(media_requests)
+    if expired:
+        _save_requests()
+    return expired
 
 
 settings_lock = threading.Lock()
@@ -1965,6 +1986,9 @@ def api_request_add():
     requester = _clean_chat_name(data.get("name"))
     global request_next_id
     with requests_lock:
+        # Sweep ghosts before dedup so an expired request for the same path
+        # doesn't look like a live duplicate.
+        _expire_old_requests()
         existing = next((r for r in media_requests if r["path"] == path), None)
         if existing:
             return jsonify({"ok": True, "duplicate": True, "request": existing})
@@ -2298,9 +2322,22 @@ def api_queue_add():
 def api_requests_list():
     """Pending viewer requests, oldest first (insertion order). Host-only —
     only the /admin path serves it (no /api/control alias), so friends on
-    /controls don't see or act on the queue-request backlog."""
+    /controls don't see or act on the queue-request backlog. Sweeps
+    expired entries lazily on each view (REQUEST_TTL_SECS)."""
     with requests_lock:
+        _expire_old_requests()
         return jsonify(list(media_requests))
+
+
+@app.route("/admin/api/requests", methods=["DELETE"])
+def api_requests_clear():
+    """Clear all pending requests in one shot. The per-entry deny endpoint
+    still exists; this is the "I'm not adopting any of these" admin button."""
+    with requests_lock:
+        count = len(media_requests)
+        media_requests.clear()
+        _save_requests()
+    return jsonify({"ok": True, "cleared": count})
 
 
 @app.route("/admin/api/requests/<int:rid>/approve", methods=["POST"])

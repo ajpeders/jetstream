@@ -487,6 +487,7 @@
   <div class="head">
     <h2>Requests</h2>
     <span class="badge" id="requests-count">0</span>
+    <button id="requests-clear" type="button" style="display:none;margin-left:auto;font-size:0.75rem;padding:0.2rem 0.55rem">Clear all</button>
   </div>
   <ul id="requests-list"><li class="empty-r">No pending requests.</li></ul>
 </div>
@@ -1540,6 +1541,7 @@ viewersHistoryBtn.addEventListener("click", async () => {
 // badge highlights when anything's waiting.
 const requestsList = document.getElementById("requests-list");
 const requestsCount = document.getElementById("requests-count");
+const requestsClear = document.getElementById("requests-clear");
 
 async function refreshRequests() {
   try {
@@ -1548,6 +1550,7 @@ async function refreshRequests() {
     const reqs = await res.json();
     requestsCount.textContent = reqs.length;
     requestsCount.classList.toggle("waiting", reqs.length > 0);
+    requestsClear.style.display = reqs.length ? "" : "none";
     if (!reqs.length) {
       requestsList.innerHTML = '<li class="empty-r">No pending requests.</li>';
       return;
@@ -1584,6 +1587,26 @@ requestsList.addEventListener("click", async e => {
     }
     refreshRequests();
   } catch (e) { showToast("Failed: " + e.message); btn.disabled = false; }
+});
+
+requestsClear.addEventListener("click", async () => {
+  // Cheap confirm — the per-entry Deny buttons stay one-tap.
+  if (!confirm("Clear all pending requests?")) return;
+  requestsClear.disabled = true;
+  try {
+    const r = await fetch("/admin/api/requests", { method: "DELETE" });
+    if (r.ok) {
+      const data = await r.json().catch(() => ({}));
+      showToast(`Cleared ${data.cleared ?? ""} request${data.cleared === 1 ? "" : "s"}`.trim());
+    } else {
+      showToast("Clear failed");
+    }
+    refreshRequests();
+  } catch (e) {
+    showToast("Failed: " + e.message);
+  } finally {
+    requestsClear.disabled = false;
+  }
 });
 
 if (IS_ADMIN) {
