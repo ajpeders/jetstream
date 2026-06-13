@@ -1246,21 +1246,46 @@ def _build_ffmpeg_cmd(
 
 
 _library_cache_lock = threading.Lock()
-_library_cache: dict = {"mtime": None, "files": None}
+_library_cache: dict = {"sig": None, "files": None}
+
+
+def _library_signature() -> int | None:
+    """Cheap directory-tree fingerprint for the library cache. POSIX bumps a
+    directory's mtime when an entry is added or removed in it, so hashing the
+    mtime of every directory under MEDIA_ROOT captures any add/remove
+    anywhere in the tree — including a new episode dropped into an existing
+    `tv/Show/Season N/` folder, which the previous top-level-only check
+    missed. Files are NOT stat'd here (would defeat the cache); typical
+    100-dir library is ~1-3 ms vs the full file scan's ~13 ms."""
+    try:
+        sig = hash(MEDIA_ROOT.stat().st_mtime_ns)
+    except OSError:
+        return None
+    try:
+        for root, dirs, _files in os.walk(MEDIA_ROOT):
+            for d in dirs:
+                if d.startswith("."):
+                    continue
+                try:
+                    # XOR-mix so order doesn't matter (os.walk visits in
+                    # arbitrary order); name+mtime so a rename also fires.
+                    sig ^= hash((d, Path(root, d).stat().st_mtime_ns))
+                except OSError:
+                    pass
+    except OSError:
+        return None
+    return sig
 
 
 def _scan_library() -> list[Path]:
     """Walk MEDIA_ROOT, returning every playable file. Result is cached and
-    reused while MEDIA_ROOT's top-level mtime is unchanged — adding/removing
-    a top-level series or movie folder bumps the dir mtime and forces a
-    rescan. Today this scan is ~13ms for 143 files; the cache is a guard
-    against cost growth as the library expands past a few thousand."""
-    try:
-        mtime = MEDIA_ROOT.stat().st_mtime
-    except OSError:
-        mtime = None
+    reused while the library's directory tree signature is unchanged — any
+    file or folder add/remove at any depth bumps a containing directory's
+    mtime, which the signature hashes (see _library_signature). Typical
+    library: ~1-3 ms signature check, ~13 ms full scan on miss."""
+    sig = _library_signature()
     with _library_cache_lock:
-        if mtime is not None and _library_cache["mtime"] == mtime and _library_cache["files"] is not None:
+        if sig is not None and _library_cache["sig"] == sig and _library_cache["files"] is not None:
             return list(_library_cache["files"])
     files: list[Path] = []
     try:
@@ -1274,7 +1299,7 @@ def _scan_library() -> list[Path]:
         print(f"library scan failed: {e}", file=sys.stderr)
         return []
     with _library_cache_lock:
-        _library_cache["mtime"] = mtime
+        _library_cache["sig"] = sig
         _library_cache["files"] = files
     return list(files)
 
