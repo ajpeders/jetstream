@@ -1,3 +1,4 @@
+import hashlib
 import ipaddress
 import json
 import os
@@ -901,21 +902,104 @@ def _probe_subtitle_tracks(input_path: str) -> list[dict]:
     return tracks
 
 
-# Subtitle burn-in is OFF for now (default; flip USE_SUBTITLES=1 to re-enable).
-# The libass `subtitles=` filter loads the *entire* subtitle track before it
-# renders the first frame, which forces ffmpeg to demux the whole container to
-# EOF up front. On a multi-GB source that's a full-file disk scan that runs the
-# encode at a tiny fraction of realtime (~0.007x on an 18 GB remux, and a 5.6 GB
-# movie stalled just as badly) — the stream never reaches its first segment and
-# appears frozen. No cheap fix lives inside the filter; a real fix needs cached
-# pre-extraction (see ROADMAP). Until then we don't burn subs at all.
+# Subtitle burn-in is gated by USE_SUBTITLES. The libass `subtitles=` filter
+# loads the *entire* subtitle track before it renders the first frame — when
+# pointed at a multi-GB container that means demuxing the whole file to EOF
+# before segment 0 (~0.007x realtime on an 18 GB remux). The workaround is the
+# cache-extract path below: on first play of a source the chosen sub track is
+# pulled to a tiny `.srt` in SUBS_CACHE_DIR in the background, and that play
+# runs without subs. Every subsequent play points `subtitles=` at the cached
+# `.srt` (a few KB, parses instantly) so burn-in lands without stalling.
 SUBTITLE_BURN_IN = os.environ.get("USE_SUBTITLES", "0") == "1"
+SUBS_CACHE_DIR = Path(os.environ.get("SUBS_CACHE_DIR", "/data/subs"))
+# Hard cap on a single extract — if it's not done in 15 min something else is
+# wrong (failing decode, dead disk). Lets the thread die instead of leaking.
+SUBS_EXTRACT_TIMEOUT_SECS = 15 * 60
+# Per-cache-file in-flight locks so a second play of the same source during
+# extraction doesn't kick off a duplicate ffmpeg. Master lock protects the
+# dict itself; each value is a per-key threading.Lock used as a try-acquire
+# flag, NOT held across the extract — the extract runs in a separate thread
+# that owns the lock until it finishes.
+_sub_extract_locks_master = threading.Lock()
+_sub_extract_locks: dict[str, threading.Lock] = {}
+
+
+def _sub_cache_key(input_path: str, sub_idx: int) -> str:
+    """Stable cache filename for a given source + sub-track combo. Keys on the
+    resolved absolute path + the source's `st_mtime_ns` + the sub index — so a
+    Sonarr upgrade (new file at the same path) or a different track pick
+    yields a fresh cache entry, and the old one ages out via the next prune."""
+    try:
+        mtime_ns = Path(input_path).stat().st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+    key = f"{Path(input_path).resolve()}\0{mtime_ns}\0{sub_idx}".encode()
+    return hashlib.sha256(key).hexdigest()[:16]
+
+
+def _cached_sub_path(input_path: str, sub_idx: int) -> Path:
+    return SUBS_CACHE_DIR / f"{_sub_cache_key(input_path, sub_idx)}.srt"
+
+
+def _start_sub_extract(input_path: str, sub_idx: int) -> None:
+    """Spawn a background ffmpeg extract of one sub track to the cache. No-op
+    if the cached `.srt` already exists or another extract for the same key
+    is already running. Errors log to stderr — failure means "no subs this
+    play and the next" rather than a stream failure, so silent here is fine."""
+    out = _cached_sub_path(input_path, sub_idx)
+    if out.exists():
+        return
+    try:
+        SUBS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"sub cache dir create failed: {e}", file=sys.stderr)
+        return
+    with _sub_extract_locks_master:
+        lock = _sub_extract_locks.setdefault(str(out), threading.Lock())
+    if not lock.acquire(blocking=False):
+        return  # extract already in flight for this key
+
+    def run():
+        tmp = out.with_suffix(".srt.tmp")
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", input_path,
+                    # 0:s:N matches the picker's index basis (position among
+                    # all subtitle streams, container order). srt is the
+                    # safest target — libass renders it directly, and any
+                    # text-based source codec (subrip/ass/ssa/mov_text/webvtt)
+                    # converts in cleanly.
+                    "-map", f"0:s:{sub_idx}",
+                    "-c:s", "srt",
+                    str(tmp),
+                ],
+                check=True,
+                timeout=SUBS_EXTRACT_TIMEOUT_SECS,
+                stderr=subprocess.DEVNULL,
+            )
+            tmp.replace(out)
+        except Exception as e:
+            print(f"sub extract failed for {input_path} #{sub_idx}: {e}",
+                  file=sys.stderr)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        finally:
+            lock.release()
+
+    threading.Thread(target=run, daemon=True, name="sub-extract").start()
 
 
 def _pick_default_subtitle(input_path: str) -> int | None:
     """Auto-pick a sub track index for burn-in: prefer English-tagged, fall
-    back to the first text-based track. Returns None while burn-in is disabled
-    (the default — see SUBTITLE_BURN_IN) or when nothing usable is present."""
+    back to the first text-based track. Returns None when burn-in is disabled
+    or nothing usable is present. The actual cache-extraction happens later in
+    `_build_ffmpeg_cmd`, not here — this picker is also called from queue/add
+    paths to record the index, where kicking off an extract early would be
+    wasted work on items that may never play."""
     if not SUBTITLE_BURN_IN:
         return None
     tracks = _probe_subtitle_tracks(input_path)
@@ -1053,12 +1137,26 @@ def _build_ffmpeg_cmd(
         "-map", audio_map,
         "-sn",
     ]
-    # Burn-in gated globally (SUBTITLE_BURN_IN) so a stale subtitle_idx left in
-    # an old state.json / queue entry can't reintroduce the full-file-scan stall.
-    sub_filter = (
-        _subtitles_filter(input_str, subtitle_idx)
-        if SUBTITLE_BURN_IN and subtitle_idx is not None else None
-    )
+    # Burn-in path: point the libass `subtitles=` filter at a pre-extracted
+    # `.srt` in the cache so the filter no longer demuxes the source to EOF
+    # before frame 0. If the cache file is missing, kick off a background
+    # extract and play this run WITHOUT subs — the next play picks them up.
+    # SUBTITLE_BURN_IN remains the global kill switch (set USE_SUBTITLES=0 to
+    # bypass the whole path) so a stale subtitle_idx in an old state.json or
+    # queue entry can't reintroduce the stall.
+    sub_filter = None
+    if SUBTITLE_BURN_IN and subtitle_idx is not None:
+        cached = _cached_sub_path(input_str, subtitle_idx)
+        if cached.exists():
+            # Cached single-track .srt — si=0 is the only stream in the file.
+            sub_filter = _subtitles_filter(str(cached), 0)
+        else:
+            _start_sub_extract(input_str, subtitle_idx)
+            print(
+                f"sub cache miss; extracting in background for next play "
+                f"({Path(input_str).name} #{subtitle_idx})",
+                file=sys.stderr,
+            )
     if USE_NVENC:
         # NVENC encode + (when codec is supported) NVDEC decode. Filter chain:
         #   - SDR fast path (NVDEC + no subs): scale_cuda only, frames never

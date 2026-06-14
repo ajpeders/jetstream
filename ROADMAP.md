@@ -1,10 +1,10 @@
 # jetstream roadmap
 
-v1 + a viewer-interaction pass are feature-complete. Small cleanup items remain:
+v1 + a viewer-interaction pass shipped. All tracked cleanup items closed.
 
 ## Open
 
-- **Subtitle burn-in without stalling the stream.** Burn-in is currently OFF (`SUBTITLE_BURN_IN`/`USE_SUBTITLES=0`). The libass `subtitles=` filter loads the *entire* subtitle track before rendering its first frame, so ffmpeg must demux the whole container to EOF before producing segment 0. On multi-GB sources this is a full-file disk scan that runs the encode at a tiny fraction of realtime — measured ~0.007× on an 18 GB DV remux (17 frames in 80 s), and a 5.6 GB 1080p movie (Asteroid City) stalled identically. Pre-extracting the track to a sidecar `.srt` is no faster up front (still ~100 s on the 18 GB file, ~30 s on 5.6 GB) — same full-file read. **Real fix:** cache-extract subs to `state/subs/<path+mtime hash>.srt` in the background on first play (start without subs), then burn from the tiny cached file on subsequent plays. Optionally a per-source size cutoff for the auto-pick. Filename-vs-stream-index mapping already exists (`_probe_subtitle_tracks` returns the `si=` index). Re-enable via `USE_SUBTITLES=1` once cached extraction lands.
+(none — outstanding items closed below.)
 
 ## Closed (works in practice / won't-do)
 
@@ -47,6 +47,7 @@ v1 + a viewer-interaction pass are feature-complete. Small cleanup items remain:
 | 29 | Deep library-scan invalidation | `_scan_library` cache now keys on a per-directory mtime fingerprint of the whole tree (XOR-hashed name+mtime). Adding a new episode inside an existing `tv/Show/Season N/` folder busts the cache the same way a new top-level folder does. ~1-3 ms signature check vs ~13 ms full scan on miss. |
 | 30 | Requests TTL + clear-all | Pending viewer requests auto-expire after 7 days (lazy sweep on list view + on new-add dedup). New `DELETE /admin/api/requests` clears the whole pile; admin panel grows a "Clear all" button when anything's pending. |
 | 31 | Chat moderation | `DELETE /admin/api/chat/<id>` drops a single message from the ring and surfaces the id via `/chat/recent.deleted_ids` so already-painted viewers tear it down on next poll. `POST /admin/api/chat/mute {sid, seconds}` rejects further sends from that sid for the window (capped at 7 days; capacity gated by the rate-limit shape, not the mute). Admin chat panel grows hover-reveal `✕`/`mute` buttons on every row. |
+| 32 | Subtitle burn-in via cache-extract | First play of a source with a chosen sub track kicks off a background ffmpeg sidecar extract to `/data/subs/<sha256(path+mtime+idx)>.srt` and runs that stream WITHOUT subs. Every subsequent play points `subtitles=filename=<cached.srt>` at the tiny `.srt` — libass parses the few KB instantly and burn-in lands without stalling the encode. Per-key in-flight lock prevents duplicate extracts on concurrent plays; hash includes `st_mtime_ns` so a Sonarr upgrade busts the cache. Gated by `USE_SUBTITLES=1` (default off — set in compose env to opt in). Cache cleanup (orphaned entries) deliberately not implemented; subs are small enough that the dir can grow for a long time before it matters. |
 
 Plus, off-list:
 - YouTube DASH dual-input fix (separate video + audio URLs through ffmpeg as two `-i` inputs — was 360p, now 1080p).
