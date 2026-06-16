@@ -103,6 +103,25 @@ active_run_id: int | None = None
 next_run_id: int = 1
 finished_run_ids: set[int] = set()  # runs whose ffmpeg has exited; composer cleans dirs once their segments roll out
 
+# Pre-roll: when a source has a known finite duration, the watcher spawns the
+# next queue item's ffmpeg PREROLL_LEAD_SECS before the current EOF. Both
+# ffmpegs run briefly in parallel, the composer naturally stitches their run
+# dirs with an EXT-X-DISCONTINUITY, and the player keeps fresh segments
+# landing right through the transition (instead of seeing a 3-4s gap — the
+# 1s watcher poll + ffprobe + ffmpeg startup + first-GOP wall time — that
+# drains the live-edge buffer and stutters out the last several seconds).
+# 6s gives the new run enough lead to produce 2-3 segments before old EOF;
+# at 1080p NVENC the two encodes share the GPU's single NVENC engine with
+# headroom to spare. All four globals are guarded by state_lock.
+PREROLL_LEAD_SECS = 6
+preroll_proc: "subprocess.Popen | None" = None
+preroll_source: dict | None = None
+preroll_run_id: int | None = None
+# True when preroll_source was popped from the playlist (vs. drawn from
+# auto-fill). Cancellation restores it to the queue head; auto-fill picks
+# don't need restoring (the next watcher tick will draw a fresh one).
+preroll_source_from_queue: bool = False
+
 # Vote-to-skip: client IPs that have voted to skip the *current* item. Keyed by
 # IP to match _viewer_count()'s denominator (both IP-based, so a NAT'd house
 # counts as one). Cleared whenever a new source starts (see _start_stream).
@@ -581,8 +600,12 @@ def _spawn_ffmpeg(cmd: list[str], log_path: Path) -> subprocess.Popen:
 
 def _terminate_proc_locked():
     """Terminate the running ffmpeg (if any), leaving source/position state alone.
+    Also cancels the pre-rolled ffmpeg — any explicit kill of the current source
+    means whatever's "next" is no longer determined (user might be skipping,
+    pausing, or swapping the source), so the pre-roll is no longer valid.
     Caller must hold state_lock."""
     global current_proc
+    _cancel_preroll_locked()
     if current_proc and current_proc.poll() is None:
         try:
             current_proc.send_signal(signal.SIGTERM)
@@ -591,6 +614,153 @@ def _terminate_proc_locked():
             current_proc.kill()
             current_proc.wait(timeout=2)
     current_proc = None
+
+
+def _cancel_preroll_locked() -> None:
+    """Tear down the pre-rolled ffmpeg (if any) and restore its source to the
+    head of the playlist when it was popped from there. Run dir gets retired
+    so the composer's next tick cleans it up. Caller must hold state_lock.
+
+    Touches playlist_lock — state_lock → playlist_lock is the established
+    order in this module (e.g. the watcher loop), so this won't deadlock."""
+    global preroll_proc, preroll_source, preroll_run_id, preroll_source_from_queue
+    if preroll_proc is None:
+        return
+    if preroll_proc.poll() is None:
+        try:
+            preroll_proc.send_signal(signal.SIGTERM)
+            preroll_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            preroll_proc.kill()
+            preroll_proc.wait(timeout=2)
+    if preroll_run_id is not None:
+        finished_run_ids.add(preroll_run_id)
+    if preroll_source_from_queue and preroll_source is not None:
+        with playlist_lock:
+            playlist.insert(0, preroll_source)
+            _save_playlist()
+    preroll_proc = None
+    preroll_source = None
+    preroll_run_id = None
+    preroll_source_from_queue = False
+
+
+def _start_preroll_locked() -> bool:
+    """Spawn ffmpeg for the next queue item into a fresh run dir, without
+    touching current_proc / current_source / active_run_id. Returns True if
+    a preroll was started, False on any no-op condition (already pre-rolled,
+    no current source, unknown duration, not yet near EOF, nothing eligible
+    in the queue, or the next item isn't a regular file that's safe to
+    pre-roll). Caller must hold state_lock.
+
+    URL items are skipped: yt-dlp resolution can take 30+s, so racing it
+    against the live-edge buffer drain is fragile. Live URLs are also skipped
+    (no EOF to anticipate). File items cover the common case (a queued
+    movie or episode following the current one)."""
+    global preroll_proc, preroll_source, preroll_run_id, preroll_source_from_queue
+    global next_run_id
+    if preroll_proc is not None:
+        return False
+    if current_source is None or current_proc is None:
+        return False
+    if current_proc.poll() is not None:
+        return False  # already exited — natural EOF path handles promote/advance
+    if current_paused or current_source.get("is_live"):
+        return False
+    duration = current_source.get("duration")
+    if duration is None or duration <= PREROLL_LEAD_SECS:
+        return False
+    pos = _current_position()
+    if pos is None or pos < duration - PREROLL_LEAD_SECS:
+        return False
+    # Peek the next item without committing — only pop if we successfully
+    # build and spawn the ffmpeg for it.
+    with playlist_lock:
+        if not playlist:
+            return False
+        candidate = playlist[0]
+    if candidate.get("type") != "file" or candidate.get("is_live"):
+        return False
+    ref = candidate.get("ref")
+    if not ref:
+        return False
+    try:
+        full = _safe_resolve(ref, must_be_file=True)
+    except Exception:
+        return False
+    # Subtitle index: respect what's stored on the source dict; only auto-pick
+    # when it's entirely absent (pre-subtitle-support state). Same convention
+    # as _start_stream.
+    next_source = dict(candidate)
+    if "subtitle_idx" not in next_source:
+        next_source["subtitle_idx"] = _pick_default_subtitle(str(full))
+    if next_source.get("duration") is None:
+        next_source["duration"] = _probe_duration(full)
+    audio_idx = _probe_english_audio(str(full))
+    run_id = next_run_id
+    run_dir = _run_dir(run_id)
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        cmd = _build_ffmpeg_cmd(
+            str(full), run_dir, 0.0, audio_idx, next_source.get("subtitle_idx"),
+        )
+        proc = _spawn_ffmpeg(cmd, run_dir / "ffmpeg.log")
+    except Exception as e:
+        print(f"preroll: failed to spawn for {next_source.get('title')!r}: {e}",
+              file=sys.stderr)
+        return False
+    # Commit: pop from queue, advance run id, install preroll globals.
+    with playlist_lock:
+        if playlist and playlist[0] is candidate:
+            playlist.pop(0)
+            _save_playlist()
+        else:
+            # Queue head changed between peek and spawn — caller raced us.
+            # Kill the just-spawned ffmpeg and drop the run dir.
+            try:
+                proc.send_signal(signal.SIGTERM)
+                proc.wait(timeout=5)
+            except (subprocess.TimeoutExpired, Exception):
+                pass
+            finished_run_ids.add(run_id)
+            return False
+    next_run_id += 1
+    preroll_proc = proc
+    preroll_source = next_source
+    preroll_run_id = run_id
+    preroll_source_from_queue = True
+    return True
+
+
+def _promote_preroll_locked() -> bool:
+    """Swap the pre-rolled ffmpeg into the current slot — the new source has
+    been seamlessly streaming alongside; this just flips the bookkeeping so
+    /api/status, the watcher, and termination paths point at it. Returns
+    True if a promotion happened. Caller must hold state_lock."""
+    global current_proc, current_source, current_start_offset, current_start_time
+    global current_paused, paused_position, active_run_id
+    global preroll_proc, preroll_source, preroll_run_id, preroll_source_from_queue
+    if preroll_proc is None or preroll_proc.poll() is not None:
+        return False
+    # Retire the old run so the composer draws a DISCONTINUITY before the
+    # new run's segments and eventually cleans up the empty dir.
+    if active_run_id is not None:
+        finished_run_ids.add(active_run_id)
+    current_proc = preroll_proc
+    current_source = preroll_source
+    active_run_id = preroll_run_id
+    current_start_offset = 0.0
+    current_start_time = time.time()
+    current_paused = False
+    paused_position = 0.0
+    preroll_proc = None
+    preroll_source = None
+    preroll_run_id = None
+    preroll_source_from_queue = False
+    # Reset vote-to-skip for the new item.
+    with skip_votes_lock:
+        skip_votes.clear()
+    return True
 
 
 def _stop_locked():
@@ -1691,15 +1861,36 @@ def _watcher():
             if proc is not None and proc.poll() is None:
                 if tick % 10 == 0 and snapshot is not None:
                     _save_state(snapshot)
+                # Try to kick off the next item's ffmpeg ahead of the current
+                # source's EOF. _start_preroll_locked is a cheap no-op when
+                # already pre-rolled or not yet near the end; the work only
+                # fires inside the last PREROLL_LEAD_SECS of duration.
+                with state_lock:
+                    _start_preroll_locked()
                 continue
             # Holding a paused position — leave it alone.
             if paused:
                 continue
-            # If a process exited, make sure user action hasn't superseded us.
+            # If a process exited, make sure user action hasn't superseded us,
+            # and check for a pre-rolled successor: if the watcher set one up
+            # in the lead-up to EOF, promoting it skips the full ffprobe +
+            # spawn dance and the player sees an unbroken segment stream.
             if proc is not None:
                 with state_lock:
                     if current_proc is not proc:
                         continue
+                    if _promote_preroll_locked():
+                        # Snapshot the new current source for state persistence.
+                        promote_snap = {
+                            "source": current_source,
+                            "position_seconds": 0.0,
+                            "paused": False,
+                        }
+                    else:
+                        promote_snap = None
+                if promote_snap is not None:
+                    _save_state(promote_snap)
+                    continue
             # Pick what to play next: queue first, then random library fallback.
             with playlist_lock:
                 next_item = playlist.pop(0) if playlist else None
@@ -2386,9 +2577,14 @@ def api_perf():
         source = current_source
         start_time = current_start_time
         paused = current_paused
+        pre_proc = preroll_proc
+        pre_run_id = preroll_run_id
+        pre_title = (preroll_source or {}).get("title")
     pid = proc.pid if proc else None
     alive = bool(proc and proc.poll() is None)
     uptime = (time.time() - start_time) if (alive and start_time > 0) else None
+    pre_pid = pre_proc.pid if pre_proc else None
+    pre_alive = bool(pre_proc and pre_proc.poll() is None)
     segments = 0
     runs_on_disk = 0
     try:
@@ -2412,6 +2608,12 @@ def api_perf():
         "viewers": _viewer_count(),
         "paused": paused,
         "title": (source or {}).get("title"),
+        "preroll": {
+            "ffmpeg_pid": pre_pid,
+            "ffmpeg_alive": pre_alive,
+            "run_id": pre_run_id,
+            "title": pre_title,
+        },
     })
 
 
