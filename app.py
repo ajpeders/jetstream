@@ -1256,11 +1256,20 @@ def _arr_fetch_inventory() -> None:
             )
             if not poster:
                 continue
-            # Prefer arr's own MediaCover URL — stable and we control the
-            # cache. remoteUrl (TMDB) is the fallback when arr hasn't pulled
-            # the local copy yet.
-            url = poster.get("url") or poster.get("remoteUrl")
-            if not url:
+            # Prefer the upstream remoteUrl (TVDB / TMDB CDN) over arr's own
+            # /MediaCover endpoint — the local mirror requires basic auth
+            # when `AuthenticationRequired` is on, and we don't have the
+            # user's password (config.xml stores only the API key). Public
+            # CDN avoids the auth handshake entirely. Falls back to arr's
+            # path if remoteUrl is somehow missing, which we'll then need to
+            # absolutize against `base`.
+            remote = poster.get("remoteUrl")
+            local = poster.get("url")
+            if remote:
+                url = remote
+            elif local:
+                url = local if local.startswith("http") else f"{base}{local}"
+            else:
                 continue
             new_map[folder] = (base, url, key)
     with _arr_cover_map_lock:
@@ -3215,9 +3224,15 @@ def poster():
     if not cached.exists():
         base, url, key = info
         full = url if url.startswith("http") else f"{base}{url}"
+        # Pass the API key only when fetching arr's local mirror (which would
+        # also need basic auth in most homelab configs — see remoteUrl-first
+        # logic in _arr_fetch_inventory). The public TVDB/TMDB CDN ignores
+        # the header. Bumped timeout to 10 s because TVDB occasionally takes
+        # a beat to first-byte.
+        headers = {"X-Api-Key": key} if url.startswith(base) else {}
         try:
-            req = urllib.request.Request(full, headers={"X-Api-Key": key})
-            with urllib.request.urlopen(req, timeout=5) as r:
+            req = urllib.request.Request(full, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as r:
                 data = r.read()
             POSTERS_DIR.mkdir(parents=True, exist_ok=True)
             cached.write_bytes(data)
