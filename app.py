@@ -208,14 +208,28 @@ request_next_id = 1
 request_rate: dict[str, list[float]] = {}
 
 
+def _warn_state_load_failed(name: str, path: Path, err: Exception) -> None:
+    """Loud stderr warning when a JSON state file fails to parse. Each loader
+    previously swallowed the exception silently and reset to an empty default,
+    which on a corrupted tokens file would wipe every invite on the next
+    restart with no signal that anything went wrong. Print enough to find the
+    incident in `docker logs`: the state name, the path, and the error."""
+    print(
+        f"WARN: failed to load {name} state from {path}: "
+        f"{type(err).__name__}: {err}; falling back to empty defaults",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _load_tokens():
     global tokens
     if TOKENS_FILE.exists():
         try:
             tokens = json.loads(TOKENS_FILE.read_text())
             return
-        except Exception:
-            pass
+        except Exception as e:
+            _warn_state_load_failed("tokens", TOKENS_FILE, e)
     tokens = []
 
 
@@ -257,8 +271,8 @@ def _load_playlist():
         try:
             playlist = json.loads(PLAYLIST_FILE.read_text())
             return
-        except Exception:
-            pass
+        except Exception as e:
+            _warn_state_load_failed("playlist", PLAYLIST_FILE, e)
     playlist = []
 
 
@@ -276,8 +290,8 @@ def _load_requests():
             # by id stay unambiguous across restarts.
             request_next_id = max((r.get("id", 0) for r in media_requests), default=0) + 1
             return
-        except Exception:
-            pass
+        except Exception as e:
+            _warn_state_load_failed("requests", REQUESTS_FILE, e)
     media_requests = []
 
 
@@ -290,7 +304,9 @@ def _expire_old_requests() -> int:
     """Drop pending requests older than REQUEST_TTL_SECS. Lazy sweep called
     from /admin/api/requests (admin view) and api_request_add (so a fresh
     request never collides with a ghost duplicate). Caller holds
-    requests_lock. Returns count expired."""
+    requests_lock. Returns count expired. Also drops dead entries from
+    `request_rate` while we're already inside the lock — same bounded-by-
+    recent-IPs property as the chat/reaction rate dicts."""
     global media_requests
     cutoff = time.time() - REQUEST_TTL_SECS
     before = len(media_requests)
@@ -298,6 +314,9 @@ def _expire_old_requests() -> int:
     expired = before - len(media_requests)
     if expired:
         _save_requests()
+    rate_cutoff = time.time() - REQUEST_RATE_WINDOW
+    for ip in [k for k, ts in request_rate.items() if not any(t > rate_cutoff for t in ts)]:
+        del request_rate[ip]
     return expired
 
 
@@ -312,8 +331,8 @@ def _load_settings():
             loaded = json.loads(SETTINGS_FILE.read_text())
             if isinstance(loaded, dict):
                 settings.update(loaded)
-        except Exception:
-            pass
+        except Exception as e:
+            _warn_state_load_failed("settings", SETTINGS_FILE, e)
 
 
 def _save_settings():
@@ -385,7 +404,12 @@ def _client_ip() -> str:
     return request.remote_addr or "unknown"
 
 
-_geo_cache: dict[str, str] = {}
+# OrderedDict + an LRU cap so the cache can't grow without bound on a
+# long-running instance pulled by random scanner IPs. 1024 entries is a few
+# hundred KB at most; eviction is move-to-end on hit, popitem(last=False) on
+# overflow. ~all real-world viewer pools fit well inside the cap.
+_GEO_CACHE_MAX = 1024
+_geo_cache: "_collections.OrderedDict[str, str]" = _collections.OrderedDict()
 _geo_cache_lock = threading.Lock()
 _viewer_log_lock = threading.Lock()
 
@@ -412,10 +436,12 @@ def _is_private_ip(ip: str) -> bool:
 
 def _geo_lookup(ip: str) -> str:
     """Resolve ip → 'City, CC' via ipinfo.io. Returns 'LAN' for private IPs and
-    cached strings on subsequent calls. Best-effort; returns '?' on any failure."""
+    cached strings on subsequent calls. Best-effort; returns '?' on any failure.
+    Cache is LRU-bounded — see _GEO_CACHE_MAX."""
     with _geo_cache_lock:
         cached = _geo_cache.get(ip)
         if cached is not None:
+            _geo_cache.move_to_end(ip)
             return cached
     if _is_private_ip(ip):
         loc = "LAN"
@@ -433,6 +459,8 @@ def _geo_lookup(ip: str) -> str:
             loc = "?"
     with _geo_cache_lock:
         _geo_cache[ip] = loc
+        while len(_geo_cache) > _GEO_CACHE_MAX:
+            _geo_cache.popitem(last=False)
     return loc
 
 
@@ -911,12 +939,6 @@ def _expand_url(url: str) -> list[dict]:
         "is_live": bool(info.get("is_live") or info.get("live_status") == "is_live"),
         "subtitle_idx": None,
     }]
-
-
-def _probe_video_codec(input_path: str) -> str | None:
-    """Return ffmpeg's codec_name for the first video stream, or None if probe fails."""
-    info = _probe_video_info(input_path)
-    return info.get("codec") if info else None
 
 
 # transfer characteristics that signal HDR. smpte2084 = HDR10/PQ, arib-std-b67 = HLG.
@@ -2108,7 +2130,9 @@ def api_authcheck():
 
 def _chat_rate_check(ip: str) -> bool:
     """True if this IP can post one more message within the rolling window.
-    Mutates `chat_rate` to record the timestamp on success. Pruned lazily."""
+    Mutates `chat_rate` to record the timestamp on success. Pruned lazily —
+    fully-stale entries get dropped here so a one-shot scanner IP doesn't
+    leave a permanent `{ip: []}` row in the dict."""
     now = time.time()
     cutoff = now - CHAT_RATE_WINDOW
     with chat_lock:
@@ -2143,6 +2167,12 @@ def api_chat_recent():
                 {i for i in chat_deleted_ids if i >= oldest}
             )
         deleted = sorted(chat_deleted_ids)
+        # Piggyback the chat_rate prune on the poll path: viewers hit this
+        # every 2.5 s while the page is open, so the dict stays bounded to
+        # IPs that chatted in the last window without a separate sweep timer.
+        cutoff = time.time() - CHAT_RATE_WINDOW
+        for ip in [k for k, ts in chat_rate.items() if not any(t > cutoff for t in ts)]:
+            del chat_rate[ip]
     max_id = messages[-1]["id"] if messages else since
     return jsonify({"messages": messages, "max_id": max_id, "deleted_ids": deleted})
 
@@ -2297,6 +2327,11 @@ def api_reaction_recent():
     with reactions_lock:
         out = [r for r in reactions if r["id"] > since and r["ts"] >= fresh]
         max_id = reactions[-1]["id"] if reactions else since
+        # Same dead-entry sweep as /chat/recent — keeps reaction_rate bounded
+        # to IPs that actually reacted within the last window.
+        cutoff = time.time() - REACTION_RATE_WINDOW
+        for ip in [k for k, ts in reaction_rate.items() if not any(t > cutoff for t in ts)]:
+            del reaction_rate[ip]
     return jsonify({"reactions": out, "max_id": max_id, "emojis": list(REACTION_EMOJIS)})
 
 
