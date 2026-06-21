@@ -40,7 +40,7 @@ services:
       # `-preset veryfast`. If this drifts upward again, retune the player
       # constants in viewer.html in lockstep — otherwise the snap loop fights
       # hls.js's buffer (playback choppy / desync on every browser).
-      HLS_SEG_TIME: ${HLS_SEG_TIME:-2}
+      HLS_SEG_TIME: ${HLS_SEG_TIME:-1}
       # Live playlist window: 24×1s = 24s lookback. Short enough that Hls.js
       # / Safari can't pick a start position deep in scroll-back; long enough
       # that a hiccup doesn't drop a viewer outside the manifest.
