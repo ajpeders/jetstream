@@ -425,6 +425,113 @@
     padding: 0.35rem 0.9rem; font-size: 0.85rem;
   }
   #chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ------------------------------------------------------------------------
+   * Mobile / narrow-viewport polish.
+   *
+   * The default styling above is desktop-oriented (1.2rem horizontal padding,
+   * small fonts that suit a mouse). On phones — and especially on the
+   * /controls page that friends actually use from their couch — those defaults
+   * leave the layout feeling cramped *and* squandering horizontal space at
+   * the edges. This block tightens edge gutters, bumps fonts a hair, and
+   * grows tap targets to the iOS HIG 44pt minimum so a thumb-tap doesn't
+   * miss the row-action button it was aimed at.
+   *
+   * 640px catches every phone in portrait + small tablets; landscape phones
+   * (typically 740-900) keep the desktop layout, which is still legible at
+   * that width.
+   * --------------------------------------------------------------------- */
+  @media (max-width: 640px) {
+    /* Edge gutters: every section that pads to 1.2rem on desktop drops to
+       0.7rem on mobile. Don't rewrite every selector — collapse them with a
+       common rule below where the structure permits. */
+    header { padding: 0.7rem 0.8rem; gap: 0.5rem; }
+    header h1 { font-size: 0.95rem; }
+    #status { font-size: 0.8rem; }
+
+    #broadcast-bar, #seek-bar { padding: 0.55rem 0.7rem; gap: 0.45rem; }
+    #seek-bar input { width: 100%; box-sizing: border-box; }
+    /* Stack admin's seek input + scrub controls vertically on phones so the
+       row doesn't wrap into a confusing zig-zag. */
+    #seek-bar > * { flex-shrink: 0; }
+    #seek-bar input[type="number"] { flex: 1; min-width: 0; }
+
+    #friends-panel, #url-panel, #queue-panel, #requests-panel, #viewers-panel,
+    #search-row, #breadcrumb, #search-info { padding: 0.7rem 0.8rem; }
+
+    /* Library rows: room to thumb-tap, slightly larger title, parent context
+       sized to fit two lines on a phone. */
+    ul#list li {
+      padding: 0.8rem 0.8rem;
+      gap: 0.6rem;
+      min-height: 44px;
+    }
+    ul#list li .name .title { font-size: 0.95rem; }
+    ul#list li .meta { font-size: 0.75rem; }
+
+    /* Queue rows: same growth. The reorder handle + delete button are the
+       things friends actually tap; keep them within the 44pt minimum so a
+       missed tap doesn't accidentally hit the title (which plays the item). */
+    #queue-panel li {
+      padding: 0.55rem 0.7rem;
+      gap: 0.55rem;
+      min-height: 44px;
+    }
+    #queue-panel .qtitle { font-size: 0.92rem; }
+
+    /* Buttons: the default 0.4rem 0.9rem padding hits ~36px tall, under iOS's
+       44pt floor. Round everything up; admin's Skip / Pause / Add to queue
+       are touch-critical on /controls. */
+    button {
+      min-height: 44px;
+      padding: 0.5rem 0.95rem;
+      font-size: 0.9rem;
+    }
+    /* Inline row buttons (.danger row deletes, queue reorder arrows) stay at
+       full height but flatten horizontal padding so multiple fit on a row. */
+    #queue-panel button,
+    #requests-panel button,
+    #friends-panel button {
+      padding: 0.4rem 0.7rem;
+      font-size: 0.8rem;
+    }
+    /* "Clear all" pinned to the right of the Requests head label needs to be
+       finger-sized too. */
+    #requests-clear { min-height: 36px; padding: 0.35rem 0.7rem; }
+
+    /* Search input: full width, bigger touch surface. */
+    #search-row { display: flex; gap: 0.5rem; }
+    #search-input {
+      flex: 1; min-width: 0;
+      padding: 0.6rem 0.8rem; font-size: 0.95rem;
+      min-height: 44px;
+    }
+    #search-clear { min-height: 44px; padding: 0.5rem 0.85rem; }
+
+    /* Chat: keep visible but trimmer. The bottom-anchored input is what
+       friends type into; bump its height so the on-screen keyboard's auto-
+       focus doesn't have to fight a 28px target. */
+    #chat-panel { margin: 0.7rem 0.8rem; max-height: 18rem; }
+    #chat-header { padding: 0.45rem 0.7rem; }
+    #chat-messages { padding: 0.45rem 0.7rem; font-size: 0.88rem; }
+    #chat-form { padding: 0.5rem 0.6rem; gap: 0.4rem; }
+    #chat-name-input { width: 6.5em; padding: 0.55rem 0.5rem; font-size: 0.85rem; min-height: 40px; }
+    #chat-input { padding: 0.55rem 0.65rem; font-size: 0.95rem; min-height: 40px; }
+    #chat-send { padding: 0.5rem 0.95rem; font-size: 0.9rem; min-height: 40px; }
+
+    /* On a phone, friends-panel rows wrap their URL into the next line and
+       eat the screen — cap their width and let the panel scroll horizontally
+       if needed. */
+    #friends-panel .url { max-width: 100%; font-size: 0.7rem; }
+    #friends-panel .label { font-size: 0.88rem; }
+
+    /* Viewers list rows on /admin: shrink the wide IP column. */
+    #viewers-panel li > span { font-size: 0.78rem !important; }
+
+    /* The toast notification floats over content — keep it readable and above
+       the home indicator on iPhones. */
+    #toast { bottom: max(1rem, env(safe-area-inset-bottom)); font-size: 0.85rem; }
+  }
 </style>
 </head>
 <body>
