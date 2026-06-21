@@ -1600,15 +1600,15 @@ def _build_ffmpeg_cmd(
             "-g", str(gop),
             "-forced-idr", "1",
             "-no-scenecut", "1",
-            # NOTE: h264_metadata BSF was here to insert AUDs (Firefox) and
-            # to tag BT.709 color in the SPS VUI. It corrupted the fmp4 init
-            # segment's avcC box — the SPS/PPS were not extracted into the
-            # MP4 container's codec configuration record (profile=unknown,
-            # level=-99 in ffprobe on init.mp4 alone). Chrome's MSE needs a
-            # valid `codecs="avc1.xxxxxx"` derived from avcC to create a
-            # SourceBuffer, and silently fails to play the stream when that
-            # string can't be built. Firefox color tagging tracked under the
-            # "Firefox playback" ROADMAP item.
+            # Insert Access Unit Delimiters between every encoded frame.
+            # Firefox's fmp4 demuxer uses AUDs to find frame boundaries
+            # inside segments; h264_nvenc sometimes omits them, forcing a
+            # slower/less-reliable scan that surfaces as periodic micro-
+            # skips even on healthy 1 s segments. The old version of this
+            # BSF also set colour_primaries/transfer/matrix and corrupted
+            # Chrome's avcC — `aud=insert` alone leaves the SPS/PPS
+            # untouched and works in both browsers.
+            "-bsf:v", "h264_metadata=aud=insert",
         ]
     elif USE_VAAPI:
         # When hw_decode is on, frames are already in vaapi format on the GPU,
