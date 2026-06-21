@@ -1,0 +1,131 @@
+services:
+  jetstream:
+    container_name: jetstream
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: homelab/jetstream:latest
+    restart: unless-stopped
+    mem_limit: 1g
+    environment:
+      MEDIA_ROOT: /media
+      HLS_DIR: /hls
+      # Hardware-accel toggles. All default OFF — pure libx264 CPU path
+      # works on any host. NVENC bits come from docker-compose.gpu.yml,
+      # applied via COMPOSE_FILE in services/.env (bin/install writes
+      # that when nvidia-container-toolkit is present). VAAPI is opt-in by
+      # flipping USE_VAAPI=1 directly — /dev/dri is mounted unconditionally
+      # below and there's no toolkit dependency on the host side.
+      USE_VAAPI: ${USE_VAAPI:-0}
+      USE_VAAPI_DECODE: ${USE_VAAPI_DECODE:-0}
+      VAAPI_DEVICE: ${VAAPI_DEVICE:-/dev/dri/renderD128}
+      USE_NVENC: ${USE_NVENC:-0}
+      VIDEO_BITRATE: ${VIDEO_BITRATE:-5M}
+      AUDIO_BITRATE: ${AUDIO_BITRATE:-160k}
+      # Subtitle burn-in. ON by default — backed by the cache-extract sidecar
+      # (state/jetstream/subs/<hash>.srt) so the libass `subtitles=` filter no
+      # longer demuxes the source to EOF before frame 0. First play of any
+      # file with a chosen track runs WITHOUT subs while the background extract
+      # finishes; second play picks them up from the cached .srt. Set
+      # USE_SUBTITLES=0 to force-disable globally.
+      USE_SUBTITLES: ${USE_SUBTITLES:-1}
+      # Output cap. 1080p default. Set TARGET_HEIGHT=2160 for 4K passthrough
+      # on capable bandwidth — output still shrinks to source height when the
+      # source is smaller, so smaller files don't get pointlessly upscaled.
+      TARGET_HEIGHT: ${TARGET_HEIGHT:-1080}
+      # 1s segments: keeps the live-edge lag tight (~1.7s end-to-end) and
+      # matches the player's `liveSyncDurationCount: 1` + `TARGET_LAG_S: 2.5`
+      # tuning in static/viewer.html. NVENC handles the smaller GOP fine
+      # (encoder is far faster than realtime); libx264 CPU path is also OK at
+      # `-preset veryfast`. If this drifts upward again, retune the player
+      # constants in viewer.html in lockstep — otherwise the snap loop fights
+      # hls.js's buffer (playback choppy / desync on every browser).
+      HLS_SEG_TIME: ${HLS_SEG_TIME:-1}
+      # Live playlist window: 24×1s = 24s lookback. Short enough that Hls.js
+      # / Safari can't pick a start position deep in scroll-back; long enough
+      # that a hiccup doesn't drop a viewer outside the manifest.
+      HLS_LIST_SIZE: ${HLS_LIST_SIZE:-24}
+    volumes:
+      - ${JETSTREAM_MEDIA_PATH:-/home/ween/share/media}:/media:ro
+      - ../../state/jetstream:/data
+      - jetstream-hls:/hls
+      # Read-only mounts so jetstream can pull Sonarr/Radarr API keys at
+      # startup for the cover-art proxy (no env-var key duplication).
+      # Best-effort: arr might not be installed on every homelab host, so
+      # we mount them by absolute host path and let the app silently skip
+      # the source when the file is missing.
+      - ../../state/sonarr/config.xml:/etc/sonarr_config.xml:ro
+      - ../../state/radarr/config.xml:/etc/radarr_config.xml:ro
+    # /dev/dri exposes Intel/AMD render nodes for VAAPI. Mounted unconditionally;
+    # on hosts without a render node this just resolves to nothing. NVIDIA
+    # passthrough (gpus: all) is opt-in via docker-compose.gpu.yml.
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "988"
+      - "984"
+    networks:
+      - web
+      - jetstream-internal
+    # Traefik routing moved to the nginx-jetstream front-proxy below — it now
+    # owns the public surface so /hls/* segments serve straight off tmpfs
+    # without round-tripping through Flask.
+
+  # nginx front-proxy for prod. Traefik routes everything to it; nginx serves
+  # /hls/* directly from the shared tmpfs and forwards everything else to
+  # Flask via the internal docker network. Auth on /hls/ is delegated back
+  # to Flask's /api/_authcheck via auth_request — same token-cookie gate as
+  # before, just enforced on the nginx side so we don't pay Python overhead
+  # for every segment fetch.
+  nginx-jetstream:
+    container_name: nginx-jetstream
+    image: nginx:1.31-alpine
+    restart: unless-stopped
+    depends_on:
+      - jetstream
+    environment:
+      JETSTREAM_BACKEND: jetstream
+    volumes:
+      - ./nginx-default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - jetstream-hls:/hls:ro
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=web
+      # Admin router — /admin path; only admin creds work
+      - traefik.http.routers.jetstream-admin.rule=Host(`${JETSTREAM_DOMAIN}`) && PathPrefix(`/admin`)
+      - traefik.http.routers.jetstream-admin.entrypoints=websecure
+      - traefik.http.routers.jetstream-admin.tls=true
+      - traefik.http.routers.jetstream-admin.tls.certresolver=letsencrypt
+      - traefik.http.routers.jetstream-admin.middlewares=jetstream-admin-auth
+      - traefik.http.routers.jetstream-admin.service=jetstream
+      - traefik.http.middlewares.jetstream-admin-auth.basicauth.users=${JETSTREAM_ADMIN_AUTH}
+      # Viewer router — everything else; viewer or admin creds work
+      - traefik.http.routers.jetstream-viewer.rule=Host(`${JETSTREAM_DOMAIN}`)
+      - traefik.http.routers.jetstream-viewer.entrypoints=websecure
+      - traefik.http.routers.jetstream-viewer.tls=true
+      - traefik.http.routers.jetstream-viewer.tls.certresolver=letsencrypt
+      - traefik.http.routers.jetstream-viewer.service=jetstream
+      - traefik.http.services.jetstream.loadbalancer.server.port=80
+    networks:
+      - web
+      - jetstream-internal
+
+networks:
+  web:
+    external: true
+    name: web
+  # Internal-only network so the nginx ⇆ Flask hop never leaves the docker
+  # daemon.
+  jetstream-internal:
+    driver: bridge
+
+# Named tmpfs volume shared between Flask and the nginx front-proxy.
+# tmpfs-backed so segments live in RAM, but named (not anonymous) so nginx
+# can serve files Flask wrote without going through Python.
+volumes:
+  jetstream-hls:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=1500m,mode=1777"
