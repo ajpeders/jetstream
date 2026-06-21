@@ -3,6 +3,7 @@ import ipaddress
 import json
 import os
 import random
+import re
 import secrets
 import shutil
 import signal
@@ -71,6 +72,21 @@ HLS_SEG_TIME = os.environ.get("HLS_SEG_TIME", "4")
 HLS_LIST_SIZE = os.environ.get("HLS_LIST_SIZE", "450")
 
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".webm", ".avi"}
+
+# Cover art via Sonarr + Radarr. Both run on the same Docker network; we
+# read their API keys from the read-only-mounted config.xml files and
+# proxy poster images through jetstream so the UI doesn't have to deal
+# with arr URLs or keys. Posters are cached on disk forever (per-source
+# hash) — Sonarr/Radarr don't refresh artwork often enough to matter and
+# stale posters are a minor cosmetic issue, not a correctness one.
+POSTERS_DIR = Path(os.environ.get("POSTERS_DIR", "/data/posters"))
+SONARR_URL = os.environ.get("SONARR_URL", "http://sonarr:8989")
+SONARR_CONFIG = Path(os.environ.get("SONARR_CONFIG", "/etc/sonarr_config.xml"))
+RADARR_URL = os.environ.get("RADARR_URL", "http://radarr:7878")
+RADARR_CONFIG = Path(os.environ.get("RADARR_CONFIG", "/etc/radarr_config.xml"))
+# How often the background refresher re-polls arr for series/movie inventory.
+# Picks up newly-added shows / movies without a restart.
+ARR_REFRESH_SECS = 30 * 60
 
 # Each ffmpeg "run" writes its segments + init segment + per-run index playlist
 # into its own subdir under /hls/run/<run_id>/. The composer thread stitches a
@@ -1185,6 +1201,98 @@ def _start_sub_extract(input_path: str, sub_idx: int) -> None:
     threading.Thread(target=run, daemon=True, name="sub-extract").start()
 
 
+# Cover art via arr APIs ---------------------------------------------------
+# Map of `folder basename` -> (arr base URL, image url, api key). The folder
+# basename comes from each Sonarr series / Radarr movie's `path`; we match
+# requested viewer paths by walking up their components until a basename
+# hits the map. arr's `images` array exposes a relative `/MediaCover/<id>/
+# poster.jpg` URL that's served by arr itself (needs the X-Api-Key header),
+# so we don't depend on TMDB or any external CDN.
+_arr_cover_map_lock = threading.Lock()
+_arr_cover_map: dict[str, tuple[str, str, str]] = {}
+
+
+def _read_arr_api_key(path: Path) -> str | None:
+    """Extract <ApiKey>…</ApiKey> from a Sonarr/Radarr config.xml mounted into
+    the container. Returns None if the file is missing or unparseable; the
+    arr inventory fetch then silently skips that service."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    m = re.search(r"<ApiKey>\s*([a-f0-9]+)\s*</ApiKey>", text)
+    return m.group(1) if m else None
+
+
+def _arr_fetch_inventory() -> None:
+    """Pull series + movie lists from Sonarr and Radarr, update the cover
+    map. Errors log to stderr; we never raise — a missing arr just means
+    that branch's covers are blank, not that the page breaks."""
+    new_map: dict[str, tuple[str, str, str]] = {}
+    for base, cfg, endpoint in [
+        (SONARR_URL, SONARR_CONFIG, "/api/v3/series"),
+        (RADARR_URL, RADARR_CONFIG, "/api/v3/movie"),
+    ]:
+        key = _read_arr_api_key(cfg)
+        if not key:
+            continue
+        try:
+            req = urllib.request.Request(
+                f"{base}{endpoint}", headers={"X-Api-Key": key}
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                items = json.loads(r.read())
+        except Exception as e:
+            print(f"arr inventory fetch failed for {base}: {e}", file=sys.stderr)
+            continue
+        for item in items:
+            folder = Path(item.get("path", "") or "").name
+            if not folder:
+                continue
+            poster = next(
+                (i for i in (item.get("images") or [])
+                 if i.get("coverType") == "poster"),
+                None,
+            )
+            if not poster:
+                continue
+            # Prefer arr's own MediaCover URL — stable and we control the
+            # cache. remoteUrl (TMDB) is the fallback when arr hasn't pulled
+            # the local copy yet.
+            url = poster.get("url") or poster.get("remoteUrl")
+            if not url:
+                continue
+            new_map[folder] = (base, url, key)
+    with _arr_cover_map_lock:
+        _arr_cover_map.clear()
+        _arr_cover_map.update(new_map)
+
+
+def _arr_refresh_loop() -> None:
+    """Daemon thread: refresh inventory on boot, then every ARR_REFRESH_SECS.
+    First call waits briefly so the rest of the app finishes booting (arr is
+    a slow dependency on cold start)."""
+    time.sleep(5)
+    while True:
+        _arr_fetch_inventory()
+        time.sleep(ARR_REFRESH_SECS)
+
+
+def _arr_cover_for_path(path: str) -> tuple[str, str, str] | None:
+    """Walk a viewer-requested path's components from leaf to root, looking
+    for a basename match in the arr cover map. Returns (arr_base, url, key)
+    or None."""
+    if not path:
+        return None
+    parts = Path(path).parts
+    with _arr_cover_map_lock:
+        for i in range(len(parts) - 1, -1, -1):
+            hit = _arr_cover_map.get(parts[i])
+            if hit:
+                return hit
+    return None
+
+
 def _pick_default_subtitle(input_path: str) -> int | None:
     """Auto-pick a sub track index for burn-in: prefer English-tagged, fall
     back to the first text-based track. Returns None when burn-in is disabled
@@ -2057,6 +2165,7 @@ _cleanup_hls()
 _restore_state_on_startup()
 threading.Thread(target=_composer_thread, daemon=True, name="jetstream-composer").start()
 threading.Thread(target=_watcher, daemon=True, name="jetstream-watcher").start()
+threading.Thread(target=_arr_refresh_loop, daemon=True, name="arr-refresh").start()
 
 
 @app.before_request
@@ -2411,7 +2520,10 @@ def api_request_add():
 def api_queue_public():
     """Read-only queue for viewers: just enough to show "up next" (title,
     source type, duration). No control — adding/removing/reordering stays on
-    the admin/friend control surface. Token-gated by the viewer route gate."""
+    the admin/friend control surface. Token-gated by the viewer route gate.
+    `ref` is included for FILE items so the viewer UI can render the same
+    Sonarr/Radarr poster thumbs the admin and friend surfaces show — URL /
+    yt-dlp items don't have a useful ref for cover art and pass None."""
     with playlist_lock:
         items = [
             {
@@ -2419,6 +2531,7 @@ def api_queue_public():
                 "type": it.get("type"),
                 "duration": it.get("duration"),
                 "is_live": it.get("is_live", False),
+                "ref": it.get("ref") if it.get("type") == "file" else None,
             }
             for it in playlist
         ]
@@ -3073,6 +3186,48 @@ def hls(filename):
     _track_viewer()
     resp = send_from_directory(HLS_DIR, filename, conditional=False)
     resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/poster")
+def poster():
+    """Proxy + cache cover art from Sonarr/Radarr for any viewer-known media
+    path. `?path=` is the same relative path the UI uses everywhere (e.g.
+    `movies/Title (Year)/file.mkv`). We walk the path's components looking
+    for a basename match in the arr inventory cover map; on hit we fetch
+    arr's MediaCover URL once, cache the jpeg under POSTERS_DIR keyed by
+    sha256 of the raw path, and serve it with a long-lived Cache-Control so
+    the browser stops re-asking. Misses (path → no match) return 204 so the
+    UI can hide the `<img>` cleanly with `onerror`."""
+    raw = request.args.get("path", "")
+    if not raw:
+        return ("", 400)
+    info = _arr_cover_for_path(raw)
+    if not info:
+        # Cache the "no match" verdict client-side too — the path-to-arr
+        # mapping only changes when the background refresher repolls (every
+        # 30 min), so re-asking on every render is wasted Flask round-trips.
+        resp = app.response_class("", status=204)
+        resp.headers["Cache-Control"] = "public, max-age=600"
+        return resp
+    h = hashlib.sha256(raw.encode()).hexdigest()[:16]
+    cached = POSTERS_DIR / f"{h}.jpg"
+    if not cached.exists():
+        base, url, key = info
+        full = url if url.startswith("http") else f"{base}{url}"
+        try:
+            req = urllib.request.Request(full, headers={"X-Api-Key": key})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = r.read()
+            POSTERS_DIR.mkdir(parents=True, exist_ok=True)
+            cached.write_bytes(data)
+        except Exception as e:
+            print(f"poster fetch failed for {raw}: {e}", file=sys.stderr)
+            return ("", 502)
+    resp = send_from_directory(POSTERS_DIR, cached.name, mimetype="image/jpeg")
+    # Poster art doesn't change for the life of an arr entry; let the browser
+    # cache for an hour so re-rendering a grid doesn't re-hit Flask.
+    resp.headers["Cache-Control"] = "public, max-age=3600"
     return resp
 
 

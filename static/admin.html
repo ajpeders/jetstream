@@ -22,6 +22,16 @@
     gap: 1rem;
   }
   header h1 { margin: 0; font-size: 1rem; font-weight: 500; }
+  /* Now-playing poster thumb. Mirrors viewer.html — hidden until a FILE
+     source resolves to an arr cover; URL/yt-dlp sources stay hidden. */
+  #now-thumb {
+    flex-shrink: 0;
+    width: 30px; height: 45px;
+    background: #0a0a0a; border-radius: 3px; overflow: hidden;
+    display: none;
+  }
+  #now-thumb.show { display: block; }
+  #now-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   #status {
     flex: 1;
     color: #888;
@@ -165,6 +175,18 @@
   /* Drop target line — a thin highlighted top border when an item is hovering. */
   #queue-panel li.drag-over { border-top: 2px solid #6cb6ff; padding-top: calc(0.4rem - 1px); }
   #queue-panel .pos { color: #555; font-variant-numeric: tabular-nums; min-width: 1.5em; text-align: right; }
+  /* Mini poster on each queue row — only the FILE rows actually paint one
+     (URL/yt-dlp sources don't map to arr inventory). Keep slim (32×48) so a
+     long queue stays scannable. */
+  #queue-panel .qthumb {
+    flex-shrink: 0;
+    width: 30px; height: 45px;
+    background: #0e0e0e; border-radius: 3px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    color: #2a2a2a; font-size: 0.85rem;
+  }
+  #queue-panel .qthumb img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  #queue-panel .qthumb img.loaded { display: block; }
   /* Source-type chip. Color-coded per provider (file vs YouTube vs other URL)
      so admin can scan a long queue and see what's coming from where. */
   #queue-panel .qchip {
@@ -219,6 +241,12 @@
   }
   #requests-panel li:first-child { border-top: none; }
   #requests-panel .rwho { color: #cda; flex-shrink: 0; max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #requests-panel .rthumb {
+    flex-shrink: 0; width: 28px; height: 42px;
+    background: #0e0e0e; border-radius: 3px; overflow: hidden;
+  }
+  #requests-panel .rthumb img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  #requests-panel .rthumb img.loaded { display: block; }
   #requests-panel .rtitle { flex: 1; color: #ccc; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #requests-panel button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
   #requests-panel button.approve { background: #1f3326; color: #7dcc99; border-color: #2c4a37; }
@@ -260,28 +288,81 @@
   #breadcrumb a { color: #6cb6ff; text-decoration: none; cursor: pointer; }
   #breadcrumb a:hover { text-decoration: underline; }
   #breadcrumb .sep { color: #444; padding: 0 0.4em; }
-  ul#list { list-style: none; padding: 0; margin: 0; }
-  ul#list li {
-    padding: 0.85rem 1.2rem;
-    border-bottom: 1px solid #1a1a1a;
+  /* Library is a poster grid backed by the Sonarr/Radarr cover proxy at
+     /poster?path=…. Each tile is a card with a 2:3 poster on top (the
+     standard movie-poster aspect) and the filename/show below. Auto-fill
+     scales the column count to the viewport — 6-8 on desktop, 2-3 on a
+     phone. Folders get a "FOLDER" badge plus a fallback icon; files get
+     a hover-revealed "+ Queue" button in the top right. */
+  ul#list {
+    list-style: none; padding: 1rem 1.1rem; margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.85rem;
+  }
+  ul#list .card {
+    position: relative;
+    background: #161616;
+    border: 1px solid #1d1d1d;
+    border-radius: 6px;
+    overflow: hidden;
     cursor: pointer;
     user-select: none;
-    display: flex;
-    align-items: center;
-    gap: 0.8rem;
+    display: flex; flex-direction: column;
+    transition: transform 0.12s ease, background 0.12s, border-color 0.12s;
   }
-  ul#list li:hover { background: #181818; }
-  ul#list li.now { background: #1a2c1a; }
-  ul#list li .icon { width: 1.4em; text-align: center; flex-shrink: 0; color: #888; }
-  ul#list li.dir .icon { color: #6cb6ff; }
-  ul#list li.now .icon { color: #6c6; }
-  ul#list li .name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; overflow: hidden; }
-  ul#list li .name .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Parent-dir context — shown for search results so meaningless scene-rip
-     filenames (clue-sun401.avi) reveal which show they belong to. Hidden in
-     normal browse since the breadcrumb already shows where you are. */
-  ul#list li .name .parent { color: #666; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  ul#list li .meta { color: #666; font-size: 0.8rem; flex-shrink: 0; }
+  ul#list .card:hover { background: #1c1c1c; border-color: #2a2a2a; transform: translateY(-2px); }
+  ul#list .card.now { background: #1a2c1a; border-color: #2c4a37; }
+  ul#list .card .poster {
+    width: 100%; aspect-ratio: 2 / 3;
+    background: #0e0e0e;
+    display: flex; align-items: center; justify-content: center;
+    color: #333; font-size: 2.4rem;
+    overflow: hidden;
+  }
+  ul#list .card .poster img {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: none;  /* shown once the proxy yields a real image */
+  }
+  ul#list .card .poster img.loaded { display: block; }
+  ul#list .card .poster img.loaded + .ph { display: none; }
+  ul#list .card.dir .ph { color: #345366; }
+  ul#list .card.now .ph { color: #6c6; }
+  ul#list .card .body {
+    padding: 0.55rem 0.65rem 0.7rem;
+    display: flex; flex-direction: column; gap: 0.25rem;
+    min-width: 0;
+  }
+  ul#list .card .title {
+    color: #ddd; font-size: 0.83rem; line-height: 1.3;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; word-break: break-word;
+  }
+  ul#list .card .parent {
+    color: #666; font-size: 0.7rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  ul#list .card .meta { color: #666; font-size: 0.72rem; }
+  ul#list .card .badge {
+    position: absolute; top: 6px; left: 6px;
+    background: rgba(0,0,0,0.65); color: #6cb6ff;
+    padding: 0.15rem 0.45rem; border-radius: 3px;
+    font-size: 0.62rem; letter-spacing: 0.05em; font-weight: 600;
+  }
+  ul#list .card.now .badge { color: #7dcc99; }
+  ul#list .card .queue-btn {
+    position: absolute; top: 6px; right: 6px;
+    background: rgba(20,20,20,0.85); border: 1px solid #333;
+    color: #eee; padding: 0.25rem 0.55rem; font-size: 0.72rem;
+    border-radius: 3px; cursor: pointer; font-family: inherit;
+    opacity: 0; transition: opacity 0.12s; min-height: auto;
+  }
+  ul#list .card:hover .queue-btn { opacity: 1; }
+  ul#list .card.dir .queue-btn { display: none; }
+  /* When the list is empty (no items / loading / error) the .empty <li> is the
+     only child of the grid — span it across all columns so the message centers. */
+  ul#list .empty { grid-column: 1 / -1; }
   .empty {
     padding: 2.5rem 1.2rem;
     text-align: center;
@@ -459,15 +540,18 @@
     #friends-panel, #url-panel, #queue-panel, #requests-panel, #viewers-panel,
     #search-row, #breadcrumb, #search-info { padding: 0.7rem 0.8rem; }
 
-    /* Library rows: room to thumb-tap, slightly larger title, parent context
-       sized to fit two lines on a phone. */
-    ul#list li {
-      padding: 0.8rem 0.8rem;
-      gap: 0.6rem;
-      min-height: 44px;
+    /* Library grid: tighter gutter on a phone + smaller minimum card size
+       so 2-3 columns fit on a 390-440px viewport instead of just 1-2.
+       Card padding lives inside the body so the grid math is straightforward. */
+    ul#list {
+      padding: 0.65rem 0.65rem;
+      gap: 0.55rem;
+      grid-template-columns: repeat(auto-fill, minmax(115px, 1fr));
     }
-    ul#list li .name .title { font-size: 0.95rem; }
-    ul#list li .meta { font-size: 0.75rem; }
+    ul#list .card .body { padding: 0.45rem 0.55rem 0.55rem; }
+    ul#list .card .title { font-size: 0.78rem; }
+    ul#list .card .meta { font-size: 0.66rem; }
+    ul#list .card .queue-btn { opacity: 1; }  /* no hover on touch — keep visible */
 
     /* Queue rows: same growth. The reorder handle + delete button are the
        things friends actually tap; keep them within the 44pt minimum so a
@@ -537,6 +621,7 @@
 <body>
 <header>
   <h1>jetstream <span style="color:#888;font-weight:400;font-size:0.85rem">/ admin</span></h1>
+  <span id="now-thumb"><img id="now-thumb-img" alt=""></span>
   <span id="status">idle</span>
   <span id="viewers" title="Active viewers" style="color:#888;font-size:0.85rem"></span>
   <button id="stop-btn" class="danger" style="display:none">Stop</button>
@@ -660,6 +745,26 @@ const video = document.getElementById("video");
 const list = document.getElementById("list");
 const breadcrumb = document.getElementById("breadcrumb");
 const statusEl = document.getElementById("status");
+const nowThumb = document.getElementById("now-thumb");
+const nowThumbImg = document.getElementById("now-thumb-img");
+let nowThumbPath = null;
+function updateNowThumb(s) {
+  // Mirror viewer.html: small header poster for FILE sources only. The
+  // path-equality guard keeps the per-second pollStatus from re-fetching
+  // the same image every tick.
+  const path = s && s.source_type === "file" ? s.path : null;
+  if (path === nowThumbPath) return;
+  nowThumbPath = path;
+  if (!path) {
+    nowThumb.classList.remove("show");
+    nowThumbImg.removeAttribute("src");
+    return;
+  }
+  nowThumbImg.onload = () => nowThumb.classList.add("show");
+  nowThumbImg.onerror = () => nowThumb.classList.remove("show");
+  nowThumb.classList.remove("show");
+  nowThumbImg.src = `/poster?path=${encodeURIComponent(path)}`;
+}
 const stopBtn = document.getElementById("stop-btn");
 const pauseBtn = document.getElementById("pause-btn");
 const skipBtn = document.getElementById("skip-btn");
@@ -800,21 +905,34 @@ function renderItems(items) {
   for (const item of items) {
     const isDir = item.type === "directory";
     const li = document.createElement("li");
-    li.className = isDir ? "dir" : "file";
+    li.className = "card " + (isDir ? "dir" : "file");
     if (!isDir && item.path === nowPlaying) li.classList.add("now");
     li.innerHTML = `
-      <span class="icon">${isDir ? "▸" : (item.path === nowPlaying ? "●" : "▶")}</span>
-      <span class="name"><span class="title"></span><span class="parent"></span></span>
-      <span class="meta">${isDir ? "" : escapeHtml(formatSize(item.size))}</span>
-      ${isDir ? "" : '<button class="queue-btn" type="button">+ Queue</button>'}
+      <div class="poster">
+        <img loading="lazy" alt="">
+        <span class="ph">${isDir ? "📁" : (item.path === nowPlaying ? "▶" : "🎬")}</span>
+      </div>
+      ${isDir ? '<span class="badge">FOLDER</span>' : (item.path === nowPlaying ? '<span class="badge">PLAYING</span>' : '')}
+      ${isDir ? '' : '<button class="queue-btn" type="button">+ Queue</button>'}
+      <div class="body">
+        <div class="title"></div>
+        <div class="parent"></div>
+        <div class="meta">${isDir ? "" : escapeHtml(formatSize(item.size))}</div>
+      </div>
     `;
-    li.querySelector(".name .title").textContent = item.name;
+    li.querySelector(".title").textContent = item.name;
+    // Lazy-fetch the poster via /poster?path=. /poster returns 204 No Content
+    // when the arr cache has no match; the `img.loaded` class is only added on
+    // a successful load, so the emoji placeholder stays visible on misses.
+    const img = li.querySelector(".poster img");
+    img.addEventListener("load", () => img.classList.add("loaded"));
+    img.src = `/poster?path=${encodeURIComponent(item.path)}`;
     // For files in search results, fish the parent directory out of the path
     // (e.g. "tv/It's Always Sunny in Philadelphia/Season 4/clue-sun401.avi"
     // → "tv/It's Always Sunny in Philadelphia/Season 4") so the user can tell
     // which show a mystery scene-rip filename belongs to.
     if (inSearch && !isDir && item.path && item.path.includes("/")) {
-      li.querySelector(".name .parent").textContent =
+      li.querySelector(".parent").textContent =
         "↳ " + item.path.substring(0, item.path.lastIndexOf("/"));
     }
     li.addEventListener("click", e => {
@@ -1093,6 +1211,7 @@ async function pollStatus() {
         ? '<span class="live" style="background:#888">PAUSED</span>'
         : (s.is_live ? '<span class="live">LIVE · URL</span>' : '<span class="live">LIVE</span>');
       statusEl.innerHTML = `${liveLabel}${escapeHtml(label)}`;
+      updateNowThumb(s);
       stopBtn.style.display = "inline-block";
       pauseBtn.style.display = s.is_live ? "none" : "inline-block";
       skipBtn.style.display = "inline-block";
@@ -1110,6 +1229,7 @@ async function pollStatus() {
       serverPaused = false;
       nowPlaying = null;
       statusEl.textContent = "idle";
+      updateNowThumb(null);
       stopBtn.style.display = "none";
       pauseBtn.style.display = "none";
       skipBtn.style.display = "none";
@@ -1393,6 +1513,7 @@ function renderQueue(items) {
     const ccHtml = hasSubs ? '<span class="qcc" title="Subtitles will be burned in">CC</span>' : "";
     li.innerHTML = `
       <span class="pos">${i + 1}.</span>
+      <span class="qthumb"><img loading="lazy" alt=""></span>
       <span class="qchip ${chip.cls}">${chip.text}</span>
       ${ccHtml}
       <span class="qtitle"></span>
@@ -1403,6 +1524,13 @@ function renderQueue(items) {
     `;
     li.querySelector(".qtitle").textContent = it.title || it.ref;
     li.querySelector(".qtitle").title = it.ref;
+    // Pull a poster thumb for FILE items only — yt-dlp / URL sources don't
+    // map to Sonarr/Radarr inventory and the proxy 204s on no match.
+    if (it.type === "file" && it.ref) {
+      const img = li.querySelector(".qthumb img");
+      img.addEventListener("load", () => img.classList.add("loaded"));
+      img.src = `/poster?path=${encodeURIComponent(it.ref)}`;
+    }
     queueList.appendChild(li);
   });
 }
@@ -1680,12 +1808,18 @@ async function refreshRequests() {
     for (const r of reqs) {
       const li = document.createElement("li");
       li.innerHTML = `
+        <span class="rthumb"><img loading="lazy" alt=""></span>
         <span class="rwho"></span>
         <span class="rtitle"></span>
         <button class="approve" type="button" data-action="approve" data-id="${r.id}">Add</button>
         <button type="button" data-action="deny" data-id="${r.id}">Deny</button>`;
       li.querySelector(".rwho").textContent = r.requester || "anonymous";
       li.querySelector(".rtitle").textContent = r.title || basename(r.path);
+      if (r.path) {
+        const img = li.querySelector(".rthumb img");
+        img.addEventListener("load", () => img.classList.add("loaded"));
+        img.src = `/poster?path=${encodeURIComponent(r.path)}`;
+      }
       requestsList.appendChild(li);
     }
   } catch {}

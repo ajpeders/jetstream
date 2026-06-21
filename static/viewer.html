@@ -24,6 +24,16 @@
     gap: 1rem;
   }
   header h1 { margin: 0; font-size: 1rem; font-weight: 500; }
+  /* Small now-playing poster thumb — sits between the brand and the title
+     text, only shown for FILE sources that resolved to an arr cover. */
+  #now-thumb {
+    flex-shrink: 0;
+    width: 32px; height: 48px;
+    background: #0a0a0a; border-radius: 3px; overflow: hidden;
+    display: none;
+  }
+  #now-thumb.show { display: block; }
+  #now-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   #status {
     flex: 1;
     color: #888;
@@ -192,6 +202,12 @@
     padding: 0.3rem 1rem; font-size: 0.85rem; color: #ccc;
   }
   #queue-list .qpos { color: #555; font-variant-numeric: tabular-nums; min-width: 1.4em; text-align: right; }
+  #queue-list .qthumb {
+    flex-shrink: 0; width: 26px; height: 39px;
+    background: #0e0e0e; border-radius: 3px; overflow: hidden;
+  }
+  #queue-list .qthumb img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  #queue-list .qthumb img.loaded { display: block; }
   #queue-list .qtitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #queue-list .qdur { color: #777; font-size: 0.78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
   #queue-list .empty { color: #555; padding: 0.4rem 1rem; }
@@ -224,6 +240,12 @@
     display: flex; align-items: center; gap: 0.5rem;
     padding: 0.3rem 1rem; font-size: 0.85rem; color: #ccc;
   }
+  #request-results .rthumb {
+    flex-shrink: 0; width: 30px; height: 45px;
+    background: #0e0e0e; border-radius: 3px; overflow: hidden;
+  }
+  #request-results .rthumb img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  #request-results .rthumb img.loaded { display: block; }
   #request-results .rtitle { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; overflow: hidden; }
   #request-results .rtitle .rt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #request-results .rtitle .rt-parent { color: #666; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -311,6 +333,7 @@
 <body>
 <header>
   <h1>jetstream</h1>
+  <span id="now-thumb"><img id="now-thumb-img" alt=""></span>
   <span id="status">waiting…</span>
   <span id="position" style="color:#888;font-size:0.85rem;font-variant-numeric:tabular-nums"></span>
   <span id="viewers"></span>
@@ -380,6 +403,27 @@
 <script>
 const video = document.getElementById("video");
 const statusEl = document.getElementById("status");
+const nowThumb = document.getElementById("now-thumb");
+const nowThumbImg = document.getElementById("now-thumb-img");
+let nowThumbPath = null;
+function updateNowThumb(s) {
+  // Show the small header poster whenever the current source is a FILE
+  // (URL / yt-dlp sources don't map to arr inventory and would always 204).
+  // Hide on idle. Avoid re-setting src when the path hasn't changed — that
+  // would trigger a re-fetch + re-paint every status poll (every second).
+  const path = s && s.source_type === "file" ? s.path : null;
+  if (path === nowThumbPath) return;
+  nowThumbPath = path;
+  if (!path) {
+    nowThumb.classList.remove("show");
+    nowThumbImg.removeAttribute("src");
+    return;
+  }
+  nowThumbImg.onload = () => nowThumb.classList.add("show");
+  nowThumbImg.onerror = () => nowThumb.classList.remove("show");
+  nowThumb.classList.remove("show");
+  nowThumbImg.src = `/poster?path=${encodeURIComponent(path)}`;
+}
 const viewersEl = document.getElementById("viewers");
 const playerWrap = document.getElementById("player-wrap");
 const positionEl = document.getElementById("position");
@@ -726,6 +770,7 @@ async function pollStatus() {
         : '<span class="live">LIVE</span>';
       statusEl.innerHTML = `${liveLabel}${escapeHtml(label)}`;
       document.title = label + " · jetstream";
+      updateNowThumb(s);
       serverPaused = !!s.paused;
       if (s.ready && !lastReady) setupPlayer();
       lastReady = s.ready;
@@ -751,6 +796,7 @@ async function pollStatus() {
       if (lastReady) teardownPlayer();
       lastReady = false;
       positionEl.textContent = "";
+      updateNowThumb(null);
     }
     const v = s.viewers || 0;
     viewersEl.textContent = v ? `${v} viewer${v === 1 ? "" : "s"}` : "";
@@ -1044,11 +1090,16 @@ async function queuePoll() {
     queueList.innerHTML = "";
     q.forEach((it, i) => {
       const li = document.createElement("li");
-      li.innerHTML = `<span class="qpos"></span><span class="qtitle"></span><span class="qdur"></span>`;
+      li.innerHTML = `<span class="qpos"></span><span class="qthumb"><img loading="lazy" alt=""></span><span class="qtitle"></span><span class="qdur"></span>`;
       li.querySelector(".qpos").textContent = i + 1;
       li.querySelector(".qtitle").textContent = it.title || "(untitled)";
       li.querySelector(".qdur").textContent =
         it.is_live ? "LIVE" : (it.duration ? formatTime(it.duration) : "");
+      if (it.type === "file" && it.ref) {
+        const img = li.querySelector(".qthumb img");
+        img.addEventListener("load", () => img.classList.add("loaded"));
+        img.src = `/poster?path=${encodeURIComponent(it.ref)}`;
+      }
       queueList.appendChild(li);
     });
   } catch {}
@@ -1098,11 +1149,16 @@ async function requestDoSearch(q) {
       const li = document.createElement("li");
       // Wrap title + parent in a column so meaningless scene-rip filenames
       // (clue-sun401.avi) reveal which show they belong to (the folder).
-      li.innerHTML = `<span class="rtitle"><span class="rt-name"></span><span class="rt-parent"></span></span><button type="button">Request</button>`;
+      li.innerHTML = `<span class="rthumb"><img loading="lazy" alt=""></span><span class="rtitle"><span class="rt-name"></span><span class="rt-parent"></span></span><button type="button">Request</button>`;
       li.querySelector(".rt-name").textContent = it.name;
       if (it.path && it.path.includes("/")) {
         li.querySelector(".rt-parent").textContent =
           "↳ " + it.path.substring(0, it.path.lastIndexOf("/"));
+      }
+      if (it.path) {
+        const img = li.querySelector(".rthumb img");
+        img.addEventListener("load", () => img.classList.add("loaded"));
+        img.src = `/poster?path=${encodeURIComponent(it.path)}`;
       }
       const btn = li.querySelector("button");
       btn.addEventListener("click", () => sendRequest(it.path, btn));
