@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jetstream — admin</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230b0f14"/><path d="M18 44V18l26 13-26 13z" fill="%2338bdf8"/></svg>'>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -371,6 +372,92 @@
   /* When the list is empty (no items / loading / error) the .empty <li> is the
      only child of the grid — span it across all columns so the message centers. */
   ul#list .empty { grid-column: 1 / -1; }
+
+  /* Show view — replaces the grid when you enter a tv/<show> folder. JS
+     parses SxxExx out of the filenames, groups by season, and renders the
+     result as a poster banner + collapsible season blocks of clickable
+     episode rows. Falls back to the regular grid if no episodes parse. */
+  #show-view { padding: 1rem 1.1rem; }
+  #show-view .banner {
+    display: flex; gap: 1rem; align-items: center;
+    padding-bottom: 1rem; margin-bottom: 1rem;
+    border-bottom: 1px solid #1a1a1a;
+  }
+  #show-view .banner .poster {
+    position: relative;
+    width: 90px; aspect-ratio: 2/3;
+    background: #161616; border-radius: 4px; overflow: hidden;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #333; font-size: 2rem;
+  }
+  #show-view .banner .poster img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; opacity: 0; transition: opacity 0.18s ease;
+  }
+  #show-view .banner .poster img.loaded { opacity: 1; }
+  #show-view .banner .meta { flex: 1; min-width: 0; }
+  #show-view .banner .title {
+    margin: 0 0 0.35rem; font-size: 1.15rem; font-weight: 500; color: #eee;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #show-view .banner .count { color: #888; font-size: 0.82rem; }
+  #show-view .season {
+    margin-bottom: 0.7rem;
+    border: 1px solid #1a1a1a; border-radius: 4px;
+    background: #131313; overflow: hidden;
+  }
+  #show-view .season-head {
+    display: flex; align-items: center; gap: 0.55rem;
+    padding: 0.55rem 0.8rem; cursor: pointer; user-select: none;
+    background: #161616;
+    border-bottom: 1px solid #1a1a1a;
+  }
+  #show-view .season.collapsed .season-head { border-bottom: none; }
+  #show-view .season-head:hover { background: #1c1c1c; }
+  #show-view .season-head h3 {
+    margin: 0; font-size: 0.92rem; font-weight: 500; color: #ddd;
+    letter-spacing: 0.02em;
+  }
+  #show-view .season-head .count {
+    color: #666; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+    margin-left: auto;
+  }
+  #show-view .season-head .toggle {
+    color: #666; font-size: 0.85rem; transition: transform 0.15s;
+  }
+  #show-view .season.collapsed .toggle { transform: rotate(-90deg); }
+  #show-view .season.collapsed .episodes { display: none; }
+  #show-view .episodes { list-style: none; padding: 0; margin: 0; }
+  #show-view .episodes li {
+    display: flex; align-items: center; gap: 0.7rem;
+    padding: 0.55rem 0.85rem;
+    border-top: 1px solid #1a1a1a;
+    cursor: pointer; user-select: none;
+    font-size: 0.86rem; color: #ccc;
+    transition: background 0.1s;
+  }
+  #show-view .episodes li:first-child { border-top: none; }
+  #show-view .episodes li:hover { background: #181818; }
+  #show-view .episodes li.now { background: #1a2c1a; color: #b3e0c0; }
+  #show-view .episodes .ep-code {
+    color: #888; font-family: ui-monospace, monospace;
+    font-size: 0.78rem; min-width: 3.6em; flex-shrink: 0;
+  }
+  #show-view .episodes li.now .ep-code { color: #6c6; }
+  #show-view .episodes .ep-name {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #show-view .episodes .ep-meta {
+    color: #666; font-size: 0.75rem; flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  #show-view .episodes .queue-btn {
+    padding: 0.22rem 0.55rem; font-size: 0.72rem;
+    min-height: auto; flex-shrink: 0;
+  }
+
   .empty {
     padding: 2.5rem 1.2rem;
     text-align: center;
@@ -625,8 +712,9 @@
     #toast { bottom: max(1rem, env(safe-area-inset-bottom)); font-size: 0.85rem; }
   }
 </style>
+<link rel="stylesheet" href="/jetstream-theme.css">
 </head>
-<body>
+<body class="admin-page">
 <header>
   <h1>jetstream <span style="color:#888;font-weight:400;font-size:0.85rem">/ admin</span></h1>
   <span id="now-thumb"><img id="now-thumb-img" alt=""></span>
@@ -663,6 +751,12 @@
     <button id="seek-btn">Seek</button>
   </div>
 </div>
+<nav id="mobile-control-dock" aria-label="Playback controls">
+  <button type="button" id="dock-back" title="Seek back 10 seconds">-10s</button>
+  <button type="button" id="dock-pause" title="Pause or resume">Pause</button>
+  <button type="button" id="dock-skip" title="Skip to next">Skip</button>
+  <button type="button" id="dock-forward" title="Seek forward 10 seconds">+10s</button>
+</nav>
 <div id="friends-panel">
   <h2>Friends</h2>
   <label id="public-toggle-wrap" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.7rem;font-size:0.85rem;color:#aaa;cursor:pointer">
@@ -688,15 +782,8 @@
   </form>
   <div class="hint">YouTube, Twitch, Vimeo, anything yt-dlp supports. Live streams won't be seekable.</div>
 </div>
-<div id="queue-panel">
-  <div class="head">
-    <h2>Up next</h2>
-    <span class="badge" id="queue-count">0</span>
-    <button id="queue-shuffle">Shuffle</button>
-    <button id="queue-clear">Clear</button>
-  </div>
-  <ul id="queue-list"></ul>
-</div>
+<div id="admin-queue-app"></div>
+<div id="admin-recent-app"></div>
 <div id="requests-panel">
   <div class="head">
     <h2>Requests</h2>
@@ -721,6 +808,7 @@
 <div id="breadcrumb"></div>
 <div id="search-info" style="display:none"></div>
 <ul id="list"><li class="empty">Loading…</li></ul>
+<div id="show-view" style="display:none"></div>
 
 <section id="chat-panel">
   <div id="chat-header">
@@ -738,7 +826,9 @@
 
 <div id="toast"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.10/dist/hls.min.js"></script>
+<script type="module" src="/build/adminQueue.js"></script>
+<script type="module" src="/build/adminRecent.js"></script>
 <script>
 const ROOT = "";
 // This page serves two roles from one file:
@@ -776,6 +866,10 @@ function updateNowThumb(s) {
 const stopBtn = document.getElementById("stop-btn");
 const pauseBtn = document.getElementById("pause-btn");
 const skipBtn = document.getElementById("skip-btn");
+const dockPauseBtn = document.getElementById("dock-pause");
+const dockSkipBtn = document.getElementById("dock-skip");
+const dockBackBtn = document.getElementById("dock-back");
+const dockForwardBtn = document.getElementById("dock-forward");
 const viewersEl = document.getElementById("viewers");
 const toast = document.getElementById("toast");
 const positionEl = document.getElementById("position");
@@ -795,10 +889,6 @@ const urlForm = document.getElementById("url-form");
 const urlInput = document.getElementById("url-input");
 const urlSubmit = document.getElementById("url-submit");
 const urlQueueBtn = document.getElementById("url-queue");
-const queueList = document.getElementById("queue-list");
-const queueCount = document.getElementById("queue-count");
-const queueClearBtn = document.getElementById("queue-clear");
-const queueShuffleBtn = document.getElementById("queue-shuffle");
 const publicToggle = document.getElementById("public-toggle");
 
 let currentDir = ROOT;
@@ -815,6 +905,7 @@ function showToast(msg) {
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => toast.classList.remove("show"), 2200);
 }
+window.jetstreamShowToast = showToast;
 
 function formatSize(b) {
   if (typeof b !== "number" || b <= 0) return "";
@@ -840,15 +931,30 @@ function renderBreadcrumb() {
   );
 }
 
+const showView = document.getElementById("show-view");
+
+// "tv/Show Name" is depth 2 — one level under tv/. Anything deeper or in
+// movies/ falls through to the regular grid renderer.
+function isShowFolderPath(path) {
+  if (!path) return false;
+  const parts = path.split("/").filter(Boolean);
+  return parts.length === 2 && parts[0].toLowerCase() === "tv";
+}
+
 async function browse(path) {
   currentDir = path || "";
   renderBreadcrumb();
   list.innerHTML = '<li class="empty">Loading…</li>';
+  showView.style.display = "none";
   try {
     const res = await fetch(`${API}/browse?path=${encodeURIComponent(currentDir)}`);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const items = await res.json();
-    renderItems(items);
+    if (isShowFolderPath(currentDir)) {
+      renderShow(currentDir, items);
+    } else {
+      renderItems(items);
+    }
   } catch (e) {
     list.innerHTML = `<li class="empty">Error: ${escapeHtml(e.message)}</li>`;
   }
@@ -876,6 +982,9 @@ async function doSearch(q) {
   searchInfo.style.display = "";
   searchInfo.textContent = "Searching…";
   list.innerHTML = '<li class="empty">Searching…</li>';
+  // Search always uses the flat grid view — hide any show-grouping carryover
+  // from the folder the user was browsing before they typed in the search box.
+  showView.style.display = "none";
   try {
     const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
     if (!res.ok) throw new Error("HTTP " + res.status);
@@ -957,6 +1066,147 @@ function renderItems(items) {
   }
 }
 
+// Map "S03E07" / "s03.e07" / "3x07" / "S03 E07" from a scene-rip filename.
+// Returns {season, episode} or null when no pattern hits. Episodes that
+// don't parse get bucketed into a "Specials" group so they're still visible.
+const EP_PATTERNS = [
+  /[Ss](\d{1,2})[._ -]*[Ee](\d{1,3})/,   // S01E07, s1.e7, s01-e07
+  /(?:^|[^a-z0-9])(\d{1,2})x(\d{1,3})/i, // 3x07, 12x102
+];
+function parseEpisode(name) {
+  for (const re of EP_PATTERNS) {
+    const m = name.match(re);
+    if (m) return { season: parseInt(m[1], 10), episode: parseInt(m[2], 10) };
+  }
+  return null;
+}
+
+// Pull a human episode title out of the filename when the source uses the
+// Sonarr "{Series} - SxxExx - {Title}" pattern. Falls back to the bare
+// filename minus the SxxExx code.
+function extractEpisodeName(name, code) {
+  // Strip extension once.
+  const noExt = name.replace(/\.[^.]+$/, "");
+  // Sonarr-shaped: "Show - S01E07 - Episode Title (Source)"
+  const m = noExt.match(/[Ss]\d{1,2}[._ -]*[Ee]\d{1,3}[._ -]*[-_.][._ -]*(.+?)(?:[._ -]*\(.+?\))?$/);
+  if (m && m[1] && m[1].trim() && !/^\d+p$/i.test(m[1].trim())) {
+    // Clean separators back to spaces.
+    return m[1].replace(/[._]/g, " ").trim();
+  }
+  // Otherwise show the bare filename, lightly cleaned of separators.
+  return noExt.replace(/[._]/g, " ");
+}
+
+function renderShow(path, items) {
+  // Show name is the last path component — what the user clicked into.
+  const showName = path.split("/").filter(Boolean).pop() || "Show";
+  // Group episodes by season number. "Specials" (S00 or no code) bucket
+  // catches anything we can't parse so nothing is dropped on the floor.
+  const seasons = new Map();
+  const ungrouped = [];
+  for (const item of items) {
+    if (item.type === "directory") {
+      // Some shows do have Season N/ subdirs after all — let the grid
+      // handle those, fall through to renderItems.
+      ungrouped.push(item);
+      continue;
+    }
+    const parsed = parseEpisode(item.name);
+    const seasonNum = parsed ? parsed.season : 0;
+    if (!seasons.has(seasonNum)) seasons.set(seasonNum, []);
+    seasons.get(seasonNum).push({
+      ...item,
+      episode: parsed ? parsed.episode : null,
+      code: parsed ? `S${String(parsed.season).padStart(2, "0")}E${String(parsed.episode).padStart(2, "0")}` : "—",
+      title: extractEpisodeName(item.name, parsed ? parsed.episode : null),
+    });
+  }
+  // If no episodes parsed AND there are directories, fall back to grid view —
+  // this folder is probably a "Show Name" wrapping "Season 1/" subdirs.
+  if (seasons.size === 0 && ungrouped.length) {
+    renderItems(items);
+    return;
+  }
+  // Sort each season's episodes by episode number; sort seasons too.
+  for (const eps of seasons.values()) {
+    eps.sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
+  }
+  const seasonNums = [...seasons.keys()].sort((a, b) => a - b);
+  list.innerHTML = "";  // hide the grid; show-view takes over
+  showView.style.display = "";
+  // Banner: poster (from the arr cover map, looked up by the show folder) +
+  // title + episode count. Same fade-on-load trick as the grid posters.
+  const totalEps = [...seasons.values()].reduce((n, eps) => n + eps.length, 0);
+  showView.innerHTML = `
+    <div class="banner">
+      <div class="poster">
+        <img loading="lazy" alt="">
+        <span class="ph">📺</span>
+      </div>
+      <div class="meta">
+        <h2 class="title"></h2>
+        <div class="count">${seasonNums.length} season${seasonNums.length === 1 ? "" : "s"} · ${totalEps} episode${totalEps === 1 ? "" : "s"}</div>
+      </div>
+    </div>
+  `;
+  showView.querySelector(".banner .title").textContent = showName;
+  const bannerImg = showView.querySelector(".banner .poster img");
+  bannerImg.addEventListener("load", () => bannerImg.classList.add("loaded"));
+  bannerImg.src = `/poster?path=${encodeURIComponent(path)}`;
+  // One block per season. localStorage remembers which seasons the user has
+  // collapsed so the view doesn't reset between visits — keyed by show name
+  // so collapsing Season 1 of IASIP doesn't also collapse it of Curb.
+  const collapsedKey = `jetstream_seasons_collapsed_${showName}`;
+  const collapsedSet = new Set(
+    (localStorage.getItem(collapsedKey) || "").split(",").filter(Boolean).map(Number),
+  );
+  for (const n of seasonNums) {
+    const eps = seasons.get(n);
+    const block = document.createElement("div");
+    block.className = "season";
+    if (collapsedSet.has(n)) block.classList.add("collapsed");
+    block.innerHTML = `
+      <div class="season-head">
+        <span class="toggle">▾</span>
+        <h3>${n === 0 ? "Specials" : "Season " + n}</h3>
+        <span class="count">${eps.length} ep${eps.length === 1 ? "" : "s"}</span>
+      </div>
+      <ul class="episodes"></ul>
+    `;
+    const ul = block.querySelector(".episodes");
+    for (const e of eps) {
+      const li = document.createElement("li");
+      if (e.path === nowPlaying) li.classList.add("now");
+      li.innerHTML = `
+        <span class="ep-code"></span>
+        <span class="ep-name"></span>
+        <span class="ep-meta"></span>
+        <button class="queue-btn" type="button">+ Queue</button>
+      `;
+      li.querySelector(".ep-code").textContent = e.code;
+      li.querySelector(".ep-name").textContent = e.title;
+      li.querySelector(".ep-meta").textContent = formatSize(e.size);
+      li.addEventListener("click", evt => {
+        if (evt.target.closest(".queue-btn")) return;
+        play(e.path, e.name);
+      });
+      li.querySelector(".queue-btn").addEventListener("click", evt => {
+        evt.stopPropagation();
+        queueAddFile(e.path, e.name);
+      });
+      ul.appendChild(li);
+    }
+    // Toggle handler — flip the collapsed state and persist.
+    block.querySelector(".season-head").addEventListener("click", () => {
+      const nowCollapsed = block.classList.toggle("collapsed");
+      if (nowCollapsed) collapsedSet.add(n);
+      else collapsedSet.delete(n);
+      localStorage.setItem(collapsedKey, [...collapsedSet].join(","));
+    });
+    showView.appendChild(block);
+  }
+}
+
 async function play(path, name) {
   if (!confirm(`Broadcast "${name}"? This replaces any current stream.`)) return;
   showToast("Starting stream…");
@@ -1013,6 +1263,7 @@ async function skipNext() {
   }
 }
 skipBtn.addEventListener("click", skipNext);
+dockSkipBtn.addEventListener("click", skipNext);
 
 let pauseInFlight = false;
 async function togglePause(currentlyPaused) {
@@ -1039,6 +1290,7 @@ async function togglePause(currentlyPaused) {
   }
 }
 pauseBtn.addEventListener("click", () => togglePause(pauseBtn.dataset.paused === "1"));
+dockPauseBtn.addEventListener("click", () => togglePause(dockPauseBtn.dataset.paused === "1"));
 
 function formatTime(s) {
   if (s == null || isNaN(s)) return "--:--:--";
@@ -1109,6 +1361,8 @@ async function seekTo(seconds) {
 document.querySelectorAll("#seek-bar button[data-delta]").forEach(b =>
   b.addEventListener("click", () => seekDelta(parseInt(b.dataset.delta, 10)))
 );
+dockBackBtn.addEventListener("click", () => seekDelta(-10));
+dockForwardBtn.addEventListener("click", () => seekDelta(10));
 
 seekBtn.addEventListener("click", () => {
   const t = parseTime(seekInput.value);
@@ -1225,6 +1479,12 @@ async function pollStatus() {
       skipBtn.style.display = "inline-block";
       pauseBtn.textContent = s.paused ? "Resume" : "Pause";
       pauseBtn.dataset.paused = s.paused ? "1" : "0";
+      dockPauseBtn.textContent = s.paused ? "Resume" : "Pause";
+      dockPauseBtn.dataset.paused = s.paused ? "1" : "0";
+      dockPauseBtn.disabled = !!s.is_live;
+      dockSkipBtn.disabled = false;
+      dockBackBtn.disabled = !!s.is_live;
+      dockForwardBtn.disabled = !!s.is_live;
       // Mirror pause state on the local admin player so the video freezes visually.
       serverPaused = !!s.paused;
       if (s.paused && !video.paused) video.pause();
@@ -1241,6 +1501,12 @@ async function pollStatus() {
       stopBtn.style.display = "none";
       pauseBtn.style.display = "none";
       skipBtn.style.display = "none";
+      dockPauseBtn.textContent = "Pause";
+      dockPauseBtn.dataset.paused = "0";
+      dockPauseBtn.disabled = true;
+      dockSkipBtn.disabled = true;
+      dockBackBtn.disabled = true;
+      dockForwardBtn.disabled = true;
       if (lastReady) teardownPlayer();
       lastReady = false;
     }
@@ -1481,167 +1747,9 @@ async function queueAddFile(path, name) {
   }
 }
 
-function fmtDur(sec) {
-  if (!sec || !isFinite(sec) || sec < 0) return "";
-  sec = Math.floor(sec);
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-  const pad = n => String(n).padStart(2, "0");
-  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
-}
-function chipForItem(it) {
-  // FILE: local library. YOUTUBE: youtube.com / youtu.be. URL: anything else
-  // yt-dlp can resolve. Provider detection is intentionally narrow — adding
-  // dedicated chips for every yt-dlp extractor would clutter the panel.
-  if (it.type === "file") return { cls: "", text: "FILE" };
-  const ref = it.ref || "";
-  if (/^https?:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\b/i.test(ref)) {
-    return { cls: "yt", text: "YOUTUBE" };
-  }
-  return { cls: "url", text: "URL" };
-}
-
-function renderQueue(items) {
-  queueCount.textContent = items.length;
-  if (!items.length) {
-    queueList.innerHTML = '<li class="empty-q">Queue is empty.<br>Add a file from the library or paste a URL above to auto-play after the current item.</li>';
-    return;
-  }
-  queueList.innerHTML = "";
-  items.forEach((it, i) => {
-    const li = document.createElement("li");
-    li.draggable = true;
-    li.dataset.i = i;
-    const chip = chipForItem(it);
-    const durHtml = it.is_live
-      ? '<span class="qdur live">LIVE</span>'
-      : `<span class="qdur">${escapeHtml(fmtDur(it.duration))}</span>`;
-    // CC badge: shown only when the source dict has a non-null subtitle_idx
-    // (i.e. an English text track was auto-picked or admin requested one).
-    const hasSubs = it.subtitle_idx !== null && it.subtitle_idx !== undefined;
-    const ccHtml = hasSubs ? '<span class="qcc" title="Subtitles will be burned in">CC</span>' : "";
-    li.innerHTML = `
-      <span class="pos">${i + 1}.</span>
-      <span class="qthumb"><img loading="lazy" alt=""></span>
-      <span class="qchip ${chip.cls}">${chip.text}</span>
-      ${ccHtml}
-      <span class="qtitle"></span>
-      ${durHtml}
-      <button data-action="up"  data-i="${i}" ${i === 0 ? "disabled" : ""} title="Move up">↑</button>
-      <button data-action="dn"  data-i="${i}" ${i === items.length - 1 ? "disabled" : ""} title="Move down">↓</button>
-      <button data-action="rm"  data-i="${i}" class="danger" title="Remove">×</button>
-    `;
-    li.querySelector(".qtitle").textContent = it.title || it.ref;
-    li.querySelector(".qtitle").title = it.ref;
-    // Pull a poster thumb for FILE items only — yt-dlp / URL sources don't
-    // map to Sonarr/Radarr inventory and the proxy 204s on no match.
-    if (it.type === "file" && it.ref) {
-      const img = li.querySelector(".qthumb img");
-      img.addEventListener("load", () => img.classList.add("loaded"));
-      img.src = `/poster?path=${encodeURIComponent(it.ref)}`;
-    }
-    queueList.appendChild(li);
-  });
-}
-
-// Drag-and-drop reordering. dragstart stamps the source index on the
-// dataTransfer; dragover marks the row under the cursor as a drop target;
-// drop POSTs `{to: N}` to /admin/api/queue/<idx>/move. We only refresh the
-// list after the server confirms the move so we never paint a different
-// order than what's persisted.
-let dragSrcIndex = null;
-queueList.addEventListener("dragstart", e => {
-  const li = e.target.closest("li[draggable]");
-  if (!li) return;
-  // Buttons inside the row also bubble dragstart — skip those.
-  if (e.target.closest("button")) { e.preventDefault(); return; }
-  dragSrcIndex = parseInt(li.dataset.i, 10);
-  li.classList.add("dragging");
-  e.dataTransfer.effectAllowed = "move";
-  // Firefox needs *some* dataTransfer payload to actually dispatch drop.
-  try { e.dataTransfer.setData("text/plain", String(dragSrcIndex)); } catch {}
-});
-queueList.addEventListener("dragend", e => {
-  const li = e.target.closest("li[draggable]");
-  if (li) li.classList.remove("dragging");
-  queueList.querySelectorAll("li.drag-over").forEach(el => el.classList.remove("drag-over"));
-  dragSrcIndex = null;
-});
-queueList.addEventListener("dragover", e => {
-  if (dragSrcIndex == null) return;
-  e.preventDefault();
-  const li = e.target.closest("li[draggable]");
-  if (!li) return;
-  queueList.querySelectorAll("li.drag-over").forEach(el => {
-    if (el !== li) el.classList.remove("drag-over");
-  });
-  li.classList.add("drag-over");
-});
-queueList.addEventListener("drop", async e => {
-  e.preventDefault();
-  const li = e.target.closest("li[draggable]");
-  if (!li || dragSrcIndex == null) return;
-  const dst = parseInt(li.dataset.i, 10);
-  const src = dragSrcIndex;
-  dragSrcIndex = null;
-  li.classList.remove("drag-over");
-  if (src === dst) return;
-  try {
-    await fetch(`${API}/queue/${src}/move`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to: dst }),
-    });
-    loadQueue();
-  } catch (err) { showToast("Move failed: " + err.message); }
-});
-
 async function loadQueue() {
-  try {
-    const res = await fetch(`${API}/queue`);
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    renderQueue(await res.json());
-  } catch (e) {
-    queueList.innerHTML = `<li class="empty-q">Failed to load queue: ${escapeHtml(e.message)}</li>`;
-  }
+  if (window.jetstreamQueue?.reload) await window.jetstreamQueue.reload();
 }
-
-queueList.addEventListener("click", async e => {
-  const btn = e.target.closest("button[data-action]");
-  if (!btn) return;
-  const idx = parseInt(btn.dataset.i, 10);
-  const action = btn.dataset.action;
-  try {
-    if (action === "rm") {
-      await fetch(`${API}/queue/${idx}`, { method: "DELETE" });
-    } else if (action === "up" || action === "dn") {
-      await fetch(`${API}/queue/${idx}/move`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ direction: action === "up" ? "up" : "down" }),
-      });
-    }
-    loadQueue();
-  } catch (e) { showToast("Failed: " + e.message); }
-});
-
-queueClearBtn.addEventListener("click", async () => {
-  if (!confirm("Clear the entire queue?")) return;
-  try {
-    await fetch(`${API}/queue/clear`, { method: "POST" });
-    showToast("Queue cleared");
-    loadQueue();
-  } catch (e) { showToast("Failed: " + e.message); }
-});
-
-queueShuffleBtn.addEventListener("click", async () => {
-  try {
-    const res = await fetch(`${API}/queue/shuffle`, { method: "POST" });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(j.error || ("HTTP " + res.status));
-    showToast(`Shuffled ${j.queue_length} item${j.queue_length === 1 ? "" : "s"}`);
-    loadQueue();
-  } catch (e) { showToast("Shuffle failed: " + e.message); }
-});
 
 async function loadSettings() {
   try {
@@ -1694,6 +1802,7 @@ friendForm.addEventListener("submit", async e => {
 // just gets playback + queue. Hiding (not deleting) keeps the element refs
 // valid so the rest of the script doesn't need null guards.
 if (!IS_ADMIN) {
+  document.body.classList.add("controls-page");
   for (const id of ["friends-panel", "viewers-panel", "requests-panel"]) {
     const el = document.getElementById(id);
     if (el) el.style.display = "none";
