@@ -1033,7 +1033,7 @@ def _probe_video_info(input_path: str) -> dict | None:
                 "ffprobe", "-v", "error",
                 "-select_streams", "v:0",
                 "-show_entries",
-                "stream=codec_name,width,height,color_transfer,color_primaries,r_frame_rate,avg_frame_rate"
+                "stream=codec_name,profile,width,height,color_transfer,color_primaries,r_frame_rate,avg_frame_rate"
                 ":stream_side_data=side_data_type",
                 "-of", "json",
                 input_path,
@@ -1084,6 +1084,7 @@ def _probe_video_info(input_path: str) -> dict | None:
 
     return {
         "codec": (s.get("codec_name") or "").lower() or None,
+        "profile": (s.get("profile") or "").lower() or None,
         "width": s.get("width"),
         "height": s.get("height"),
         "transfer": transfer or None,
@@ -1092,6 +1093,63 @@ def _probe_video_info(input_path: str) -> dict | None:
         "is_dovi": is_dovi,
         "fps": fps,
     }
+
+
+# Browser-safe profiles for the `-c:v copy` remux fast path. Chrome 107+,
+# Firefox 138+, Safari, and Edge all accept these over MSE without
+# re-encoding. ffprobe returns profile strings lowercase via the helper
+# above so the membership check below is case-stable.
+COPY_OK_H264_PROFILES = ("baseline", "constrained baseline", "main", "high")
+COPY_OK_HEVC_PROFILES = ("main", "main 10")
+# Browser-safe video codecs for `-c:v copy`. AV1 left out — Firefox AV1
+# decode over MSE is still hit-and-miss on the 151 family.
+COPY_OK_CODECS = ("h264", "hevc")
+
+
+def _can_copy_video(info: dict, subtitle_idx: int | None, input_path: str = "") -> bool:
+    """True when the source video can be remuxed directly (no re-encode) into
+    the HLS output. `-c:v copy` skips the GPU/CPU encode entirely; the only
+    encoding left is audio (always re-encoded to AAC for browser
+    compatibility). Returns False on any signal that we'd need to actually
+    look at pixels: HDR / Dolby Vision, oversized source, exotic
+    profile/codec, or pending subtitle burn-in."""
+    if not info:
+        return False
+    if info.get("is_hdr") or info.get("is_dovi"):
+        # HDR over HLS via -c copy works for the bytes but the player can't
+        # tonemap, so the picture is wrong. Force the existing tonemap path.
+        return False
+    codec = info.get("codec")
+    if codec not in COPY_OK_CODECS:
+        return False
+    height = info.get("height") or 0
+    if height and height > TARGET_HEIGHT:
+        return False  # source bigger than target — scale path is required
+    profile = info.get("profile") or ""
+    if codec == "h264":
+        if profile and not any(p in profile for p in COPY_OK_H264_PROFILES):
+            return False
+        # H.264 High 10 needs a codec string Firefox sometimes rejects.
+        if profile and "10" in profile:
+            return False
+    elif codec == "hevc":
+        # HEVC profile strings look like "main", "main 10", "main still
+        # picture". Accept Main and Main 10 — those cover essentially every
+        # BluRay/WEB-DL rip. Reject 12-bit, 4:4:4, range-extensions.
+        if profile and not any(profile.startswith(p) for p in COPY_OK_HEVC_PROFILES):
+            return False
+    if SUBTITLE_BURN_IN and subtitle_idx is not None and input_path:
+        # Burning subs requires libass to draw onto decoded frames, which
+        # means re-encoding. BUT — on a cache miss this play won't render
+        # subs either way (the libass filter would re-trigger the full-file
+        # stall the cache was designed to avoid, so the build path leaves
+        # sub_filter=None and just kicks off the background extract). So
+        # the only case where we MUST transcode is a cached `.srt` ready to
+        # burn. Misses fall through to the cheap copy path; the NEXT play
+        # picks up the cache and transcodes.
+        if _cached_sub_path(input_path, subtitle_idx).exists():
+            return False
+    return True
 
 
 ENGLISH_LANG_TAGS = {"eng", "en", "en-us", "en-gb"}
@@ -1466,13 +1524,21 @@ def _build_ffmpeg_cmd(
         USE_NVENC and src_codec in NVDEC_DECODE_CODECS
         and not info.get("is_dovi")
     )
+    # Pure remux fast path. When the source is browser-safe H.264 at or under
+    # the output cap, no HDR, and no sub burn-in is pending, skip the encoder
+    # entirely — `-c:v copy` just moves the existing NAL units into HLS
+    # segments. Eliminates all encoder-side stutter risk for the most common
+    # content (1080p H.264 WEB-DL / BluRay rips). The transcode branches below
+    # only run when something actually needs to look at pixels: HDR/DV
+    # tonemap, downscale from 4K, exotic codec, or libass burn-in.
+    copy_video = _can_copy_video(info, subtitle_idx, input_str)
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin"]
-    if USE_NVENC:
+    if not copy_video and USE_NVENC:
         # Frames are kept in `cuda` hw frames format when NVDEC is used so the
         # whole pipeline (decode → optional scale_cuda → nvenc) stays on-GPU.
         if nv_decode:
             cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
-    elif USE_VAAPI:
+    elif not copy_video and USE_VAAPI:
         # Bind a named device "va" to our renderD128 and pin the filter chain
         # to it explicitly. Without -filter_hw_device, scale_vaapi/hwupload
         # picks the default vaapi device, which may be a second iGPU/driver
@@ -1515,7 +1581,9 @@ def _build_ffmpeg_cmd(
     # bypass the whole path) so a stale subtitle_idx in an old state.json or
     # queue entry can't reintroduce the stall.
     sub_filter = None
-    if SUBTITLE_BURN_IN and subtitle_idx is not None:
+    # _can_copy_video already returns False when subs would be burned, so the
+    # sub-filter path is only reachable on the transcode branches.
+    if not copy_video and SUBTITLE_BURN_IN and subtitle_idx is not None:
         cached = _cached_sub_path(input_str, subtitle_idx)
         if cached.exists():
             # Cached single-track .srt — si=0 is the only stream in the file.
@@ -1527,7 +1595,16 @@ def _build_ffmpeg_cmd(
                 f"({Path(input_str).name} #{subtitle_idx})",
                 file=sys.stderr,
             )
-    if USE_NVENC:
+    if copy_video:
+        # Pure remux: no -vf, no encoder settings. Insert Access Unit
+        # Delimiters for Firefox's fmp4 demuxer — codec-specific BSF since
+        # h264_metadata and hevc_metadata only accept their own NAL units.
+        aud_bsf = "h264_metadata=aud=insert" if info.get("codec") == "h264" else "hevc_metadata=aud=insert"
+        cmd += [
+            "-c:v", "copy",
+            "-bsf:v", aud_bsf,
+        ]
+    elif USE_NVENC:
         # NVENC encode + (when codec is supported) NVDEC decode. Filter chain:
         #   - SDR fast path (NVDEC + no subs): scale_cuda only, frames never
         #     leave the GPU.
