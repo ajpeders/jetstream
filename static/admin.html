@@ -185,8 +185,8 @@
     display: flex; align-items: center; justify-content: center;
     color: #2a2a2a; font-size: 0.85rem;
   }
-  #queue-panel .qthumb img { width: 100%; height: 100%; object-fit: cover; display: none; }
-  #queue-panel .qthumb img.loaded { display: block; }
+  #queue-panel .qthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
+  #queue-panel .qthumb img.loaded { opacity: 1; }
   /* Source-type chip. Color-coded per provider (file vs YouTube vs other URL)
      so admin can scan a long queue and see what's coming from where. */
   #queue-panel .qchip {
@@ -245,8 +245,8 @@
     flex-shrink: 0; width: 28px; height: 42px;
     background: #0e0e0e; border-radius: 3px; overflow: hidden;
   }
-  #requests-panel .rthumb img { width: 100%; height: 100%; object-fit: cover; display: none; }
-  #requests-panel .rthumb img.loaded { display: block; }
+  #requests-panel .rthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
+  #requests-panel .rthumb img.loaded { opacity: 1; }
   #requests-panel .rtitle { flex: 1; color: #ccc; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #requests-panel button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
   #requests-panel button.approve { background: #1f3326; color: #7dcc99; border-color: #2c4a37; }
@@ -320,13 +320,21 @@
     color: #333; font-size: 2.4rem;
     overflow: hidden;
   }
+  ul#list .card .poster {
+    position: relative;
+  }
   ul#list .card .poster img {
+    position: absolute; inset: 0;
     width: 100%; height: 100%;
     object-fit: cover;
-    display: none;  /* shown once the proxy yields a real image */
+    /* opacity:0 (not display:none) so the img retains a layout box —
+       loading="lazy" needs intersection geometry to decide to fetch, and
+       display:none zeroes the rect and silently skips the load. The .ph
+       placeholder sits behind so the cell isn't blank during fetch. */
+    opacity: 0;
+    transition: opacity 0.18s ease;
   }
-  ul#list .card .poster img.loaded { display: block; }
-  ul#list .card .poster img.loaded + .ph { display: none; }
+  ul#list .card .poster img.loaded { opacity: 1; }
   ul#list .card.dir .ph { color: #345366; }
   ul#list .card.now .ph { color: #6c6; }
   ul#list .card .body {

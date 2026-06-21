@@ -206,8 +206,8 @@
     flex-shrink: 0; width: 26px; height: 39px;
     background: #0e0e0e; border-radius: 3px; overflow: hidden;
   }
-  #queue-list .qthumb img { width: 100%; height: 100%; object-fit: cover; display: none; }
-  #queue-list .qthumb img.loaded { display: block; }
+  #queue-list .qthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
+  #queue-list .qthumb img.loaded { opacity: 1; }
   #queue-list .qtitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #queue-list .qdur { color: #777; font-size: 0.78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
   #queue-list .empty { color: #555; padding: 0.4rem 1rem; }
@@ -244,8 +244,8 @@
     flex-shrink: 0; width: 30px; height: 45px;
     background: #0e0e0e; border-radius: 3px; overflow: hidden;
   }
-  #request-results .rthumb img { width: 100%; height: 100%; object-fit: cover; display: none; }
-  #request-results .rthumb img.loaded { display: block; }
+  #request-results .rthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
+  #request-results .rthumb img.loaded { opacity: 1; }
   #request-results .rtitle { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; overflow: hidden; }
   #request-results .rtitle .rt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #request-results .rtitle .rt-parent { color: #666; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
