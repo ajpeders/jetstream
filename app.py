@@ -784,11 +784,12 @@ def _start_preroll_locked() -> bool:
         full = _safe_resolve(ref, must_be_file=True)
     except Exception:
         return False
-    # Subtitle index: respect what's stored on the source dict; only auto-pick
-    # when it's entirely absent (pre-subtitle-support state). Same convention
-    # as _start_stream.
+    # Subtitle index: auto-pick when the source dict has no usable value (key
+    # missing OR explicit null). Matches _start_stream's policy — a stale null
+    # left over from when USE_SUBTITLES was off shouldn't keep blocking subs
+    # after burn-in is flipped back on.
     next_source = dict(candidate)
-    if "subtitle_idx" not in next_source:
+    if next_source.get("subtitle_idx") is None:
         next_source["subtitle_idx"] = _pick_default_subtitle(str(full))
     if next_source.get("duration") is None:
         next_source["duration"] = _probe_duration(full)
@@ -2157,12 +2158,13 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
     if duration is not None and start_seconds >= duration:
         start_seconds = max(0.0, duration - 1.0)
     audio_idx = _probe_english_audio(ffmpeg_input)
-    # Subtitle burn-in: use the value already on the source dict (set at
-    # queue/play time, including explicit `null` to mean "no subs"). Only
-    # auto-pick as a fallback when the key is entirely absent — i.e. this is
-    # a legacy state.json or a path that pre-dates subtitle support. URLs
-    # don't carry sub indices.
-    if source["type"] == "file" and "subtitle_idx" not in source:
+    # Subtitle burn-in: auto-pick whenever the source dict doesn't carry a
+    # usable index. "Usable" = an int — both missing keys AND explicit `null`
+    # re-trigger the picker. Without the null-re-pick, a state.json or queue
+    # entry that was added while USE_SUBTITLES was off (subtitle_idx → null)
+    # would stay sub-less forever once burn-in was flipped on. URLs don't
+    # carry sub indices and are skipped.
+    if source["type"] == "file" and source.get("subtitle_idx") is None:
         source = {**source, "subtitle_idx": _pick_default_subtitle(ffmpeg_input)}
     subtitle_idx = source.get("subtitle_idx") if source["type"] == "file" else None
     old_source = None
