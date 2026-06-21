@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jetstream</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230b0f14"/><path d="M18 44V18l26 13-26 13z" fill="%2338bdf8"/></svg>'>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -328,6 +329,330 @@
   }
   #chat-send:hover { background: #333; }
   #chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  :root {
+    color-scheme: dark;
+    --bg: #080b10;
+    --surface: #10151d;
+    --surface-2: #151b25;
+    --surface-3: #1b2430;
+    --line: rgba(148, 163, 184, 0.16);
+    --line-strong: rgba(148, 163, 184, 0.26);
+    --text: #e6edf5;
+    --muted: #91a0b3;
+    --dim: #637083;
+    --brand: #38bdf8;
+    --brand-2: #22c55e;
+    --warn: #f59e0b;
+    --danger: #ef4444;
+    --shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+  }
+
+  body {
+    background:
+      radial-gradient(circle at 20% -10%, rgba(56, 189, 248, 0.16), transparent 30rem),
+      linear-gradient(180deg, #0c1118 0%, var(--bg) 42%);
+    color: var(--text);
+  }
+
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    min-height: 62px;
+    padding: 0.75rem clamp(0.85rem, 2vw, 1.5rem);
+    background: rgba(11, 15, 21, 0.88);
+    border-bottom: 1px solid var(--line);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(18px);
+  }
+  header h1 {
+    font-size: 1.02rem;
+    font-weight: 750;
+    letter-spacing: 0;
+  }
+  header h1::before {
+    content: "";
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+    margin-right: 0.5rem;
+    border-radius: 999px;
+    background: var(--brand);
+    box-shadow: 0 0 0 5px rgba(56, 189, 248, 0.12), 0 0 22px rgba(56, 189, 248, 0.7);
+    vertical-align: 0.02em;
+  }
+  #status, #viewers, #position { color: var(--muted) !important; }
+  #status .live {
+    background: linear-gradient(135deg, #ef4444, #f97316);
+    border-radius: 999px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.08) inset;
+  }
+  #now-thumb {
+    width: 36px;
+    height: 54px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+  }
+
+  main,
+  #player-wrap {
+    background:
+      linear-gradient(180deg, rgba(15, 23, 42, 0.45), transparent 26%),
+      #000;
+  }
+  video {
+    max-height: calc(100vh - 62px);
+    box-shadow: var(--shadow);
+  }
+  #unmute-overlay {
+    background: radial-gradient(circle, rgba(8, 13, 20, 0.26), rgba(0, 0, 0, 0.64));
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+  }
+
+  #vol-controls,
+  #reaction-bar {
+    background: rgba(10, 15, 22, 0.76);
+    border: 1px solid rgba(226, 232, 240, 0.13);
+    border-radius: 999px;
+    box-shadow: 0 12px 34px rgba(0,0,0,0.36);
+    backdrop-filter: blur(14px);
+    opacity: 0.88;
+  }
+  #vol-controls button,
+  #reaction-bar button {
+    border-radius: 999px;
+  }
+  #vol-controls button:hover,
+  #reaction-bar button:hover {
+    background: rgba(255,255,255,0.1);
+  }
+  #vol-controls input[type="range"] {
+    accent-color: var(--brand);
+  }
+
+  #queue-panel,
+  #request-panel,
+  #chat-app,
+  #chat {
+    background: rgba(13, 18, 26, 0.96);
+    border-top: 1px solid var(--line);
+  }
+  #queue-head,
+  #request-head,
+  #chat-header {
+    min-height: 2.7rem;
+    padding: 0.58rem clamp(0.85rem, 2vw, 1.25rem);
+    background: linear-gradient(180deg, rgba(21, 27, 37, 0.96), rgba(13, 18, 26, 0.96));
+    border-bottom: 1px solid var(--line);
+  }
+  #queue-head h2,
+  #request-head h2,
+  #chat-header h2 {
+    color: var(--text);
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  #queue-count,
+  #queue-head .toggle,
+  #request-head .toggle,
+  #chat-header .toggle {
+    color: var(--dim);
+  }
+
+  #queue-list,
+  #request-results {
+    padding: 0.55rem 0;
+  }
+  #queue-list li,
+  #request-results li {
+    padding: 0.46rem clamp(0.85rem, 2vw, 1.25rem);
+    color: var(--text);
+  }
+  #queue-list li:hover,
+  #request-results li:hover {
+    background: rgba(148, 163, 184, 0.06);
+  }
+  #queue-list .qthumb,
+  #request-results .rthumb {
+    border-radius: 6px;
+    background: var(--surface-3);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.22);
+  }
+  #queue-list .qdur,
+  #request-results .rtitle .rt-parent,
+  #queue-list .qpos,
+  #queue-list .empty,
+  #request-results .empty,
+  #chat-messages .empty {
+    color: var(--dim);
+  }
+  #request-search,
+  #chat-name-input,
+  #chat-input {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    min-height: 40px;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+  }
+  #request-search {
+    width: calc(100% - clamp(1.7rem, 4vw, 2.5rem));
+    margin: 0.7rem clamp(0.85rem, 2vw, 1.25rem);
+  }
+  #request-search:focus,
+  #chat-name-input:focus,
+  #chat-input:focus {
+    border-color: rgba(56, 189, 248, 0.72);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+    outline: none;
+  }
+  #request-results button,
+  #chat-send,
+  #voteskip-btn,
+  #controls-link {
+    border-radius: 999px !important;
+    border: 1px solid var(--line-strong) !important;
+    min-height: 34px;
+    font-weight: 700;
+    transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+  }
+  #request-results button,
+  #chat-send {
+    background: linear-gradient(180deg, #263241, #1b2531);
+    color: var(--text);
+  }
+  #request-results button:hover,
+  #chat-send:hover {
+    background: linear-gradient(180deg, #304052, #243244);
+    transform: translateY(-1px);
+  }
+  #request-results button.done {
+    background: rgba(34, 197, 94, 0.15);
+    color: #86efac;
+    border-color: rgba(34, 197, 94, 0.34) !important;
+  }
+  #controls-link {
+    background: rgba(56, 189, 248, 0.13) !important;
+    color: #7dd3fc !important;
+    text-decoration: none !important;
+  }
+  #voteskip-btn {
+    background: rgba(245, 158, 11, 0.14) !important;
+    color: #fcd34d !important;
+    border-color: rgba(245, 158, 11, 0.3) !important;
+  }
+
+  #chat-messages {
+    padding: 0.65rem clamp(0.85rem, 2vw, 1.25rem);
+  }
+  .chat-msg {
+    padding: 0.28rem 0;
+  }
+  .chat-dot {
+    box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
+  }
+  .chat-name {
+    color: #cbd5e1;
+  }
+  .chat-text {
+    color: var(--text);
+  }
+  #chat-form {
+    padding: 0.65rem clamp(0.85rem, 2vw, 1.25rem);
+    border-top: 1px solid var(--line);
+    background: rgba(8, 13, 20, 0.36);
+  }
+
+  @media (max-width: 700px) {
+    header {
+      gap: 0.55rem;
+      flex-wrap: wrap;
+    }
+    header h1 { width: 100%; }
+    #status { order: 3; flex-basis: 100%; }
+    #position { margin-left: 0 !important; }
+    #viewers { margin-left: auto; }
+    #vol-controls {
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%);
+    }
+    #reaction-bar {
+      bottom: 72px;
+    }
+    #chat-form {
+      display: grid;
+      grid-template-columns: minmax(0, 7rem) minmax(0, 1fr) auto;
+      gap: 0.45rem;
+    }
+    #chat-name-input { width: 100%; }
+  }
+
+  @media (min-width: 960px) {
+    body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) clamp(320px, 24vw, 420px);
+      grid-template-rows: auto minmax(0, 1fr) auto auto;
+      min-height: 100vh;
+    }
+    header {
+      grid-column: 1 / -1;
+    }
+    main {
+      grid-column: 1;
+      grid-row: 2;
+      min-height: 0;
+    }
+    #player-wrap {
+      min-height: 0;
+      height: 100%;
+    }
+    video {
+      height: 100%;
+      max-height: none;
+    }
+    #queue-panel {
+      grid-column: 1;
+      grid-row: 3;
+    }
+    #request-panel {
+      grid-column: 1;
+      grid-row: 4;
+    }
+    #chat-app {
+      grid-column: 2;
+      grid-row: 2 / 5;
+      min-height: 0;
+      border-left: 1px solid var(--line);
+      box-shadow: -18px 0 60px rgba(0,0,0,0.18);
+    }
+    #chat {
+      max-height: none;
+      height: 100%;
+      min-height: 0;
+      border-top: 0;
+    }
+    #chat.collapsed {
+      max-height: none;
+      overflow: hidden;
+    }
+    #chat-header {
+      position: sticky;
+      top: 62px;
+      z-index: 1;
+    }
+    #chat-messages {
+      min-height: 0;
+    }
+  }
 </style>
 </head>
 <body>
@@ -380,19 +705,7 @@
   <ul id="request-results"><li class="empty">Search the library, then tap Request to ask the host to queue it.</li></ul>
 </section>
 
-<section id="chat">
-  <div id="chat-header">
-    <h2>chat</h2>
-    <span class="toggle" id="chat-toggle">▾</span>
-  </div>
-  <div id="chat-messages"><div class="empty">No messages yet — say hi.</div></div>
-  <form id="chat-form" autocomplete="off">
-    <input id="chat-name-input" type="text" maxlength="24" placeholder="name"
-           aria-label="Display name (optional, anonymous if blank)">
-    <input id="chat-input" type="text" maxlength="500" placeholder="Type a message…">
-    <button id="chat-send" type="submit">send</button>
-  </form>
-</section>
+<div id="chat-app"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <!-- Twemoji: render reaction emoji as images so they show identically on
@@ -400,6 +713,7 @@
      "tofu" circles). If this CDN is blocked, twemojify() no-ops and the
      plain emoji text is used as-is. -->
 <script src="https://cdn.jsdelivr.net/npm/@twemoji/api@15.1.0/dist/twemoji.min.js" crossorigin="anonymous"></script>
+<script type="module" src="/build/viewerChat.js"></script>
 <script>
 const video = document.getElementById("video");
 const statusEl = document.getElementById("status");
@@ -619,7 +933,22 @@ video.addEventListener("loadedmetadata", () => {
 // player rendering right now?" and steer every device toward the SAME
 // target (server_now − TARGET_LAG). That makes admin and viewers converge
 // on the same playhead instead of each tracking their own buffer.
-const TARGET_LAG_S = 2.5;     // playhead = server_now − this. Matches admin (and Hls.js liveSyncPosition with liveSyncDurationCount: 1).
+// Firefox detection — its MSE pipeline doesn't like Hls.js's lowLatencyMode
+// the way Chromium does. The lowLatencyMode + liveSyncDurationCount:1 combo
+// keeps Chromium glued to a tight live edge but starves Firefox's decoder,
+// surfacing as micro-skips every few seconds even with healthy 1 s segments.
+// UA sniff is fine here — we only need to recognise Gecko, not distinguish
+// forks of it.
+const IS_FIREFOX = /Firefox\//i.test(navigator.userAgent);
+// playhead = server_now − this. Tighter target for Chromium (which can sit
+// 2.5s behind the live edge cleanly); Firefox gets a wider lag so its
+// liveSyncDurationCount:3 buffer has room to play out without the snap loop
+// pulling the playhead past where Hls.js actually has frames appended.
+const TARGET_LAG_S = IS_FIREFOX ? 5.0 : 2.5;
+// Drift-correction snap threshold. Firefox's wider lag means casual PDT
+// drift looks bigger in absolute seconds — only step in on real desync, not
+// every small wobble. Chromium keeps the tighter window.
+const DRIFT_SNAP_S = IS_FIREFOX ? 8 : 5;
 let serverClockOffsetMs = 0;  // updated by pollStatus from s.server_unix.
 
 function currentPlayingDateMs() {
@@ -648,7 +977,7 @@ setInterval(() => {
   if (playing == null) return;
   const serverNowMs = Date.now() + serverClockOffsetMs;
   const drift = (serverNowMs - playing) / 1000 - TARGET_LAG_S;
-  if (Math.abs(drift) > 5) snapToLive();
+  if (Math.abs(drift) > DRIFT_SNAP_S) snapToLive();
 }, 2000);
 // Disable space-bar pause and right-click menu — but only when no text
 // input is focused, otherwise the chat box can't take spaces.
@@ -700,7 +1029,13 @@ function setupPlayer() {
     // IDR frames at exact segment boundaries (see app.py force_key_frames),
     // so each segment is independently decodable and Firefox doesn't stall
     // on mid-GOP segment starts.
-    hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 1 });
+    // Firefox MSE: starves on lowLatencyMode + 1-segment buffer, surfacing as
+    // periodic micro-skips even with healthy 1 s segments. Wider headroom +
+    // standard latency mode lets Gecko's decoder stay ahead of presentation.
+    // Chromium keeps the tighter Chrome-optimised config it's always had.
+    hls = new Hls(IS_FIREFOX
+      ? { lowLatencyMode: false, liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 10 }
+      : { lowLatencyMode: true, liveSyncDurationCount: 1 });
     hls.loadSource(src);
     hls.attachMedia(video);
     // Explicit play() after attach — iOS Safari can leave the element paused
@@ -857,139 +1192,12 @@ pollStatus();
 // 1s poll — pause/skip from admin reaches the viewer within one tick.
 setInterval(pollStatus, 1000);
 
-// ---- Anonymous chat ---------------------------------------------------
-// Each tab generates an opaque sid (12 hex chars), stored in localStorage so
-// the same browser keeps the same color dot across reloads. Server doesn't
-// validate or persist it — it's just a tag for visual continuity.
 let chatSid = localStorage.getItem("jetstream_chatsid");
 if (!chatSid) {
   chatSid = [...crypto.getRandomValues(new Uint8Array(6))]
     .map(b => b.toString(16).padStart(2, "0")).join("");
   localStorage.setItem("jetstream_chatsid", chatSid);
 }
-function chatColor(sid) {
-  // Stable hash → HSL hue. Saturation/lightness held constant so every dot
-  // reads against the dark background but stays distinct from siblings.
-  let h = 0;
-  for (let i = 0; i < sid.length; i++) h = ((h << 5) - h + sid.charCodeAt(i)) | 0;
-  return `hsl(${((h % 360) + 360) % 360}, 65%, 60%)`;
-}
-
-const chatPanel = document.getElementById("chat");
-const chatToggle = document.getElementById("chat-toggle");
-const chatMessages = document.getElementById("chat-messages");
-const chatForm = document.getElementById("chat-form");
-const chatInput = document.getElementById("chat-input");
-const chatNameInput = document.getElementById("chat-name-input");
-const chatSend = document.getElementById("chat-send");
-let chatMaxId = 0;
-let chatHasMessages = false;
-
-// Display name persists across reloads — viewer types it once and forgets.
-// Stored separately from sid so changing your name doesn't change your color.
-chatNameInput.value = localStorage.getItem("jetstream_chatname") || "";
-chatNameInput.addEventListener("change", () => {
-  localStorage.setItem("jetstream_chatname", chatNameInput.value.trim().slice(0, 24));
-});
-
-// Restore collapsed state across reloads.
-if (localStorage.getItem("jetstream_chat_collapsed") === "1") {
-  chatPanel.classList.add("collapsed");
-  chatToggle.textContent = "▸";
-}
-document.getElementById("chat-header").addEventListener("click", () => {
-  const collapsed = chatPanel.classList.toggle("collapsed");
-  chatToggle.textContent = collapsed ? "▸" : "▾";
-  localStorage.setItem("jetstream_chat_collapsed", collapsed ? "1" : "0");
-});
-
-function chatRender(msgs) {
-  if (!chatHasMessages) {
-    chatMessages.innerHTML = "";
-    chatHasMessages = true;
-  }
-  // Keep auto-scroll only when the user was near the bottom — don't yank them
-  // away while they're reading scrollback.
-  const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop
-                      - chatMessages.clientHeight < 50;
-  for (const m of msgs) {
-    const li = document.createElement("div");
-    li.className = "chat-msg" + (m.sid === chatSid ? " self" : "");
-    li.dataset.id = m.id;
-    li.innerHTML = `<span class="chat-dot"></span><span class="chat-name"></span><span class="chat-text"></span>`;
-    li.querySelector(".chat-dot").style.background = chatColor(m.sid);
-    // Older messages may not have a name field yet (server pre-rename) — fall back.
-    li.querySelector(".chat-name").textContent = (m.name || "anonymous") + ":";
-    li.querySelector(".chat-text").textContent = m.text;
-    chatMessages.appendChild(li);
-  }
-  if (wasNearBottom) chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-function chatApplyDeletions(ids) {
-  // Host moderation pulls a message after it was already painted — /chat/recent
-  // returns the surviving deleted-ids list every poll so the viewer can drop
-  // any rows it had already rendered.
-  if (!Array.isArray(ids) || !ids.length) return;
-  const seen = new Set(ids);
-  for (const el of chatMessages.querySelectorAll(".chat-msg")) {
-    if (seen.has(parseInt(el.dataset.id, 10))) el.remove();
-  }
-}
-
-async function chatPoll() {
-  try {
-    const r = await fetch("/chat/recent?since=" + chatMaxId);
-    if (!r.ok) return;
-    const j = await r.json();
-    if (typeof j.max_id === "number") chatMaxId = j.max_id;
-    if (Array.isArray(j.messages) && j.messages.length) chatRender(j.messages);
-    chatApplyDeletions(j.deleted_ids);
-  } catch {}
-}
-setInterval(chatPoll, 2500);
-chatPoll();
-
-chatForm.addEventListener("submit", async e => {
-  e.preventDefault();
-  const text = chatInput.value.trim();
-  if (!text) return;
-  chatSend.disabled = true;
-  chatInput.disabled = true;
-  try {
-    const r = await fetch("/chat/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: text,
-        sid: chatSid,
-        name: chatNameInput.value.trim(),
-      }),
-    });
-    if (r.ok) {
-      chatInput.value = "";
-      // Pull the freshly-posted message immediately so the user sees their
-      // own send echo without waiting for the next 2.5s tick.
-      chatPoll();
-    } else {
-      const j = await r.json().catch(() => ({}));
-      // Toast-y inline error: reuse the placeholder for 1.5s.
-      const prev = chatInput.placeholder;
-      if (j.error === "muted") {
-        const mins = Math.max(1, Math.ceil((j.remaining || 0) / 60));
-        chatInput.placeholder = `muted (${mins}m left)`;
-      } else if (j.error === "rate limited") {
-        chatInput.placeholder = "slow down — too many messages";
-      } else {
-        chatInput.placeholder = j.error || "send failed";
-      }
-      setTimeout(() => { chatInput.placeholder = prev; }, 1500);
-    }
-  } catch {}
-  chatSend.disabled = false;
-  chatInput.disabled = false;
-  chatInput.focus();
-});
 
 // ---- Emoji reactions --------------------------------------------------
 // Tap an emoji → it floats up over the video for everyone watching. Rides a
