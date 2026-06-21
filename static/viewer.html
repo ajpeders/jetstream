@@ -149,6 +149,12 @@
     color: white;
     cursor: pointer;
     font-size: 0.95rem;
+    /* Hit target sized for iOS HIG's 44pt minimum on touch — the previous
+       ~20px tall buttons let near-misses fall through to the unmute overlay
+       under the controls. Inline-flex centering keeps the glyph optically
+       small while the touch box grows. */
+    min-width: 44px; min-height: 44px;
+    display: inline-flex; align-items: center; justify-content: center;
     padding: 0.1rem 0.3rem;
   }
   #vol-controls input[type="range"] {
@@ -477,13 +483,36 @@ volSlider.addEventListener("input", () => {
   syncMuteUI();
 });
 fsBtn.addEventListener("click", () => {
-  // iOS Safari: must fullscreen the <video> itself; div fullscreen is unsupported.
-  if (typeof video.webkitEnterFullscreen === "function" && !playerWrap.requestFullscreen) {
+  // Prefer the webkit-prefixed video API whenever it exists, regardless of
+  // whether the standard Element.requestFullscreen() is also present. iOS
+  // Safari 16.4+ added div-level requestFullscreen as a partial implementation
+  // that silently rejects on a <div> containing video — the previous guard
+  // `&& !playerWrap.requestFullscreen` was correct on pre-16.4 iOS but turned
+  // false once Safari shipped the standard surface, sending iOS into the
+  // broken fallthrough. Mirror the pip-btn pattern below: webkit-first when
+  // it's there, standard path only on non-webkit engines.
+  if (typeof video.webkitEnterFullscreen === "function") {
     if (!video.webkitDisplayingFullscreen) video.webkitEnterFullscreen();
     return;
   }
-  if (document.fullscreenElement) document.exitFullscreen();
-  else (playerWrap.requestFullscreen || video.requestFullscreen).call(playerWrap.requestFullscreen ? playerWrap : video);
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+    return;
+  }
+  const target = playerWrap.requestFullscreen ? playerWrap : video;
+  const req = target.requestFullscreen;
+  const p = req && req.call(target);
+  // `.catch` so the rejected-promise path from a partial requestFullscreen
+  // implementation doesn't surface as silent failure. Fall back to the bare
+  // <video> if the wrap div rejects — covers any UA that ships div-level
+  // requestFullscreen but doesn't accept a video-bearing container.
+  if (p && typeof p.catch === "function") {
+    p.catch(() => {
+      if (target === playerWrap && typeof video.requestFullscreen === "function") {
+        video.requestFullscreen().catch(() => {});
+      }
+    });
+  }
 });
 pipBtn.addEventListener("click", async () => {
   // iOS Safari path.
