@@ -33,6 +33,8 @@ TOKEN_LEVELS = ("viewer", "friend")
 # Levels permitted to hit /api/control/* and load /controls.
 CONTROL_LEVELS = frozenset({"friend", "admin"})
 PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
+RECENT_FILE = Path(os.environ.get("RECENT_FILE", "/data/recent.json"))
+RECENT_LIMIT = int(os.environ.get("RECENT_LIMIT", "50"))
 REQUESTS_FILE = Path(os.environ.get("REQUESTS_FILE", "/data/requests.json"))
 # Pending viewer "request to queue" entries auto-expire after this many seconds
 # if the host hasn't approved or denied them. Without this the list grows
@@ -211,6 +213,9 @@ tokens: list[dict] = []
 playlist_lock = threading.Lock()
 playlist: list[dict] = []
 
+recent_lock = threading.Lock()
+recent_items: list[dict] = []
+
 # Viewer "request to queue": watch-only viewers can't drive playback, but they
 # can suggest media that lands in a pending list the host approves/denies. Each
 # request: {"id", "ts", "path", "title", "requester", "ip"}. Persisted so a
@@ -295,6 +300,52 @@ def _load_playlist():
 def _save_playlist():
     PLAYLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
     PLAYLIST_FILE.write_text(json.dumps(playlist, indent=2))
+
+
+def _load_recent():
+    global recent_items
+    if RECENT_FILE.exists():
+        try:
+            loaded = json.loads(RECENT_FILE.read_text())
+            recent_items = loaded if isinstance(loaded, list) else []
+            return
+        except Exception as e:
+            _warn_state_load_failed("recent", RECENT_FILE, e)
+    recent_items = []
+
+
+def _save_recent():
+    RECENT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    RECENT_FILE.write_text(json.dumps(recent_items[:RECENT_LIMIT], indent=2))
+
+
+def _source_key(source: dict | None) -> tuple[str | None, str | None]:
+    if not source:
+        return (None, None)
+    return (source.get("type"), source.get("ref"))
+
+
+def _recent_record(source: dict | None, position: float | None = None) -> None:
+    """Record a source that just left active playback. Adjacent duplicates are
+    ignored so seek/resume operations don't spam the list."""
+    if not source or not source.get("type") or not source.get("ref"):
+        return
+    entry = {
+        "ts": time.time(),
+        "source": {
+            k: v for k, v in dict(source).items()
+            if k in {"type", "ref", "title", "duration", "is_live", "subtitle_idx"}
+        },
+    }
+    if position is not None:
+        entry["position_seconds"] = position
+    with recent_lock:
+        if recent_items and _source_key(recent_items[0].get("source")) == _source_key(source):
+            recent_items[0] = entry
+        else:
+            recent_items.insert(0, entry)
+            del recent_items[RECENT_LIMIT:]
+        _save_recent()
 
 
 def _load_requests():
@@ -389,6 +440,7 @@ def _load_state() -> dict | None:
 
 _load_tokens()
 _load_playlist()
+_load_recent()
 _load_requests()
 _load_settings()
 
@@ -786,6 +838,8 @@ def _promote_preroll_locked() -> bool:
     global preroll_proc, preroll_source, preroll_run_id, preroll_source_from_queue
     if preroll_proc is None or preroll_proc.poll() is not None:
         return False
+    old_source = current_source
+    old_pos = _current_position()
     # Retire the old run so the composer draws a DISCONTINUITY before the
     # new run's segments and eventually cleans up the empty dir.
     if active_run_id is not None:
@@ -804,6 +858,7 @@ def _promote_preroll_locked() -> bool:
     # Reset vote-to-skip for the new item.
     with skip_votes_lock:
         skip_votes.clear()
+    _recent_record(old_source, old_pos)
     return True
 
 
@@ -813,6 +868,10 @@ def _stop_locked():
     once no playable segments remain anywhere)."""
     global current_source, current_start_offset, current_start_time
     global current_paused, paused_position, active_run_id
+    old_source = current_source
+    old_pos = _current_position()
+    if old_pos is None and current_paused:
+        old_pos = paused_position
     _terminate_proc_locked()
     if active_run_id is not None:
         finished_run_ids.add(active_run_id)
@@ -822,6 +881,7 @@ def _stop_locked():
     current_start_time = 0.0
     current_paused = False
     paused_position = 0.0
+    _recent_record(old_source, old_pos)
 
 
 def _probe_duration(path: Path) -> float | None:
@@ -1479,7 +1539,7 @@ def _build_ffmpeg_cmd(
         if is_hdr:
             tonemap = (
                 "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
-                "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
+                "tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv"
             )
             # Scale to the output height BEFORE the tonemap (and subtitle
             # burn-in). The zscale tonemap is CPU-only and dominates cost:
@@ -1573,11 +1633,11 @@ def _build_ffmpeg_cmd(
         #   - CPU-decode branch: BEFORE format=nv12,hwupload.
         if is_hdr:
             # Reference: ffmpeg HDR-to-SDR best-practice chain. npl=100 targets
-            # SDR-display peak luminance (100 nits); hable is the most forgiving
+            # SDR-display peak luminance (100 nits); mobius is the fastest
             # tonemap operator for the typical PQ-mastered movie source.
             tonemap_pre = (
                 "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
-                "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
+                "tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv"
             )
             tonemap_post = f"scale=-2:{out_h},format=nv12,hwupload"
             vf = (
@@ -1630,7 +1690,7 @@ def _build_ffmpeg_cmd(
         if is_hdr:
             tonemap_pre = (
                 "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
-                "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
+                "tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv"
             )
             scale = f"scale=-2:{out_h}"
             vf = (
@@ -2105,11 +2165,18 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
     if source["type"] == "file" and "subtitle_idx" not in source:
         source = {**source, "subtitle_idx": _pick_default_subtitle(ffmpeg_input)}
     subtitle_idx = source.get("subtitle_idx") if source["type"] == "file" else None
+    old_source = None
+    old_pos = None
     with state_lock:
         global active_run_id, next_run_id
         # Retire the old run (its segments stay on disk + in the master until
         # they roll out of the global window — that's what makes the
         # transition seamless).
+        if _source_key(current_source) != _source_key(source):
+            old_source = current_source
+            old_pos = _current_position()
+            if old_pos is None and current_paused:
+                old_pos = paused_position
         _terminate_proc_locked()
         if active_run_id is not None:
             finished_run_ids.add(active_run_id)
@@ -2136,6 +2203,7 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
     # New item playing — wipe any skip votes from the last one.
     with skip_votes_lock:
         skip_votes.clear()
+    _recent_record(old_source, old_pos)
     _save_state(snapshot)
 
 
@@ -2800,6 +2868,68 @@ def api_viewers_history():
 def api_queue_list():
     with playlist_lock:
         return jsonify(list(playlist))
+
+
+@app.route("/admin/api/recent", methods=["GET"])
+@app.route("/api/control/recent", methods=["GET"])
+def api_recent_list():
+    with recent_lock:
+        return jsonify(list(recent_items))
+
+
+@app.route("/admin/api/recent/<int:idx>/queue", methods=["POST"])
+@app.route("/api/control/recent/<int:idx>/queue", methods=["POST"])
+def api_recent_requeue(idx: int):
+    with recent_lock:
+        if not (0 <= idx < len(recent_items)):
+            return jsonify({"error": "index out of range"}), 400
+        source = dict(recent_items[idx].get("source") or {})
+    if source.get("type") == "file":
+        ref = source.get("ref")
+        if not ref:
+            return jsonify({"error": "missing file ref"}), 400
+        try:
+            full = _safe_resolve(ref, must_be_file=True)
+        except Exception:
+            return jsonify({"error": "file not found"}), 400
+        item = {
+            "type": "file",
+            "ref": ref,
+            "title": source.get("title") or Path(ref).name,
+            "duration": source.get("duration") or _probe_duration(full),
+            "is_live": False,
+        }
+        if "subtitle_idx" in source:
+            item["subtitle_idx"] = source.get("subtitle_idx")
+        else:
+            item["subtitle_idx"] = _pick_default_subtitle(str(full))
+        items = [item]
+    elif source.get("type") == "url":
+        ref = (source.get("ref") or "").strip()
+        if not ref:
+            return jsonify({"error": "missing URL"}), 400
+        # Keep requeue fast: store the original URL source back into the
+        # playlist and let _start_stream resolve fresh signed stream URLs when
+        # playback reaches it.
+        items = [{
+            "type": "url",
+            "ref": ref,
+            "title": source.get("title") or ref,
+            "duration": source.get("duration"),
+            "is_live": bool(source.get("is_live")),
+        }]
+    else:
+        return jsonify({"error": "unsupported recent source"}), 400
+    with playlist_lock:
+        playlist.extend(items)
+        _save_playlist()
+        length = len(playlist)
+    return jsonify({
+        "ok": True,
+        "added": len(items),
+        "first_title": items[0].get("title"),
+        "queue_length": length,
+    })
 
 
 @app.route("/admin/api/queue", methods=["POST"])
