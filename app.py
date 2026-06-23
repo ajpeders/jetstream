@@ -575,12 +575,13 @@ def _viewer_count() -> int:
         for ip in stale:
             del viewers[ip]
             viewer_labels.pop(ip, None)
-    if stale:
-        for ip in stale:
-            print(f"[viewer] disconnect ip={ip} (idle > {VIEWER_TIMEOUT}s)",
-                  file=sys.stderr, flush=True)
-    with viewers_lock:
-        return len(viewers)
+        count = len(viewers)
+    # Print AFTER releasing the lock — stderr writes can block briefly and
+    # we don't want to hold the (hot-path) lock over them.
+    for ip in stale:
+        print(f"[viewer] disconnect ip={ip} (idle > {VIEWER_TIMEOUT}s)",
+              file=sys.stderr, flush=True)
+    return count
 
 
 def _safe_resolve(rel: str, must_be_dir: bool = False, must_be_file: bool = False) -> Path:
@@ -902,8 +903,13 @@ def _probe_duration(path: Path) -> float | None:
         return None
 
 
-def _current_position() -> float | None:
-    if current_proc is None or current_proc.poll() is not None:
+def _current_position(running: bool | None = None) -> float | None:
+    """Compute current playback position. `running` lets a caller that just
+    did `proc.poll()` pass the result in to save a syscall on the hot
+    /api/status path; default of None re-checks here."""
+    if running is None:
+        running = current_proc is not None and current_proc.poll() is None
+    if not running:
         return None
     if current_paused:
         return paused_position
@@ -3236,12 +3242,19 @@ def api_status():
         active = current_source is not None  # a source is loaded (running OR paused)
         playlist_ready = (HLS_DIR / "stream.m3u8").exists()
         if running:
-            position = _current_position()
+            position = _current_position(running=True)
         elif current_paused:
             position = paused_position
         else:
             position = None
         src = current_source if active else None
+        # Compute these once — viewer count is an O(viewers) scan + lock and
+        # we'd otherwise call it twice (once for the field, once inside
+        # _skip_threshold); token level is an O(tokens) scan and was being
+        # walked twice (once via _caller_can_control, once for the `level`
+        # field).
+        viewer_count = _viewer_count()
+        caller_level = _token_level(request.cookies.get(TOKEN_COOKIE))
         return jsonify({
             "playing": active,
             "paused": current_paused,
@@ -3252,7 +3265,7 @@ def api_status():
             "is_live": (src or {}).get("is_live", False),
             "position_seconds": position,
             "duration_seconds": (src or {}).get("duration"),
-            "viewers": _viewer_count(),
+            "viewers": viewer_count,
             # For client-side sync: lets clients correct for clock skew so
             # the "play whatever PDT == server_now − 2s" target lands at the
             # same moment on every device.
@@ -3260,11 +3273,11 @@ def api_status():
             # Permission hints for the viewer page: show a "Controls" link
             # when this token can drive playback. is_admin distinguishes the
             # host (full control surface) from a friend.
-            "can_control": _caller_can_control(),
-            "level": _token_level(request.cookies.get(TOKEN_COOKIE)),
+            "can_control": caller_level in CONTROL_LEVELS,
+            "level": caller_level,
             # Vote-to-skip tally for the current item (viewer-facing button).
             "skip_votes": len(skip_votes),
-            "skip_needed": _skip_threshold(_viewer_count()),
+            "skip_needed": _skip_threshold(viewer_count),
             # Pending viewer requests — lets the admin UI badge the count
             # without polling /admin/api/requests when nothing's waiting.
             "requests_pending": len(media_requests),
@@ -3308,12 +3321,14 @@ def poster():
         # Pass the API key only when fetching arr's local mirror (which would
         # also need basic auth in most homelab configs — see remoteUrl-first
         # logic in _arr_fetch_inventory). The public TVDB/TMDB CDN ignores
-        # the header. Bumped timeout to 10 s because TVDB occasionally takes
-        # a beat to first-byte.
+        # the header. 5 s timeout caps how long a single Flask worker is
+        # tied up on the cache-miss path — TVDB usually first-bytes within
+        # ~1 s, but the long tail used to be a 10 s ceiling that could lock
+        # up multiple workers if a viewer loaded a grid full of fresh shows.
         headers = {"X-Api-Key": key} if url.startswith(base) else {}
         try:
             req = urllib.request.Request(full, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as r:
+            with urllib.request.urlopen(req, timeout=5) as r:
                 data = r.read()
             POSTERS_DIR.mkdir(parents=True, exist_ok=True)
             cached.write_bytes(data)
