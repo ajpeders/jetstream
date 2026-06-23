@@ -82,6 +82,25 @@
     background: black;
     object-fit: contain;
   }
+  /* Fullscreen overrides — the inline-mode max-height reserves space for the
+     header, but in fullscreen there IS no header, and that ~50 px short-fall
+     manifests as a weird letterboxed video that doesn't fill the screen on
+     1440p/4K monitors. Drop the height cap and the aspect-ratio box so the
+     element fills whatever fullscreen target it ended up on. Both
+     `:fullscreen` (standard) and `:-webkit-full-screen` (iOS Safari + old
+     WebKit) so the rule wins on every engine we care about. */
+  #player-wrap:fullscreen,
+  #player-wrap:-webkit-full-screen {
+    width: 100vw; height: 100vh;
+  }
+  #player-wrap:fullscreen video,
+  #player-wrap:-webkit-full-screen video,
+  video:fullscreen,
+  video:-webkit-full-screen {
+    width: 100%; height: 100%;
+    max-height: none;
+    aspect-ratio: auto;
+  }
   #unmute-overlay {
     position: absolute;
     inset: 0;
@@ -99,43 +118,6 @@
     z-index: 1;
   }
   #unmute-overlay.hidden { display: none; }
-  /* Emoji reactions: a non-interactive layer the floats animate in, plus a
-     tap bar mirroring the volume controls on the opposite corner. */
-  #reaction-layer {
-    position: absolute; inset: 0; overflow: hidden;
-    pointer-events: none; z-index: 5;
-  }
-  .reaction-float {
-    position: absolute; bottom: 64px;
-    font-size: 2.1rem; line-height: 1;
-    will-change: transform, opacity;
-    animation: reaction-rise 2.6s ease-out forwards;
-    text-shadow: 0 2px 6px rgba(0,0,0,0.5);
-  }
-  @keyframes reaction-rise {
-    0%   { transform: translateY(0) scale(0.5); opacity: 0; }
-    14%  { transform: translateY(-14px) scale(1.15); opacity: 1; }
-    100% { transform: translateY(-230px) scale(1); opacity: 0; }
-  }
-  #reaction-bar {
-    position: absolute; bottom: 12px; left: 12px;
-    display: flex; gap: 0.25rem;
-    background: rgba(0,0,0,0.55);
-    padding: 0.3rem 0.45rem; border-radius: 4px;
-    opacity: 0.7; transition: opacity 0.15s; z-index: 6;
-  }
-  #reaction-bar:hover { opacity: 1; }
-  #reaction-bar button {
-    background: transparent; border: none; cursor: pointer;
-    font-size: 1.2rem; line-height: 1; padding: 0.1rem 0.25rem;
-    transition: transform 0.1s;
-  }
-  #reaction-bar button:hover { transform: scale(1.3); }
-  #reaction-bar button:active { transform: scale(0.9); }
-  /* Twemoji <img> replacements, sized to match the emoji text they stand in
-     for. Without this they'd render at the natural SVG size (huge). */
-  .reaction-float img.emoji { width: 2.1rem; height: 2.1rem; vertical-align: middle; }
-  #reaction-bar button img.emoji { width: 1.2rem; height: 1.2rem; vertical-align: middle; pointer-events: none; }
   #vol-controls {
     position: absolute;
     bottom: 12px;
@@ -414,8 +396,7 @@
     letter-spacing: 0.12em;
   }
 
-  #vol-controls,
-  #reaction-bar {
+  #vol-controls {
     background: rgba(10, 15, 22, 0.76);
     border: 1px solid rgba(226, 232, 240, 0.13);
     border-radius: 999px;
@@ -423,12 +404,10 @@
     backdrop-filter: blur(14px);
     opacity: 0.88;
   }
-  #vol-controls button,
-  #reaction-bar button {
+  #vol-controls button {
     border-radius: 999px;
   }
-  #vol-controls button:hover,
-  #reaction-bar button:hover {
+  #vol-controls button:hover {
     background: rgba(255,255,255,0.1);
   }
   #vol-controls input[type="range"] {
@@ -585,9 +564,6 @@
       right: auto;
       transform: translateX(-50%);
     }
-    #reaction-bar {
-      bottom: 72px;
-    }
     #chat-form {
       display: grid;
       grid-template-columns: minmax(0, 7rem) minmax(0, 1fr) auto;
@@ -654,8 +630,9 @@
     }
   }
 </style>
+<link rel="stylesheet" href="/jetstream-theme.css">
 </head>
-<body>
+<body class="viewer-page">
 <header>
   <h1>jetstream</h1>
   <span id="now-thumb"><img id="now-thumb-img" alt=""></span>
@@ -682,8 +659,6 @@
       <button id="fs-btn" title="Fullscreen" style="display:none">⛶</button>
     </div>
     <div id="unmute-overlay">tap to unmute</div>
-    <div id="reaction-layer"></div>
-    <div id="reaction-bar"></div>
   </div>
 </main>
 
@@ -707,12 +682,7 @@
 
 <div id="chat-app"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
-<!-- Twemoji: render reaction emoji as images so they show identically on
-     devices that lack a color-emoji font (where they'd otherwise be blank
-     "tofu" circles). If this CDN is blocked, twemojify() no-ops and the
-     plain emoji text is used as-is. -->
-<script src="https://cdn.jsdelivr.net/npm/@twemoji/api@15.1.0/dist/twemoji.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.10/dist/hls.min.js"></script>
 <script type="module" src="/build/viewerChat.js"></script>
 <script>
 const video = document.getElementById("video");
@@ -992,6 +962,39 @@ video.addEventListener("contextmenu", e => e.preventDefault());
 video.addEventListener("volumechange", syncMuteUI);
 syncMuteUI();
 
+let playerChromeTimer = null;
+function shouldHidePlayerChrome() {
+  return !video.paused && !video.muted && !serverPaused && unmuteOverlay.classList.contains("hidden");
+}
+function showPlayerChrome() {
+  playerWrap.classList.remove("controls-idle");
+  playerWrap.classList.add("controls-active");
+  clearTimeout(playerChromeTimer);
+  if (shouldHidePlayerChrome()) {
+    playerChromeTimer = setTimeout(() => {
+      if (shouldHidePlayerChrome()) {
+        playerWrap.classList.remove("controls-active");
+        playerWrap.classList.add("controls-idle");
+      }
+    }, 1800);
+  }
+}
+function keepPlayerChromeVisible() {
+  clearTimeout(playerChromeTimer);
+  playerWrap.classList.remove("controls-idle");
+  playerWrap.classList.add("controls-active");
+}
+["pointermove", "mousemove", "touchstart", "keydown", "focusin"].forEach((eventName) => {
+  playerWrap.addEventListener(eventName, showPlayerChrome, { passive: true });
+});
+["play", "playing", "volumechange"].forEach((eventName) => {
+  video.addEventListener(eventName, showPlayerChrome);
+});
+["pause", "waiting", "ended"].forEach((eventName) => {
+  video.addEventListener(eventName, keepPlayerChromeVisible);
+});
+showPlayerChrome();
+
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
@@ -1198,78 +1201,6 @@ if (!chatSid) {
     .map(b => b.toString(16).padStart(2, "0")).join("");
   localStorage.setItem("jetstream_chatsid", chatSid);
 }
-
-// ---- Emoji reactions --------------------------------------------------
-// Tap an emoji → it floats up over the video for everyone watching. Rides a
-// dedicated ephemeral feed (/reactions/recent), polled faster than chat for
-// responsiveness. Reuses chatSid so a client skips re-animating its own
-// reaction (it spawns that one optimistically on tap).
-const reactionLayer = document.getElementById("reaction-layer");
-const reactionBar = document.getElementById("reaction-bar");
-let reactionMaxId = 0;
-
-// Swap emoji text → Twemoji <img> so it renders on devices without a color-
-// emoji font (where it'd be a blank "tofu" circle). No-op if the CDN script
-// didn't load, leaving the plain emoji text in place.
-function twemojify(el) {
-  if (window.twemoji) {
-    try { twemoji.parse(el, { folder: "svg", ext: ".svg" }); } catch {}
-  }
-}
-
-function spawnReaction(emoji) {
-  const el = document.createElement("span");
-  el.className = "reaction-float";
-  el.textContent = emoji;
-  twemojify(el);
-  // Random horizontal start across the middle band so floats don't all stack.
-  el.style.left = (8 + Math.random() * 78) + "%";
-  el.addEventListener("animationend", () => el.remove());
-  reactionLayer.appendChild(el);
-  // Safety net in case animationend never fires (tab backgrounded mid-anim).
-  setTimeout(() => el.remove(), 3000);
-}
-
-async function sendReaction(emoji) {
-  spawnReaction(emoji); // optimistic — tapper sees it instantly
-  try {
-    await fetch("/reactions/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ emoji, sid: chatSid }),
-    });
-  } catch {}
-}
-
-function buildReactionBar(emojis) {
-  if (reactionBar.childElementCount) return; // build once
-  for (const e of emojis) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = e;
-    b.title = "React " + e;
-    twemojify(b);
-    b.addEventListener("click", () => sendReaction(e));
-    reactionBar.appendChild(b);
-  }
-}
-
-async function reactionPoll() {
-  try {
-    const r = await fetch("/reactions/recent?since=" + reactionMaxId);
-    if (!r.ok) return;
-    const j = await r.json();
-    if (Array.isArray(j.emojis) && j.emojis.length) buildReactionBar(j.emojis);
-    if (typeof j.max_id === "number") reactionMaxId = j.max_id;
-    if (Array.isArray(j.reactions)) {
-      for (const x of j.reactions) {
-        if (x.sid !== chatSid) spawnReaction(x.emoji); // skip our own echo
-      }
-    }
-  } catch {}
-}
-setInterval(reactionPoll, 1000);
-reactionPoll();
 
 // ---- Up-next queue (read-only) ----------------------------------------
 // Viewers see what's coming but can't touch it — adding/reordering stays on

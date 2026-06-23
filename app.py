@@ -32,6 +32,7 @@ TOKENS_FILE = Path(os.environ.get("TOKENS_FILE", "/data/tokens.json"))
 TOKEN_LEVELS = ("viewer", "friend")
 # Levels permitted to hit /api/control/* and load /controls.
 CONTROL_LEVELS = frozenset({"friend", "admin"})
+TOKEN_LAST_SEEN_SAVE_INTERVAL = 60
 PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
 RECENT_FILE = Path(os.environ.get("RECENT_FILE", "/data/recent.json"))
 RECENT_LIMIT = int(os.environ.get("RECENT_LIMIT", "50"))
@@ -44,6 +45,7 @@ REQUESTS_FILE = Path(os.environ.get("REQUESTS_FILE", "/data/requests.json"))
 REQUEST_TTL_SECS = 7 * 24 * 60 * 60  # 7 days
 SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", "/data/settings.json"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "/data/state.json"))
+STATE_SAVE_INTERVAL = float(os.environ.get("STATE_SAVE_INTERVAL", "5"))
 VIEWER_LOG_FILE = Path(os.environ.get("VIEWER_LOG_FILE", "/data/viewer_log.jsonl"))
 
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", "/media")).resolve()
@@ -69,9 +71,9 @@ AUDIO_BITRATE = os.environ.get("AUDIO_BITRATE", "160k")
 # keeps the encode cheap on CPU. Set to 2160 for 4K passthrough on capable
 # hardware; output still shrinks to source height when source is smaller.
 TARGET_HEIGHT = int(os.environ.get("TARGET_HEIGHT", "1080"))
-HLS_SEG_TIME = os.environ.get("HLS_SEG_TIME", "4")
-# 450 segments × 4s = 30 minutes of scroll-back buffer for admin.
-HLS_LIST_SIZE = os.environ.get("HLS_LIST_SIZE", "450")
+HLS_SEG_TIME = os.environ.get("HLS_SEG_TIME", "1")
+# 24 segments × 1s = 24s lookback, matching the low-latency player tuning.
+HLS_LIST_SIZE = os.environ.get("HLS_LIST_SIZE", "24")
 
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".webm", ".avi"}
 
@@ -191,21 +193,6 @@ chat_mutes: dict[str, float] = {}
 # show ids outside that window anyway).
 chat_deleted_ids: set[int] = set()
 
-# Emoji reactions — ephemeral floaty taps shown over everyone's video. Same
-# ring-buffer + poll shape as chat, but /reactions/recent only returns ones
-# from the last REACTION_RECENT_WINDOW seconds so a fresh poller animates each
-# reaction once and a late joiner doesn't get a backlog dumped on them.
-# The allowed set is fixed server-side so a client can't inject arbitrary
-# (or oversized) strings into everyone's overlay.
-REACTION_EMOJIS = ("😂", "❤️", "🔥", "😮", "👏", "💀")
-REACTION_BUFFER_SIZE = 100
-REACTION_RECENT_WINDOW = 6  # seconds of lookback in /reactions/recent
-REACTION_RATE_WINDOW = 10
-REACTION_RATE_MAX = 25      # per-IP reactions per window (spammy by nature)
-reactions_lock = threading.Lock()
-reactions = _collections.deque(maxlen=REACTION_BUFFER_SIZE)
-reaction_next_id = 1
-reaction_rate: dict[str, list[float]] = {}
 
 tokens_lock = threading.Lock()
 tokens: list[dict] = []
@@ -278,6 +265,24 @@ def _token_level(t: str | None) -> str | None:
         for x in tokens:
             if x["id"] == t:
                 return x.get("level", "viewer")
+    return None
+
+
+def _mark_token_seen(t: str | None, now: float | None = None) -> str | None:
+    """Record invite-token activity, throttling disk writes for hot HLS auth."""
+    if not t or t == ADMIN_TOKEN_ID:
+        return None
+    now = now or time.time()
+    with tokens_lock:
+        for x in tokens:
+            if x.get("id") != t:
+                continue
+            x["last_seen"] = now
+            last_saved = float(x.get("last_seen_saved") or 0)
+            if now - last_saved >= TOKEN_LAST_SEEN_SAVE_INTERVAL:
+                x["last_seen_saved"] = now
+                _save_tokens()
+            return x.get("label")
     return None
 
 
@@ -539,11 +544,7 @@ def _track_viewer():
     token = request.cookies.get(TOKEN_COOKIE) or request.args.get("t")
     label = None
     if token:
-        with tokens_lock:
-            for t in tokens:
-                if t.get("id") == token:
-                    label = t.get("label")
-                    break
+        label = _mark_token_seen(token)
     is_new = False
     with viewers_lock:
         if ip not in viewers:
@@ -911,6 +912,24 @@ def _current_position() -> float | None:
     if duration:
         pos = min(pos, duration)
     return pos
+
+
+def _state_snapshot_locked() -> dict | None:
+    """Return the recoverable playback state. Caller must hold state_lock."""
+    if current_source is None:
+        return None
+    if current_paused:
+        pos = paused_position
+    else:
+        pos = _current_position()
+        if pos is None:
+            pos = current_start_offset
+    return {
+        "source": current_source,
+        "position_seconds": max(0.0, float(pos or 0.0)),
+        "paused": current_paused,
+        "saved_at": time.time(),
+    }
 
 
 def _resolve_url(url: str) -> dict:
@@ -2037,30 +2056,22 @@ def _watcher():
     """Keep something playing: advance the queue, then auto-fill from the library
     if enabled. Triggered by ffmpeg exiting and also when fully idle (e.g. fresh
     startup or after admin stop)."""
-    tick = 0
+    last_state_save = 0.0
     while True:
         time.sleep(1)
-        tick += 1
         try:
             with state_lock:
                 proc = current_proc
                 paused = current_paused
                 # Build a snapshot of live globals while holding the lock; do the
                 # actual file write below, after we've dropped it.
-                snapshot = None
-                if current_source is not None:
-                    pos = _current_position()
-                    if pos is None and current_paused:
-                        pos = paused_position
-                    snapshot = {
-                        "source": current_source,
-                        "position_seconds": pos if pos is not None else 0.0,
-                        "paused": current_paused,
-                    }
+                snapshot = _state_snapshot_locked()
             # Still streaming — periodically persist position so a crash recovers near where we were.
             if proc is not None and proc.poll() is None:
-                if tick % 10 == 0 and snapshot is not None:
+                now = time.time()
+                if snapshot is not None and now - last_state_save >= STATE_SAVE_INTERVAL:
                     _save_state(snapshot)
+                    last_state_save = now
                 # Try to kick off the next item's ffmpeg ahead of the current
                 # source's EOF. _start_preroll_locked is a cheap no-op when
                 # already pre-rolled or not yet near the end; the work only
@@ -2081,11 +2092,7 @@ def _watcher():
                         continue
                     if _promote_preroll_locked():
                         # Snapshot the new current source for state persistence.
-                        promote_snap = {
-                            "source": current_source,
-                            "position_seconds": 0.0,
-                            "paused": False,
-                        }
+                        promote_snap = _state_snapshot_locked()
                     else:
                         promote_snap = None
                 if promote_snap is not None:
@@ -2197,11 +2204,7 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
         current_start_time = time.time()
         current_paused = False
         paused_position = 0.0
-        snapshot = {
-            "source": current_source,
-            "position_seconds": current_start_offset,
-            "paused": False,
-        }
+        snapshot = _state_snapshot_locked()
     # New item playing — wipe any skip votes from the last one.
     with skip_votes_lock:
         skip_votes.clear()
@@ -2263,6 +2266,7 @@ def _gate_viewer_routes():
         # so a friend link lands straight on /controls with the cookie set.
         qs_t = request.args.get("t")
         if p == "/controls" and qs_t and _token_level(qs_t) in CONTROL_LEVELS:
+            _mark_token_seen(qs_t)
             resp = redirect(p)
             resp.set_cookie(
                 TOKEN_COOKIE, qs_t,
@@ -2271,17 +2275,18 @@ def _gate_viewer_routes():
             )
             return resp
         if _caller_can_control():
+            _mark_token_seen(request.cookies.get(TOKEN_COOKIE))
             return None
         if p == "/controls":
             return NO_TOKEN_PAGE, 401
         return ("", 403)
-    with settings_lock:
-        if settings.get("viewer_public"):
-            return None  # public mode — anyone can watch
-    if _valid_token(request.cookies.get(TOKEN_COOKIE)):
+    cookie_t = request.cookies.get(TOKEN_COOKIE)
+    if _valid_token(cookie_t):
+        _mark_token_seen(cookie_t)
         return None
     qs_t = request.args.get("t")
     if _valid_token(qs_t):
+        _mark_token_seen(qs_t)
         resp = redirect(p)
         resp.set_cookie(
             TOKEN_COOKIE, qs_t,
@@ -2289,6 +2294,9 @@ def _gate_viewer_routes():
             httponly=True, secure=True, samesite="Lax",
         )
         return resp
+    with settings_lock:
+        if settings.get("viewer_public"):
+            return None  # public mode — anyone can watch
     if p == "/":
         return NO_TOKEN_PAGE, 401
     return ("", 401)
@@ -2465,62 +2473,6 @@ def api_chat_mute():
         until = time.time() + seconds
         chat_mutes[sid] = until
     return jsonify({"ok": True, "muted": True, "until": until, "seconds": seconds})
-
-
-def _reaction_rate_check(ip: str) -> bool:
-    """Per-IP token-bucket-ish check, same shape as _chat_rate_check but with
-    its own (more permissive) limits. True if allowed; records the timestamp."""
-    now = time.time()
-    cutoff = now - REACTION_RATE_WINDOW
-    with reactions_lock:
-        ts = [t for t in reaction_rate.get(ip, []) if t > cutoff]
-        if len(ts) >= REACTION_RATE_MAX:
-            reaction_rate[ip] = ts
-            return False
-        ts.append(now)
-        reaction_rate[ip] = ts
-        return True
-
-
-@app.route("/reactions/send", methods=["POST"])
-def api_reaction_send():
-    """Append an emoji reaction to the ephemeral ring. `emoji` must be one of
-    REACTION_EMOJIS; `sid` is the same opaque client tag chat uses (so a client
-    can skip re-animating its own reaction). Per-IP rate-limited."""
-    data = request.get_json(silent=True) or {}
-    emoji = (data.get("emoji") or "").strip()
-    if emoji not in REACTION_EMOJIS:
-        return jsonify({"error": "unknown emoji"}), 400
-    if not _reaction_rate_check(_client_ip()):
-        return jsonify({"error": "rate limited"}), 429
-    sid = (data.get("sid") or "").strip()[:32] or "anon"
-    global reaction_next_id
-    with reactions_lock:
-        r = {"id": reaction_next_id, "ts": time.time(), "emoji": emoji, "sid": sid}
-        reaction_next_id += 1
-        reactions.append(r)
-    return jsonify({"ok": True, "id": r["id"]})
-
-
-@app.route("/reactions/recent")
-def api_reaction_recent():
-    """Reactions with id > `since` AND newer than REACTION_RECENT_WINDOW. The
-    recency filter keeps this an ephemeral feed — clients animate each reaction
-    once and late joiners don't get a backlog."""
-    try:
-        since = int(request.args.get("since", 0))
-    except ValueError:
-        since = 0
-    fresh = time.time() - REACTION_RECENT_WINDOW
-    with reactions_lock:
-        out = [r for r in reactions if r["id"] > since and r["ts"] >= fresh]
-        max_id = reactions[-1]["id"] if reactions else since
-        # Same dead-entry sweep as /chat/recent — keeps reaction_rate bounded
-        # to IPs that actually reacted within the last window.
-        cutoff = time.time() - REACTION_RATE_WINDOW
-        for ip in [k for k, ts in reaction_rate.items() if not any(t > cutoff for t in ts)]:
-            del reaction_rate[ip]
-    return jsonify({"reactions": out, "max_id": max_id, "emojis": list(REACTION_EMOJIS)})
 
 
 def _request_rate_check(ip: str) -> bool:
@@ -2740,6 +2692,7 @@ def api_list_tokens():
             {
                 "id": t["id"], "label": t["label"], "created": t.get("created"),
                 "level": t.get("level", "viewer"),
+                "last_seen": t.get("last_seen"),
             }
             for t in tokens
             if t.get("id") != ADMIN_TOKEN_ID
@@ -3258,11 +3211,7 @@ def api_pause():
             finished_run_ids.add(active_run_id)
             active_run_id = None
         current_paused = True
-        snapshot = {
-            "source": current_source,
-            "position_seconds": paused_position,
-            "paused": True,
-        }
+        snapshot = _state_snapshot_locked()
     _save_state(snapshot)
     return jsonify({"ok": True, "paused": True, "position_seconds": paused_position})
 

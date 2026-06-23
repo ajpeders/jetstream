@@ -20,7 +20,7 @@ services:
       USE_VAAPI_DECODE: ${USE_VAAPI_DECODE:-0}
       VAAPI_DEVICE: ${VAAPI_DEVICE:-/dev/dri/renderD128}
       USE_NVENC: ${USE_NVENC:-0}
-      VIDEO_BITRATE: ${VIDEO_BITRATE:-5M}
+      VIDEO_BITRATE: ${VIDEO_BITRATE:-3M}
       AUDIO_BITRATE: ${AUDIO_BITRATE:-160k}
       # Subtitle burn-in. ON by default — backed by the cache-extract sidecar
       # (state/jetstream/subs/<hash>.srt) so the libass `subtitles=` filter no
@@ -40,11 +40,11 @@ services:
       # `-preset veryfast`. If this drifts upward again, retune the player
       # constants in viewer.html in lockstep — otherwise the snap loop fights
       # hls.js's buffer (playback choppy / desync on every browser).
-      HLS_SEG_TIME: ${HLS_SEG_TIME:-1}
+      HLS_SEG_TIME: ${HLS_SEG_TIME:-4}
       # Live playlist window: 24×1s = 24s lookback. Short enough that Hls.js
       # / Safari can't pick a start position deep in scroll-back; long enough
       # that a hiccup doesn't drop a viewer outside the manifest.
-      HLS_LIST_SIZE: ${HLS_LIST_SIZE:-24}
+      HLS_LIST_SIZE: ${HLS_LIST_SIZE:-12}
     volumes:
       - ${JETSTREAM_MEDIA_PATH:-/home/ween/share/media}:/media:ro
       - ../../state/jetstream:/data
