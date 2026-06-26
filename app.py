@@ -17,6 +17,14 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, redirect, request, send_from_directory
 
 VIEWER_TIMEOUT = 30  # seconds without an HLS request → viewer dropped
+# Continuous-watch session cap. A viewer streaming for longer than this is
+# dropped: their /hls auth subrequest starts returning 403 so the player
+# stalls, and /api/status flags `session_expired` so the page can explain it.
+# A fresh session (a reload after the idle-timeout prune, or a new tab) starts
+# the clock over — this reclaims forgotten/abandoned tabs, it isn't a ban.
+# Set VIEWER_MAX_SESSION_HOURS=0 in compose to disable.
+VIEWER_MAX_SESSION_HOURS = float(os.environ.get("VIEWER_MAX_SESSION_HOURS", "8"))
+VIEWER_MAX_SESSION_SECS = VIEWER_MAX_SESSION_HOURS * 3600 if VIEWER_MAX_SESSION_HOURS > 0 else 0
 TOKEN_COOKIE = "lt"
 TOKEN_COOKIE_MAX_AGE = 60 * 60 * 24 * 90  # 90 days
 # Stable token id used to grant the admin viewer access. Reaching the admin
@@ -37,6 +45,24 @@ PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
 RECENT_FILE = Path(os.environ.get("RECENT_FILE", "/data/recent.json"))
 RECENT_LIMIT = int(os.environ.get("RECENT_LIMIT", "50"))
 REQUESTS_FILE = Path(os.environ.get("REQUESTS_FILE", "/data/requests.json"))
+# Viewer bug reports. Kept until the host deletes them (no TTL — an unhandled
+# report shouldn't vanish on its own), but the pile is capped to the newest
+# REPORT_MAX so a misbehaving client can't grow it unbounded. Shaped as
+# agent-readable JSON so a watcher can poll, triage, and write back later.
+REPORTS_FILE = Path(os.environ.get("REPORTS_FILE", "/data/reports.json"))
+REPORT_MAX = int(os.environ.get("REPORT_MAX", "500"))
+REPORT_RATE_WINDOW = 300    # seconds
+REPORT_RATE_MAX = 5         # per-IP reports per window (reports are low-frequency)
+# Custom viewer-uploaded emoji reactions. Image files live under REACTIONS_DIR;
+# their metadata (id, file, label, uploader) is a JSON sidecar so the set
+# survives restarts. Strict caps because this is a viewer-writable surface:
+# bounded count, bounded size, allowed image types only.
+REACTIONS_DIR = Path(os.environ.get("REACTIONS_DIR", "/data/reactions"))
+CUSTOM_REACTIONS_FILE = Path(os.environ.get("CUSTOM_REACTIONS_FILE", "/data/reactions.json"))
+CUSTOM_REACTION_MAX = int(os.environ.get("CUSTOM_REACTION_MAX", "40"))   # total set size
+CUSTOM_REACTION_MAX_BYTES = int(os.environ.get("CUSTOM_REACTION_MAX_BYTES", str(512 * 1024)))
+CUSTOM_REACTION_UPLOAD_WINDOW = 600   # seconds
+CUSTOM_REACTION_UPLOAD_MAX = 5        # uploads per IP per window
 # Pending viewer "request to queue" entries auto-expire after this many seconds
 # if the host hasn't approved or denied them. Without this the list grows
 # forever (the only way it shrinks is explicit host action), and a friend who
@@ -50,6 +76,8 @@ VIEWER_LOG_FILE = Path(os.environ.get("VIEWER_LOG_FILE", "/data/viewer_log.jsonl
 
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", "/media")).resolve()
 HLS_DIR = Path(os.environ.get("HLS_DIR", "/hls")).resolve()
+VIEWER_LIBRARY_ROOTS_RAW = os.environ.get("VIEWER_LIBRARY_ROOTS", "Movies=movies,TV Shows=tv")
+VIEWER_SEASON_MARKER = "__season__"
 VAAPI_DEVICE = os.environ.get("VAAPI_DEVICE", "/dev/dri/renderD128")
 USE_VAAPI = os.environ.get("USE_VAAPI", "1") == "1"
 USE_VAAPI_DECODE = os.environ.get("USE_VAAPI_DECODE", "1") == "1"
@@ -74,6 +102,33 @@ TARGET_HEIGHT = int(os.environ.get("TARGET_HEIGHT", "1080"))
 HLS_SEG_TIME = os.environ.get("HLS_SEG_TIME", "1")
 # 24 segments × 1s = 24s lookback, matching the low-latency player tuning.
 HLS_LIST_SIZE = os.environ.get("HLS_LIST_SIZE", "24")
+
+STREAM_QUALITY_PRESETS = {
+    "default": {
+        "label": "Default",
+        "height": TARGET_HEIGHT,
+        "video_bitrate": VIDEO_BITRATE,
+        "bufsize": "10M",
+    },
+    "high": {
+        "label": "1080p High",
+        "height": 1080,
+        "video_bitrate": "5M",
+        "bufsize": "10M",
+    },
+    "balanced": {
+        "label": "720p Balanced",
+        "height": 720,
+        "video_bitrate": "2500k",
+        "bufsize": "5M",
+    },
+    "data_saver": {
+        "label": "480p Data Saver",
+        "height": 480,
+        "video_bitrate": "1200k",
+        "bufsize": "2400k",
+    },
+}
 
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".webm", ".avi"}
 
@@ -167,6 +222,10 @@ viewers: dict[str, float] = {}
 # token. Refreshed on every request that resolves a label so a friend who
 # revokes/rotates their token sees the change reflected in the admin list.
 viewer_labels: dict[str, str | None] = {}
+# Parallel to `viewers`: ip -> wall-clock time the current continuous session
+# began. Set when an ip first appears (or reappears after the idle prune) and
+# cleared alongside `viewers` when it ages out. Drives VIEWER_MAX_SESSION_SECS.
+viewer_session_start: dict[str, float] = {}
 
 # Anonymous live chat. In-memory only — survives no restarts (per roadmap).
 # Each viewer's tab generates its own opaque session id (`sid`) client-side
@@ -193,6 +252,35 @@ chat_mutes: dict[str, float] = {}
 # show ids outside that window anyway).
 chat_deleted_ids: set[int] = set()
 
+# Emoji reactions — ephemeral floaty taps shown over everyone's video. Same
+# ring-buffer + poll shape as chat, but /reactions/recent only returns ones
+# from the last REACTION_RECENT_WINDOW seconds so a fresh poller animates each
+# reaction once and a late joiner doesn't get a backlog dumped on them.
+# The built-in set is fixed server-side so a client can't inject arbitrary
+# strings into everyone's overlay; custom reactions are referenced by id and
+# resolved against the validated custom-reaction set (see custom_reactions).
+# The "quick" reactions the in-player tap bar shows. The panel picker isn't
+# limited to these — viewers can react with ANY emoji (see _is_emoji); this is
+# just the fast set surfaced over the video.
+REACTION_EMOJIS = ("😂", "❤️", "🔥", "😮", "👏", "💀")
+REACTION_BUFFER_SIZE = 100
+REACTION_RECENT_WINDOW = 6  # seconds of lookback in /reactions/recent
+REACTION_RATE_WINDOW = 10
+REACTION_RATE_MAX = 25      # per-IP reactions per window (spammy by nature)
+reactions_lock = threading.Lock()
+reactions = _collections.deque(maxlen=REACTION_BUFFER_SIZE)
+reaction_next_id = 1
+reaction_rate: dict[str, list[float]] = {}
+
+# Custom viewer-uploaded reactions. Each entry:
+#   {"id": int, "file": str, "mime": str, "label": str|None,
+#    "sid": str, "ip": str, "ts": float}
+# `file` is a content-hashed name under REACTIONS_DIR (never the client's).
+custom_reactions_lock = threading.Lock()
+custom_reactions: list[dict] = []
+custom_reaction_next_id = 1
+custom_reaction_upload_rate: dict[str, list[float]] = {}
+
 
 tokens_lock = threading.Lock()
 tokens: list[dict] = []
@@ -214,6 +302,13 @@ media_requests: list[dict] = []
 request_next_id = 1
 # IP -> [timestamps within REQUEST_RATE_WINDOW]. Pruned lazily on each request.
 request_rate: dict[str, list[float]] = {}
+
+# Viewer bug reports — same persisted-list shape as media_requests.
+reports_lock = threading.Lock()
+reports: list[dict] = []
+report_next_id = 1
+# IP -> [timestamps within REPORT_RATE_WINDOW]. Pruned lazily on each report.
+report_rate: dict[str, list[float]] = {}
 
 
 def _warn_state_load_failed(name: str, path: Path, err: Exception) -> None:
@@ -265,6 +360,20 @@ def _token_level(t: str | None) -> str | None:
         for x in tokens:
             if x["id"] == t:
                 return x.get("level", "viewer")
+    return None
+
+
+def _token_label(t: str | None) -> str | None:
+    """Human label for a token id, or None if unknown. The admin pseudo-token
+    reports as "admin"; real invite tokens return their host-assigned label."""
+    if not t:
+        return None
+    if t == ADMIN_TOKEN_ID:
+        return "admin"
+    with tokens_lock:
+        for x in tokens:
+            if x["id"] == t:
+                return x.get("label")
     return None
 
 
@@ -392,8 +501,121 @@ def _expire_old_requests() -> int:
     return expired
 
 
+def _load_reports():
+    global reports, report_next_id
+    if REPORTS_FILE.exists():
+        try:
+            reports = json.loads(REPORTS_FILE.read_text())
+            report_next_id = max((r.get("id", 0) for r in reports), default=0) + 1
+            return
+        except Exception as e:
+            _warn_state_load_failed("reports", REPORTS_FILE, e)
+    reports = []
+
+
+def _save_reports():
+    REPORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REPORTS_FILE.write_text(json.dumps(reports, indent=2))
+
+
+def _load_custom_reactions():
+    global custom_reactions, custom_reaction_next_id
+    if CUSTOM_REACTIONS_FILE.exists():
+        try:
+            loaded = json.loads(CUSTOM_REACTIONS_FILE.read_text())
+            # Drop entries whose backing image vanished (manual cleanup, restore
+            # gaps) so the bar never points at a 404.
+            custom_reactions = [r for r in loaded if (REACTIONS_DIR / r.get("file", "")).exists()]
+            custom_reaction_next_id = max((r.get("id", 0) for r in custom_reactions), default=0) + 1
+            return
+        except Exception as e:
+            _warn_state_load_failed("custom_reactions", CUSTOM_REACTIONS_FILE, e)
+    custom_reactions = []
+
+
+def _save_custom_reactions():
+    CUSTOM_REACTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CUSTOM_REACTIONS_FILE.write_text(json.dumps(custom_reactions, indent=2))
+
+
+# Magic-byte sniff → (extension, mime). We don't trust the client's
+# Content-Type or filename: only these four raster types are accepted, and the
+# stored name is derived from the content hash, never from the upload.
+def _sniff_image(data: bytes) -> tuple[str, str] | None:
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ("png", "image/png")
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return ("gif", "image/gif")
+    if data[:3] == b"\xff\xd8\xff":
+        return ("jpg", "image/jpeg")
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ("webp", "image/webp")
+    return None
+
+
+def _iso_now() -> str:
+    """UTC ISO-8601 timestamp (no microseconds) — the human/agent-readable
+    twin of the float `ts`, so a triage agent doesn't have to convert."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _coerce_float(v):
+    try:
+        return round(float(v), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stream_health_snapshot() -> dict:
+    """Compact, agent-readable snapshot of what the encoder/stream were doing,
+    attached to a bug report so a watcher agent can correlate the report
+    against server state without re-deriving it. No external probes — every
+    field is O(small)."""
+    with state_lock:
+        proc = current_proc
+        source = current_source
+        start_time = current_start_time
+        paused = current_paused
+        run_id = active_run_id
+        running = proc is not None and proc.poll() is None
+        position = _current_position(running=running)
+    uptime = (time.time() - start_time) if (running and start_time > 0) else None
+    segments = 0
+    try:
+        for d in RUN_DIR_BASE.iterdir():
+            if d.is_dir():
+                for f in d.iterdir():
+                    if f.suffix == ".m4s":
+                        segments += 1
+    except FileNotFoundError:
+        pass
+    return {
+        "ffmpeg_alive": running,
+        "ffmpeg_uptime_seconds": round(uptime, 1) if uptime is not None else None,
+        "active_run_id": run_id,
+        "segments_on_disk": segments,
+        "viewers": _viewer_count(),
+        "paused": paused,
+        "source_type": (source or {}).get("type"),
+        "is_live": (source or {}).get("is_live", False),
+        "title": (source or {}).get("title"),
+        "path": (source or {}).get("ref"),
+        "server_position_seconds": round(position, 1) if position is not None else None,
+        "duration_seconds": (source or {}).get("duration"),
+        # Which encode branch is live, so triage knows where to look.
+        "encoder": "nvenc" if USE_NVENC else ("vaapi" if USE_VAAPI else "libx264"),
+        "stream_quality": _stream_quality_key(),
+        "hls_seg_time": HLS_SEG_TIME,
+        "subtitles": SUBTITLE_BURN_IN,
+    }
+
+
 settings_lock = threading.Lock()
-settings: dict = {"viewer_public": False, "auto_fill": True}
+settings: dict = {
+    "viewer_public": False,
+    "auto_fill": True,
+    "stream_quality": "default",
+}
 
 
 def _load_settings():
@@ -410,6 +632,16 @@ def _load_settings():
 def _save_settings():
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
+
+
+def _stream_quality_key() -> str:
+    with settings_lock:
+        key = settings.get("stream_quality", "default")
+    return key if key in STREAM_QUALITY_PRESETS else "default"
+
+
+def _stream_quality_preset() -> dict:
+    return STREAM_QUALITY_PRESETS[_stream_quality_key()]
 
 
 def _save_state(snapshot: dict | None):
@@ -447,6 +679,8 @@ _load_tokens()
 _load_playlist()
 _load_recent()
 _load_requests()
+_load_reports()
+_load_custom_reactions()
 _load_settings()
 
 
@@ -549,6 +783,7 @@ def _track_viewer():
     with viewers_lock:
         if ip not in viewers:
             is_new = True
+            viewer_session_start[ip] = time.time()
         viewers[ip] = time.time()
         viewer_labels[ip] = label
     if is_new:
@@ -575,6 +810,7 @@ def _viewer_count() -> int:
         for ip in stale:
             del viewers[ip]
             viewer_labels.pop(ip, None)
+            viewer_session_start.pop(ip, None)
         count = len(viewers)
     # Print AFTER releasing the lock — stderr writes can block briefly and
     # we don't want to hold the (hot-path) lock over them.
@@ -582,6 +818,16 @@ def _viewer_count() -> int:
         print(f"[viewer] disconnect ip={ip} (idle > {VIEWER_TIMEOUT}s)",
               file=sys.stderr, flush=True)
     return count
+
+
+def _viewer_session_expired(ip: str) -> bool:
+    """True if this ip's continuous session has run past VIEWER_MAX_SESSION_SECS.
+    Cheap dict read — safe to call on the hot /hls auth path."""
+    if not VIEWER_MAX_SESSION_SECS:
+        return False
+    with viewers_lock:
+        start = viewer_session_start.get(ip)
+    return start is not None and (time.time() - start) >= VIEWER_MAX_SESSION_SECS
 
 
 def _safe_resolve(rel: str, must_be_dir: bool = False, must_be_file: bool = False) -> Path:
@@ -612,8 +858,160 @@ def _list_dir(rel: str):
                 "type": "file",
                 "size": entry.stat().st_size,
             })
-    items.sort(key=lambda i: (i["type"] != "directory", i["name"].lower()))
+    items.sort(key=lambda i: (i["type"] != "directory", _natural_sort_key(i["name"])))
     return items
+
+
+def _natural_sort_key(value: str):
+    """Case-insensitive natural sort: Season 2 before Season 10, S01E02
+    before S01E10. Used by browse UIs where plain lexicographic order makes
+    TV folders hard to scan."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", value or "")]
+
+
+def _viewer_library_roots() -> list[dict]:
+    """Viewer-facing library roots from VIEWER_LIBRARY_ROOTS.
+
+    Format: "Label=relative/path,Other Label=other/path". Missing labels fall
+    back to the basename. Only existing directories under MEDIA_ROOT are
+    exposed. Admin/control browse is intentionally unaffected."""
+    roots = []
+    seen = set()
+    for raw in VIEWER_LIBRARY_ROOTS_RAW.split(","):
+        part = raw.strip()
+        if not part:
+            continue
+        if "=" in part:
+            label, rel = part.split("=", 1)
+            label = label.strip()
+            rel = rel.strip().strip("/")
+        else:
+            rel = part.strip().strip("/")
+            label = Path(rel).name or rel
+        if not rel or rel in seen:
+            continue
+        try:
+            target = _safe_resolve(rel, must_be_dir=True)
+        except Exception:
+            continue
+        seen.add(rel)
+        roots.append({
+            "name": label or target.name,
+            "path": str(target.relative_to(MEDIA_ROOT)),
+            "type": "directory",
+            "viewer_root": True,
+        })
+    return roots
+
+
+def _viewer_path_allowed(rel: str) -> bool:
+    rel = (rel or "").strip("/")
+    roots = [r["path"].strip("/") for r in _viewer_library_roots()]
+    if not roots:
+        return False
+    if not rel:
+        return True
+    return any(rel == root or rel.startswith(root + "/") for root in roots)
+
+
+def _viewer_library_files() -> list[Path]:
+    roots = _viewer_library_roots()
+    if not roots:
+        return []
+    allowed = tuple(r["path"].strip("/") for r in roots)
+    files = []
+    for p in _scan_library():
+        try:
+            rel = str(p.relative_to(MEDIA_ROOT))
+        except ValueError:
+            continue
+        if any(rel == root or rel.startswith(root + "/") for root in allowed):
+            files.append(p)
+    return files
+
+
+def _viewer_tv_root_paths() -> set[str]:
+    roots = set()
+    for root in _viewer_library_roots():
+        rel = root["path"].strip("/")
+        label = (root.get("name") or "").lower()
+        basename = Path(rel).name.lower()
+        if basename in {"tv", "shows", "series"} or "tv" in label or "show" in label:
+            roots.add(rel)
+    return roots
+
+
+def _viewer_is_tv_show_path(rel: str) -> bool:
+    rel = (rel or "").strip("/")
+    for root in _viewer_tv_root_paths():
+        prefix = root + "/"
+        if rel.startswith(prefix):
+            rest = rel[len(prefix):]
+            return bool(rest) and "/" not in rest
+    return False
+
+
+def _season_number_from_name(name: str) -> int | None:
+    text = name or ""
+    match = re.search(r"\b[Ss](\d{1,3})[Ee]\d{1,3}\b", text)
+    if not match:
+        match = re.search(r"\bSeason[ ._-]*(\d{1,3})\b", text, flags=re.I)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _season_label(season: int) -> str:
+    return "Specials" if season == 0 else f"Season {season}"
+
+
+def _viewer_virtual_season_path(show_rel: str, season: int) -> str:
+    return f"{show_rel.strip('/')}/{VIEWER_SEASON_MARKER}/{season}"
+
+
+def _viewer_parse_virtual_season(rel: str) -> tuple[str, int] | None:
+    rel = (rel or "").strip("/")
+    marker = f"/{VIEWER_SEASON_MARKER}/"
+    if marker not in rel:
+        return None
+    show_rel, season_raw = rel.rsplit(marker, 1)
+    if not show_rel or "/" in season_raw or not _viewer_is_tv_show_path(show_rel):
+        return None
+    try:
+        season = int(season_raw)
+    except ValueError:
+        return None
+    return show_rel, season
+
+
+def _viewer_group_tv_show_items(show_rel: str, items: list[dict]) -> list[dict]:
+    seasons = set()
+    loose_files = []
+    directories = []
+    for item in items:
+        if item["type"] == "directory":
+            directories.append(item)
+            continue
+        season = _season_number_from_name(item["name"])
+        if season is None:
+            loose_files.append(item)
+        else:
+            seasons.add(season)
+    if not seasons:
+        return items
+    grouped = [
+        {
+            "name": _season_label(season),
+            "path": _viewer_virtual_season_path(show_rel, season),
+            "type": "directory",
+            "virtual_season": season,
+        }
+        for season in sorted(seasons)
+    ]
+    return grouped + directories + loose_files
 
 
 def _search_library(query: str, limit: int = 300) -> tuple[list[dict], bool]:
@@ -643,6 +1041,57 @@ def _search_library(query: str, limit: int = 300) -> tuple[list[dict], bool]:
             "size": size,
         })
     return items, truncated
+
+
+def _search_viewer_library(query: str, limit: int = 300) -> tuple[list[dict], bool]:
+    terms = [t for t in query.lower().split() if t]
+    if not terms:
+        return [], False
+    matched = [
+        p for p in _viewer_library_files()
+        if all(t in str(p.relative_to(MEDIA_ROOT)).lower() for t in terms)
+    ]
+    matched.sort(key=lambda p: p.name.lower())
+    truncated = len(matched) > limit
+    items = []
+    for p in matched[:limit]:
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = None
+        items.append({
+            "name": p.name,
+            "path": str(p.relative_to(MEDIA_ROOT)),
+            "type": "file",
+            "size": size,
+        })
+    return items, truncated
+
+
+def _viewer_list_dir(rel: str):
+    rel = (rel or "").strip("/")
+    if not rel:
+        return _viewer_library_roots()
+    virtual_season = _viewer_parse_virtual_season(rel)
+    if virtual_season:
+        show_rel, season = virtual_season
+        if not _viewer_path_allowed(show_rel):
+            abort(404)
+        return [
+            item for item in _list_dir(show_rel)
+            if item["type"] == "file" and _season_number_from_name(item["name"]) == season
+        ]
+    if not _viewer_path_allowed(rel):
+        abort(404)
+    items = _list_dir(rel)
+    if _viewer_is_tv_show_path(rel):
+        return _viewer_group_tv_show_items(rel, items)
+    return items
+
+
+def _viewer_file_allowed(rel: str) -> bool:
+    rel = (rel or "").strip("/")
+    return bool(rel) and VIEWER_SEASON_MARKER not in rel.split("/") and _viewer_path_allowed(rel)
 
 
 def _cleanup_hls():
@@ -1468,9 +1917,13 @@ def _build_ffmpeg_cmd(
     src_codec = info.get("codec")
     src_height = info.get("height")
     is_hdr = bool(info.get("is_hdr"))
+    quality = _stream_quality_preset()
+    target_height = int(quality["height"])
+    video_bitrate = str(quality["video_bitrate"])
+    video_bufsize = str(quality["bufsize"])
     # Output height: clamp to TARGET_HEIGHT, but don't upscale a smaller source
     # (a 720p WEB-DL has nothing to gain from being upscaled to 1080p, just CPU).
-    out_h = min(src_height, TARGET_HEIGHT) if src_height else TARGET_HEIGHT
+    out_h = min(src_height, target_height) if src_height else target_height
     # Decide whether the GPU can decode this source; falls back to CPU decode
     # for codecs the iHD VLD engine doesn't support (e.g. AV1) or if ffprobe fails.
     # HDR sources go through CPU decode unconditionally — the HW path can't
@@ -1618,9 +2071,9 @@ def _build_ffmpeg_cmd(
             "-preset", "p4",
             "-tune", "ll",
             "-rc", "cbr",
-            "-b:v", VIDEO_BITRATE,
-            "-maxrate", VIDEO_BITRATE,
-            "-bufsize", "10M",
+            "-b:v", video_bitrate,
+            "-maxrate", video_bitrate,
+            "-bufsize", video_bufsize,
             "-profile:v", "main",
             "-g", str(gop),
             "-forced-idr", "1",
@@ -1731,7 +2184,7 @@ def _build_ffmpeg_cmd(
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-tune", "zerolatency",
-            "-b:v", VIDEO_BITRATE,
+            "-b:v", video_bitrate,
             "-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_TIME})",
             "-color_range", "tv",
             "-colorspace", "bt709",
@@ -2324,10 +2777,26 @@ def api_authcheck():
         public = settings.get("viewer_public")
     if not public and not _valid_token(request.cookies.get(TOKEN_COOKIE)):
         return ("", 401)
+    # Continuous-watch cap: a session past the limit gets its segments cut off.
+    # Checked before _track_viewer so an expired session stops refreshing its
+    # last-seen and ages out of the viewer list, letting a reload start fresh.
+    if _viewer_session_expired(_client_ip()):
+        return ("", 403)
     # Authorized — log this viewer activity. Idempotent: updates the timestamp
     # for known IPs and only emits a connect-log on the very first sighting.
     _track_viewer()
     return ("", 204)
+
+
+@app.route("/api/session/continue", methods=["POST"])
+def api_session_continue():
+    """Reset the caller's continuous-watch clock — the "keep watching" action
+    behind the session-cap overlay. The cap exists to reclaim abandoned tabs;
+    a viewer actively asking to continue is the opposite of abandoned, so we
+    honor it and start their 8h over. Viewer-gated by the route gate."""
+    with viewers_lock:
+        viewer_session_start[_client_ip()] = time.time()
+    return jsonify({"ok": True})
 
 
 def _chat_rate_check(ip: str) -> bool:
@@ -2481,6 +2950,231 @@ def api_chat_mute():
     return jsonify({"ok": True, "muted": True, "until": until, "seconds": seconds})
 
 
+# ---- Emoji reactions --------------------------------------------------------
+# Codepoint ranges that count as emoji (or emoji modifiers / joiners). Generous
+# on purpose: the goal is to reject arbitrary text/markup and oversized
+# payloads, not to perfectly enumerate Unicode. A stray symbol slipping through
+# is harmless — the client renders reactions via textContent, never innerHTML.
+_EMOJI_RANGES = (
+    (0x1F000, 0x1FAFF),  # the big pictograph / emoji / supplemental blocks
+    (0x2600, 0x27BF),    # misc symbols + dingbats
+    (0x2B00, 0x2BFF),    # stars, extra arrows
+    (0x2190, 0x21FF),    # arrows
+    (0x2300, 0x23FF),    # misc technical (⌚ ⏳ ⏩ …)
+    (0x2460, 0x24FF),    # enclosed alphanumerics (Ⓜ …)
+    (0x25A0, 0x25FF),    # geometric shapes (▶ ● …)
+    (0x200D, 0x200D),    # zero-width joiner (ZWJ sequences)
+    (0xFE00, 0xFE0F),    # variation selectors
+    (0x20D0, 0x20FF),    # combining marks for symbols (keycap 20E3)
+    (0x00A9, 0x00AE),    # © ®
+    (0x2122, 0x2122),    # ™
+    (0x2139, 0x2139),    # ℹ
+)
+
+
+def _is_emoji(s: str) -> bool:
+    """True if `s` is a short emoji (single emoji or a ZWJ/modifier sequence).
+    Bounds length and restricts codepoints to the emoji-ish ranges above so a
+    direct caller can't push arbitrary text into everyone's reaction overlay."""
+    if not s or len(s) > 12:
+        return False
+    saw_pictograph = False
+    for ch in s:
+        cp = ord(ch)
+        if not any(lo <= cp <= hi for lo, hi in _EMOJI_RANGES):
+            return False
+        if cp >= 0x1F000 or 0x2600 <= cp <= 0x27BF or 0x2B00 <= cp <= 0x2BFF \
+                or 0x2190 <= cp <= 0x21FF or 0x2300 <= cp <= 0x23FF \
+                or 0x25A0 <= cp <= 0x25FF or 0x2460 <= cp <= 0x24FF:
+            saw_pictograph = True
+    # Require at least one real pictograph so a lone ZWJ / variation selector
+    # doesn't register as a reaction.
+    return saw_pictograph
+
+
+def _reaction_rate_check(ip: str) -> bool:
+    """Per-IP token-bucket-ish check, same shape as _chat_rate_check but with
+    its own (more permissive) limits. True if allowed; records the timestamp."""
+    now = time.time()
+    cutoff = now - REACTION_RATE_WINDOW
+    with reactions_lock:
+        ts = [t for t in reaction_rate.get(ip, []) if t > cutoff]
+        if len(ts) >= REACTION_RATE_MAX:
+            reaction_rate[ip] = ts
+            return False
+        ts.append(now)
+        reaction_rate[ip] = ts
+        return True
+
+
+def _custom_reactions_public() -> list[dict]:
+    """The viewer-facing view of the custom set: id + image url + label."""
+    with custom_reactions_lock:
+        return [
+            {"id": r["id"], "url": f"/reactions/img/{r['id']}", "label": r.get("label")}
+            for r in custom_reactions
+        ]
+
+
+@app.route("/reactions/send", methods=["POST"])
+def api_reaction_send():
+    """Append a reaction to the ephemeral ring. The reaction is either an
+    `emoji` (ANY emoji — not limited to the quick set — gated by _is_emoji so a
+    client can't inject arbitrary text/markup) or a `custom_id` referencing a
+    validated custom reaction. `sid` is the same opaque client tag chat uses so
+    a client can skip re-animating its own reaction. Per-IP rate-limited."""
+    data = request.get_json(silent=True) or {}
+    emoji = (data.get("emoji") or "").strip()
+    custom_id = data.get("custom_id")
+    rec = {"id": None, "ts": time.time(), "sid": (data.get("sid") or "").strip()[:32] or "anon"}
+    if custom_id is not None:
+        with custom_reactions_lock:
+            cr = next((r for r in custom_reactions if r["id"] == custom_id), None)
+        if cr is None:
+            return jsonify({"error": "unknown reaction"}), 400
+        rec["custom_id"] = cr["id"]
+        rec["custom_url"] = f"/reactions/img/{cr['id']}"
+    elif _is_emoji(emoji):
+        rec["emoji"] = emoji
+    else:
+        return jsonify({"error": "not an emoji"}), 400
+    if not _reaction_rate_check(_client_ip()):
+        return jsonify({"error": "rate limited"}), 429
+    global reaction_next_id
+    with reactions_lock:
+        rec["id"] = reaction_next_id
+        reaction_next_id += 1
+        reactions.append(rec)
+    return jsonify({"ok": True, "id": rec["id"]})
+
+
+@app.route("/reactions/recent")
+def api_reaction_recent():
+    """Reactions with id > `since` AND newer than REACTION_RECENT_WINDOW. The
+    recency filter keeps this an ephemeral feed — clients animate each reaction
+    once and late joiners don't get a backlog. Also returns the built-in emoji
+    set and the current custom set so the client can (re)build the bar."""
+    try:
+        since = int(request.args.get("since", 0))
+    except ValueError:
+        since = 0
+    fresh = time.time() - REACTION_RECENT_WINDOW
+    with reactions_lock:
+        out = [r for r in reactions if r["id"] > since and r["ts"] >= fresh]
+        max_id = reactions[-1]["id"] if reactions else since
+        # Same dead-entry sweep as /chat/recent — keeps reaction_rate bounded
+        # to IPs that actually reacted within the last window.
+        cutoff = time.time() - REACTION_RATE_WINDOW
+        for ip in [k for k, ts in reaction_rate.items() if not any(t > cutoff for t in ts)]:
+            del reaction_rate[ip]
+    return jsonify({
+        "reactions": out,
+        "max_id": max_id,
+        "emojis": list(REACTION_EMOJIS),
+        "custom": _custom_reactions_public(),
+    })
+
+
+@app.route("/api/reactions/upload", methods=["POST"])
+def api_reaction_upload():
+    """A viewer imports their own reaction image. Multipart form: `image` file
+    (+ optional `label`). Strictly validated — magic-byte image sniff, size
+    cap, bounded total set, per-IP rate limit. The stored filename is derived
+    from the content hash (deduped) so two viewers uploading the same image
+    share one file. Returns the new reaction's id + url."""
+    ip = _client_ip()
+    now = time.time()
+    cutoff = now - CUSTOM_REACTION_UPLOAD_WINDOW
+    with custom_reactions_lock:
+        ts = [t for t in custom_reaction_upload_rate.get(ip, []) if t > cutoff]
+        if len(ts) >= CUSTOM_REACTION_UPLOAD_MAX:
+            custom_reaction_upload_rate[ip] = ts
+            return jsonify({"error": "rate limited"}), 429
+        if len(custom_reactions) >= CUSTOM_REACTION_MAX:
+            return jsonify({"error": "reaction set is full"}), 409
+    f = request.files.get("image")
+    if f is None:
+        return jsonify({"error": "image required"}), 400
+    data = f.read(CUSTOM_REACTION_MAX_BYTES + 1)
+    if len(data) > CUSTOM_REACTION_MAX_BYTES:
+        return jsonify({"error": "image too large"}), 413
+    if not data:
+        return jsonify({"error": "empty image"}), 400
+    sniff = _sniff_image(data)
+    if sniff is None:
+        return jsonify({"error": "unsupported image type"}), 415
+    ext, mime = sniff
+    digest = hashlib.sha256(data).hexdigest()[:24]
+    fname = f"{digest}.{ext}"
+    label = (request.form.get("label") or "").strip()[:24] or None
+    REACTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    fpath = REACTIONS_DIR / fname
+    if not fpath.exists():
+        fpath.write_bytes(data)
+    global custom_reaction_next_id
+    with custom_reactions_lock:
+        # Record the upload timestamp now that it's accepted.
+        ts.append(now)
+        custom_reaction_upload_rate[ip] = ts
+        # Dedup: if this exact image is already in the set, reuse it instead of
+        # adding a second identical button.
+        existing = next((r for r in custom_reactions if r["file"] == fname), None)
+        if existing is not None:
+            return jsonify({"ok": True, "id": existing["id"], "url": f"/reactions/img/{existing['id']}", "duplicate": True})
+        entry = {
+            "id": custom_reaction_next_id,
+            "file": fname,
+            "mime": mime,
+            "label": label,
+            "sid": (request.form.get("sid") or "").strip()[:32] or "anon",
+            "ip": ip,
+            "ts": now,
+        }
+        custom_reaction_next_id += 1
+        custom_reactions.append(entry)
+        _save_custom_reactions()
+    return jsonify({"ok": True, "id": entry["id"], "url": f"/reactions/img/{entry['id']}"})
+
+
+@app.route("/reactions/img/<int:cid>")
+def api_reaction_image(cid: int):
+    """Serve a custom reaction's image. Cached — the bytes never change for a
+    given id (the file is content-hashed)."""
+    with custom_reactions_lock:
+        cr = next((r for r in custom_reactions if r["id"] == cid), None)
+    if cr is None:
+        abort(404)
+    resp = send_from_directory(REACTIONS_DIR, cr["file"], mimetype=cr.get("mime"))
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
+@app.route("/admin/api/reactions", methods=["GET"])
+def api_reactions_admin_list():
+    """Full custom-reaction set with uploader context, for host moderation."""
+    with custom_reactions_lock:
+        return jsonify(list(custom_reactions))
+
+
+@app.route("/admin/api/reactions/<int:cid>", methods=["DELETE"])
+def api_reaction_delete(cid: int):
+    """Remove a custom reaction. Drops the metadata entry and the backing file
+    if no other entry references it (content-hash dedup can share a file)."""
+    with custom_reactions_lock:
+        cr = next((r for r in custom_reactions if r["id"] == cid), None)
+        if cr is None:
+            return jsonify({"error": "reaction not found"}), 404
+        custom_reactions.remove(cr)
+        still_used = any(r["file"] == cr["file"] for r in custom_reactions)
+        _save_custom_reactions()
+    if not still_used:
+        try:
+            (REACTIONS_DIR / cr["file"]).unlink(missing_ok=True)
+        except Exception as e:
+            print(f"reactions: failed to unlink {cr['file']}: {e}", file=sys.stderr)
+    return jsonify({"ok": True})
+
+
 def _request_rate_check(ip: str) -> bool:
     """Per-IP token-bucket-ish check, same shape as _chat_rate_check. True if
     this IP can file one more request within the rolling window; records the
@@ -2503,13 +3197,13 @@ def api_library_browse():
     /admin/api/browse, but reachable by a plain viewer token (the viewer gate
     applies since this is neither /admin nor /api/control). Read-only: viewers
     use it to find something to request, not to play."""
-    return jsonify(_list_dir(request.args.get("path", "")))
+    return jsonify(_viewer_list_dir(request.args.get("path", "")))
 
 
 @app.route("/api/library/search")
 def api_library_search():
     """Viewer-facing recursive search, same shape as /admin/api/search."""
-    items, truncated = _search_library(request.args.get("q", "").strip())
+    items, truncated = _search_viewer_library(request.args.get("q", "").strip())
     return jsonify({"results": items, "truncated": truncated})
 
 
@@ -2524,6 +3218,8 @@ def api_request_add():
     path = data.get("path")
     if not path:
         return jsonify({"error": "path required"}), 400
+    if not _viewer_file_allowed(path):
+        return jsonify({"error": "file not found"}), 400
     try:
         _safe_resolve(path, must_be_file=True)
     except Exception:
@@ -2551,6 +3247,69 @@ def api_request_add():
         media_requests.append(req)
         _save_requests()
     return jsonify({"ok": True, "request": req})
+
+
+def _report_rate_check(ip: str) -> bool:
+    """Per-IP token-bucket-ish check, same shape as _request_rate_check but on
+    its own (tighter) window. True if allowed; records the timestamp."""
+    now = time.time()
+    cutoff = now - REPORT_RATE_WINDOW
+    with reports_lock:
+        ts = [t for t in report_rate.get(ip, []) if t > cutoff]
+        if len(ts) >= REPORT_RATE_MAX:
+            report_rate[ip] = ts
+            return False
+        ts.append(now)
+        report_rate[ip] = ts
+        return True
+
+
+@app.route("/api/report", methods=["POST"])
+def api_report_add():
+    """A viewer files an issue report. Rate-limited per IP. The server captures
+    authoritative context (timestamp, IP, viewer token label, stream-health
+    snapshot) and folds in the client-supplied fields the browser knows but the
+    server can't see (short message, what the player thought it was showing,
+    playback position, user-agent, playback mode, mute/fullscreen). Persisted
+    to /data/reports.json in an agent-readable shape — `client` (what the
+    viewer saw) is kept separate from `stream_health` (server truth) so a
+    triage agent can spot drift between them. Never touches playback."""
+    if not _report_rate_check(_client_ip()):
+        return jsonify({"error": "rate limited"}), 429
+    data = request.get_json(silent=True) or {}
+    msg = (data.get("message") or "").strip()[:1000]
+    client = {
+        "title": (str(data.get("title") or "").strip() or None),
+        "path": (str(data.get("path") or "").strip() or None),
+        "position_seconds": _coerce_float(data.get("position_seconds")),
+        "playback_mode": (str(data.get("mode") or "").strip()[:40] or None),
+        "muted": bool(data["muted"]) if "muted" in data else None,
+        "fullscreen": bool(data["fullscreen"]) if "fullscreen" in data else None,
+    }
+    token = request.cookies.get(TOKEN_COOKIE)
+    report = {
+        "id": None,  # assigned under the lock
+        "ts": time.time(),
+        "ts_iso": _iso_now(),
+        "status": "new",
+        "message": msg or None,
+        "viewer_label": _token_label(token),
+        "user_agent": request.headers.get("User-Agent", "")[:400],
+        "ip": _client_ip(),
+        "client": client,
+        "stream_health": _stream_health_snapshot(),
+        # Reserved for a watcher agent to write triage notes back into.
+        "triage": None,
+    }
+    global report_next_id
+    with reports_lock:
+        report["id"] = report_next_id
+        report_next_id += 1
+        reports.append(report)
+        if len(reports) > REPORT_MAX:
+            del reports[: len(reports) - REPORT_MAX]
+        _save_reports()
+    return jsonify({"ok": True, "id": report["id"]})
 
 
 @app.route("/api/queue")
@@ -3008,6 +3767,76 @@ def api_request_deny(rid: int):
     return jsonify({"ok": True})
 
 
+@app.route("/admin/api/reports", methods=["GET"])
+def api_reports_list():
+    """Viewer bug reports, newest first. Host-only (no /api/control alias) — the
+    report queue is an admin/host triage surface, not something friends act on.
+    This is also the endpoint a Jetstream watcher agent polls."""
+    with reports_lock:
+        return jsonify(list(reversed(reports)))
+
+
+@app.route("/admin/api/reports", methods=["DELETE"])
+def api_reports_clear():
+    """Clear the whole report pile — the "all triaged, wipe it" button."""
+    with reports_lock:
+        count = len(reports)
+        reports.clear()
+        _save_reports()
+    return jsonify({"ok": True, "cleared": count})
+
+
+@app.route("/admin/api/reports/<int:rid>/handled", methods=["POST"])
+def api_report_handled(rid: int):
+    """Flip a report's status. Defaults to "handled"; pass {"unhandle": true}
+    to reopen one. 404 on a missing id."""
+    data = request.get_json(silent=True) or {}
+    new_status = "new" if data.get("unhandle") else "handled"
+    with reports_lock:
+        rep = next((r for r in reports if r["id"] == rid), None)
+        if rep is None:
+            return jsonify({"error": "report not found"}), 404
+        rep["status"] = new_status
+        _save_reports()
+    return jsonify({"ok": True, "status": new_status})
+
+
+@app.route("/admin/api/reports/<int:rid>/triage", methods=["POST"])
+def api_report_triage(rid: int):
+    """Write a triage verdict into a report's reserved `triage` field — the safe
+    write-back path for the Jetstream watcher agent. The watcher must go through
+    Flask (under reports_lock) rather than editing reports.json directly:
+    Flask keeps `reports` in memory and rewrites the whole file on every change,
+    so a direct file edit would be clobbered on the next save. Body:
+    {"triage": <value>}; pass null to clear. Optionally also flips status to
+    "handled" with {"handled": true}. 404 on a missing id."""
+    data = request.get_json(silent=True) or {}
+    if "triage" not in data:
+        return jsonify({"error": "triage field required"}), 400
+    with reports_lock:
+        rep = next((r for r in reports if r["id"] == rid), None)
+        if rep is None:
+            return jsonify({"error": "report not found"}), 404
+        rep["triage"] = data["triage"]
+        if data.get("handled"):
+            rep["status"] = "handled"
+        _save_reports()
+        status = rep["status"]
+    return jsonify({"ok": True, "status": status})
+
+
+@app.route("/admin/api/reports/<int:rid>", methods=["DELETE"])
+def api_report_delete(rid: int):
+    """Drop a single report."""
+    with reports_lock:
+        rep = next((r for r in reports if r["id"] == rid), None)
+        if rep is None:
+            return jsonify({"error": "report not found"}), 404
+        reports.remove(rep)
+        _save_reports()
+    return jsonify({"ok": True})
+
+
 @app.route("/admin/api/queue/<int:idx>", methods=["DELETE"])
 @app.route("/api/control/queue/<int:idx>", methods=["DELETE"])
 def api_queue_remove(idx: int):
@@ -3041,10 +3870,18 @@ def api_queue_shuffle():
 @app.route("/admin/api/settings", methods=["GET"])
 def api_settings_get():
     with settings_lock:
-        return jsonify(dict(settings))
+        out = dict(settings)
+    if out.get("stream_quality") not in STREAM_QUALITY_PRESETS:
+        out["stream_quality"] = "default"
+    out["stream_quality_options"] = [
+        {"key": key, **preset}
+        for key, preset in STREAM_QUALITY_PRESETS.items()
+    ]
+    return jsonify(out)
 
 
-SETTABLE_SETTINGS = {"viewer_public", "auto_fill"}
+BOOL_SETTINGS = {"viewer_public", "auto_fill"}
+SETTABLE_SETTINGS = BOOL_SETTINGS | {"stream_quality"}
 
 
 @app.route("/admin/api/settings", methods=["POST"])
@@ -3055,9 +3892,20 @@ def api_settings_set():
         return jsonify({"error": f"one of {sorted(SETTABLE_SETTINGS)} required"}), 400
     with settings_lock:
         for k in keys:
-            settings[k] = bool(data[k])
+            if k in BOOL_SETTINGS:
+                settings[k] = bool(data[k])
+            elif k == "stream_quality":
+                quality = str(data[k])
+                if quality not in STREAM_QUALITY_PRESETS:
+                    return jsonify({"error": "invalid stream_quality"}), 400
+                settings[k] = quality
         _save_settings()
-        return jsonify(dict(settings))
+        out = dict(settings)
+    out["stream_quality_options"] = [
+        {"key": key, **preset}
+        for key, preset in STREAM_QUALITY_PRESETS.items()
+    ]
+    return jsonify(out)
 
 
 @app.route("/admin/api/queue/<int:idx>/move", methods=["POST"])
@@ -3237,6 +4085,10 @@ def api_resume():
 
 @app.route("/api/status")
 def api_status():
+    # Count unhandled reports under its own lock first, so we don't nest it
+    # inside state_lock. Bounded by REPORT_MAX, so the scan is trivial.
+    with reports_lock:
+        reports_new = sum(1 for r in reports if r.get("status") == "new")
     with state_lock:
         running = current_proc is not None and current_proc.poll() is None
         active = current_source is not None  # a source is loaded (running OR paused)
@@ -3281,6 +4133,12 @@ def api_status():
             # Pending viewer requests — lets the admin UI badge the count
             # without polling /admin/api/requests when nothing's waiting.
             "requests_pending": len(media_requests),
+            # Unhandled bug reports — same idea, badges the admin reports panel.
+            "reports_new": reports_new,
+            # True once this viewer has hit the continuous-watch cap; the page
+            # surfaces a "refresh to keep watching" notice instead of a silent
+            # stall. Matches the same check the /hls auth gate enforces.
+            "session_expired": _viewer_session_expired(_client_ip()),
         })
 
 

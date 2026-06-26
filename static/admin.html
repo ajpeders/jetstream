@@ -66,38 +66,9 @@
   button.danger { background: #4a1818; border-color: #6a2424; }
   button.danger:hover { background: #5a1c1c; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
-  #player { background: black; width: 100%; }
-  #player video {
-    display: block;
-    width: 100%;
-    max-height: 75vh;
-    background: black;
-    /* Hold the box at 16:9 so the pane never collapses to zero height when
-       the stream is idle or being torn down. */
-    aspect-ratio: 16 / 9;
-    object-fit: contain;
-  }
-  #player-wrap { position: relative; background: black; }
-  #unmute-overlay {
-    position: absolute; inset: 0;
-    display: flex; align-items: center; justify-content: center;
-    cursor: pointer; background: rgba(0,0,0,0.4);
-    color: white; font-size: 1rem; letter-spacing: 0.02em;
-  }
-  #unmute-overlay.hidden { display: none; }
-  #vol-controls {
-    position: absolute; bottom: 12px; right: 12px;
-    display: flex; gap: 0.4rem;
-    background: rgba(0,0,0,0.55);
-    padding: 0.3rem 0.5rem; border-radius: 4px;
-    align-items: center; opacity: 0.7; transition: opacity 0.15s;
-  }
-  #vol-controls:hover { opacity: 1; }
-  #vol-controls button {
-    background: transparent; border: none; color: white; cursor: pointer;
-    font-size: 0.95rem; padding: 0.1rem 0.3rem;
-  }
-  #vol-controls input[type="range"] { width: 80px; accent-color: white; }
+  /* #player is now control-only — broadcast bar + seek-bar live inside.
+     No inline video preview. */
+  #player { background: #0a0a0a; width: 100%; }
   #broadcast-bar #pause-btn {
     padding: 0.3rem 0.7rem; font-size: 0.85rem;
     min-width: 5em;
@@ -145,6 +116,20 @@
     padding: 0.4rem 0.6rem; font-size: 0.85rem; font-family: inherit;
   }
   #url-panel .hint { color: #555; font-size: 0.75rem; margin-top: 0.4rem; }
+  #stream-settings-panel {
+    padding: 0.85rem 1.2rem;
+    background: #0e0e0e;
+    border-bottom: 1px solid #1f1f1f;
+  }
+  #stream-settings-panel .head {
+    display: flex; align-items: center; gap: 0.8rem;
+  }
+  #stream-settings-panel h2 {
+    margin: 0; font-size: 0.9rem; font-weight: 500; color: #ccc;
+    letter-spacing: 0.02em;
+  }
+  #stream-settings-panel select { min-width: 13rem; }
+  #stream-settings-panel .hint { color: #555; font-size: 0.75rem; margin-top: 0.4rem; }
   #queue-panel {
     padding: 0.85rem 1.2rem;
     background: #0e0e0e;
@@ -252,6 +237,77 @@
   #requests-panel button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
   #requests-panel button.approve { background: #1f3326; color: #7dcc99; border-color: #2c4a37; }
   #requests-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
+  /* Reports panel — viewer-filed issue reports. Host-only (hidden on
+     /controls); same chrome as requests, but rows carry more context. */
+  #reports-panel {
+    margin-top: 1rem; background: #161616; border: 1px solid #262626;
+    border-radius: 6px; padding: 0.8rem 1rem;
+  }
+  #reports-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+  #reports-panel h2 { margin: 0; font-size: 0.95rem; color: #ddd; }
+  #reports-panel .badge {
+    font-size: 0.7rem; background: #222; color: #888; border: 1px solid #333;
+    border-radius: 10px; padding: 0.05rem 0.5rem;
+  }
+  #reports-panel .badge.waiting { background: #2a1f30; color: #c9a0d9; border-color: #4a3556; }
+  #reports-panel ul { list-style: none; padding: 0; margin: 0; }
+  #reports-panel li {
+    display: flex; flex-direction: column; gap: 0.3rem;
+    padding: 0.6rem 0; border-top: 1px solid #1f1f1f; font-size: 0.85rem;
+  }
+  #reports-panel li:first-child { border-top: none; }
+  #reports-panel li.handled { opacity: 0.5; }
+  #reports-panel .rtop { display: flex; align-items: center; gap: 0.5rem; }
+  #reports-panel .rstatus {
+    font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.03em;
+    border-radius: 10px; padding: 0.05rem 0.45rem; flex-shrink: 0;
+  }
+  #reports-panel .rstatus.new { background: #2a1f30; color: #d9b8e6; border: 1px solid #4a3556; }
+  #reports-panel .rstatus.handled { background: #1f2a20; color: #8fcc9f; border: 1px solid #2c4a37; }
+  #reports-panel .rwho { color: #cda; flex-shrink: 0; max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #reports-panel .rtime { color: #666; font-size: 0.75rem; margin-left: auto; flex-shrink: 0; }
+  #reports-panel .rmsg { color: #e0e0e0; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+  #reports-panel .rmsg.none { color: #666; font-style: italic; }
+  #reports-panel .rmeta { color: #888; font-size: 0.75rem; line-height: 1.5; }
+  #reports-panel .rmeta code { color: #9ab; font-family: ui-monospace, monospace; }
+  #reports-panel .rmeta .k { color: #666; }
+  #reports-panel .ractions { display: flex; gap: 0.4rem; margin-top: 0.15rem; }
+  #reports-panel .ractions button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
+  #reports-panel .ractions button.handle { background: #1f2a20; color: #8fcc9f; border-color: #2c4a37; }
+  #reports-panel .rtriage {
+    margin-top: 0.1rem; padding: 0.4rem 0.6rem; font-size: 0.78rem; line-height: 1.5;
+    color: #c7b3d6; background: #1c1626; border-left: 2px solid #4a3556; border-radius: 0 4px 4px 0;
+  }
+  #reports-panel .rtriage strong { color: #e0cdee; }
+  #reports-panel .rtriage code { color: #9ab; font-family: ui-monospace, monospace; }
+  #reports-panel .rtriage .rtkey { color: #7a6a88; }
+  #reports-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
+  /* Custom-reactions moderation — viewer-uploaded reaction images. Host can
+     remove anything abusive. Host-only (hidden on /controls). */
+  #reactions-panel {
+    margin-top: 1rem; background: #161616; border: 1px solid #262626;
+    border-radius: 6px; padding: 0.8rem 1rem;
+  }
+  #reactions-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+  #reactions-panel h2 { margin: 0; font-size: 0.95rem; color: #ddd; }
+  #reactions-panel .badge {
+    font-size: 0.7rem; background: #222; color: #888; border: 1px solid #333;
+    border-radius: 10px; padding: 0.05rem 0.5rem;
+  }
+  #reactions-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  #reactions-grid .rx {
+    position: relative; width: 48px; height: 48px; border-radius: 6px;
+    background: #0d1117; border: 1px solid #2a3340;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #reactions-grid .rx img { max-width: 38px; max-height: 38px; }
+  #reactions-grid .rx button {
+    position: absolute; top: -7px; right: -7px;
+    width: 18px; height: 18px; min-height: 0; padding: 0; line-height: 1;
+    border-radius: 50%; font-size: 0.7rem;
+    background: #3a1818; color: #ff8a8a; border: 1px solid #5a2424; cursor: pointer;
+  }
+  #reactions-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
   /* "Queue" button alongside file rows */
   ul#list li button.queue-btn {
     padding: 0.2rem 0.55rem; font-size: 0.75rem; flex-shrink: 0;
@@ -632,7 +688,7 @@
     #seek-bar > * { flex-shrink: 0; }
     #seek-bar input[type="number"] { flex: 1; min-width: 0; }
 
-    #friends-panel, #url-panel, #queue-panel, #requests-panel, #viewers-panel,
+    #friends-panel, #url-panel, #stream-settings-panel, #queue-panel, #requests-panel, #viewers-panel,
     #search-row, #breadcrumb, #search-info { padding: 0.7rem 0.8rem; }
 
     /* Library grid: tighter gutter on a phone + smaller minimum card size
@@ -723,16 +779,6 @@
   <button id="stop-btn" class="danger" style="display:none">Stop</button>
 </header>
 <div id="player">
-  <div id="player-wrap">
-    <video id="video" autoplay playsinline muted disablepictureinpicture
-           controlslist="nodownload nofullscreen noremoteplayback noplaybackrate"></video>
-    <div id="vol-controls">
-      <button id="mute-btn" title="Mute / unmute">🔊</button>
-      <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="1">
-      <button id="fs-btn" title="Fullscreen">⛶</button>
-    </div>
-    <div id="unmute-overlay">tap to unmute</div>
-  </div>
   <div id="broadcast-bar">
     <button id="pause-btn">Pause</button>
     <button id="skip-btn" title="Skip to next (queue, else random)" style="display:none">Skip ⏭</button>
@@ -782,6 +828,13 @@
   </form>
   <div class="hint">YouTube, Twitch, Vimeo, anything yt-dlp supports. Live streams won't be seekable.</div>
 </div>
+<div id="stream-settings-panel">
+  <div class="head">
+    <h2>Stream Quality</h2>
+    <select id="stream-quality" title="Broadcast quality preset"></select>
+  </div>
+  <div class="hint">Applies when the next stream run starts: new source, seek, skip, or resume.</div>
+</div>
 <div id="admin-queue-app"></div>
 <div id="admin-recent-app"></div>
 <div id="requests-panel">
@@ -791,6 +844,21 @@
     <button id="requests-clear" type="button" style="display:none;margin-left:auto;font-size:0.75rem;padding:0.2rem 0.55rem">Clear all</button>
   </div>
   <ul id="requests-list"><li class="empty-r">No pending requests.</li></ul>
+</div>
+<div id="reports-panel">
+  <div class="head">
+    <h2>Reports</h2>
+    <span class="badge" id="reports-count">0</span>
+    <button id="reports-clear" type="button" style="display:none;margin-left:auto;font-size:0.75rem;padding:0.2rem 0.55rem">Clear all</button>
+  </div>
+  <ul id="reports-list"><li class="empty-r">No issue reports.</li></ul>
+</div>
+<div id="reactions-panel">
+  <div class="head">
+    <h2>Custom reactions</h2>
+    <span class="badge" id="reactions-count">0</span>
+  </div>
+  <div id="reactions-grid"><span class="empty-r">No custom reactions uploaded.</span></div>
 </div>
 <div id="viewers-panel" style="margin-top:1rem">
   <div class="head" style="display:flex;align-items:center;gap:0.5rem">
@@ -826,7 +894,6 @@
 
 <div id="toast"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.10/dist/hls.min.js"></script>
 <script type="module" src="/build/adminQueue.js"></script>
 <script type="module" src="/build/adminRecent.js"></script>
 <script>
@@ -839,7 +906,6 @@ const ROOT = "";
 const IS_ADMIN = !location.pathname.startsWith("/controls");
 const API = IS_ADMIN ? "/admin/api" : "/api/control";
 const player = document.getElementById("player");
-const video = document.getElementById("video");
 const list = document.getElementById("list");
 const breadcrumb = document.getElementById("breadcrumb");
 const statusEl = document.getElementById("status");
@@ -877,11 +943,6 @@ const durationEl = document.getElementById("duration");
 const seekInput = document.getElementById("seek-input");
 const seekBtn = document.getElementById("seek-btn");
 const broadcastSeek = document.getElementById("broadcast-seek");
-const playerWrap = document.getElementById("player-wrap");
-const unmuteOverlay = document.getElementById("unmute-overlay");
-const muteBtn = document.getElementById("mute-btn");
-const volSlider = document.getElementById("vol-slider");
-const fsBtn = document.getElementById("fs-btn");
 const friendsList = document.getElementById("tokens-list");
 const friendForm = document.getElementById("friend-form");
 const friendNameInput = document.getElementById("friend-name");
@@ -890,10 +951,10 @@ const urlInput = document.getElementById("url-input");
 const urlSubmit = document.getElementById("url-submit");
 const urlQueueBtn = document.getElementById("url-queue");
 const publicToggle = document.getElementById("public-toggle");
+const streamQualitySelect = document.getElementById("stream-quality");
 
 let currentDir = ROOT;
 let nowPlaying = null;
-let hls = null;
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -1230,7 +1291,6 @@ async function stop() {
   // stop reflected on the click, not after the next poll. The server call
   // catches up async — pollStatus reconciles either way.
   nowPlaying = null;
-  teardownPlayer();
   showToast("Stopping…");
   try {
     await fetch(`${API}/stop`, { method: "POST" });
@@ -1277,7 +1337,6 @@ async function togglePause(currentlyPaused) {
   pauseBtn.textContent = willBePaused ? "Resume" : "Pause";
   pauseBtn.dataset.paused = willBePaused ? "1" : "0";
   serverPaused = willBePaused;
-  if (willBePaused && !video.paused) video.pause();
   try {
     const url = currentlyPaused ? `${API}/resume` : `${API}/pause`;
     const res = await fetch(url, { method: "POST" });
@@ -1393,69 +1452,9 @@ broadcastSeek.addEventListener("keydown", e => {
   }
 });
 
-function setupPlayer() {
-  if (hls) return;
-  // Cache-buster forces iOS Safari (native HLS) to re-fetch the manifest on
-  // stream restarts; without it, reusing the same URL is sometimes treated
-  // as cached 404.
-  const src = "/hls/stream.m3u8?_=" + Date.now();
-  if (video.canPlayType("application/vnd.apple.mpegurl")) {
-    video.src = src;
-    video.load();
-    video.play().catch(() => {});
-  } else if (window.Hls && Hls.isSupported()) {
-    // liveSyncDurationCount: 1 keeps admin within ~one segment of live so it
-    // chases the broadcast it controls. backBufferLength: 1 drops old segments
-    // immediately so admin can't accidentally watch a stale buffer after
-    // pausing/resuming. liveMaxLatencyDurationCount caps how far behind we'll
-    // ever drift before forcing a snap.
-    // matches viewer (and matches the loadedmetadata snap below).
-    hls = new Hls({
-      lowLatencyMode: true,
-      liveSyncDurationCount: 1,
-      liveMaxLatencyDurationCount: 3,
-      backBufferLength: 1,
-    });
-    hls.loadSource(src);
-    hls.attachMedia(video);
-    // iOS Safari sometimes leaves the element paused after attachMedia
-    // (especially mid-session after a soft-teardown). Explicit play() call
-    // — promise rejection swallowed if autoplay is blocked.
-    video.play().catch(() => {});
-    hls.on(Hls.Events.ERROR, (_, data) => {
-      if (data.fatal) {
-        if (serverPaused) {
-          try { hls.destroy(); } catch {}
-          hls = null;
-          lastReady = false;
-          return;
-        }
-        // Transient stall — soft teardown, retry quickly. Last frame stays.
-        softTeardown();
-        setTimeout(setupPlayer, 800);
-      }
-    });
-  } else {
-    showToast("HLS not supported in this browser");
-  }
-  player.classList.remove("hidden");
-}
-
-function softTeardown() {
-  // Drop the Hls.js instance only — leave the video element holding its
-  // last frame. Used by the fatal-error recovery path so setupPlayer can
-  // be called fresh on the retry tick.
-  if (hls) { hls.destroy(); hls = null; }
-}
-function teardownPlayer() {
-  // Used when the server is fully idle. Clears the source so the box can
-  // sit dormant rather than holding a stale frame.
-  if (hls) { hls.destroy(); hls = null; }
-  video.removeAttribute("src");
-  video.load();
-}
-
-let lastReady = false;
+// Admin has no inline video preview — broadcast was removed in favour of
+// just controlling the stream (admin opens a viewer tab to actually watch).
+// Keep serverPaused state for control-button enable/disable logic.
 let serverPaused = false;
 async function pollStatus() {
   try {
@@ -1485,14 +1484,7 @@ async function pollStatus() {
       dockSkipBtn.disabled = false;
       dockBackBtn.disabled = !!s.is_live;
       dockForwardBtn.disabled = !!s.is_live;
-      // Mirror pause state on the local admin player so the video freezes visually.
       serverPaused = !!s.paused;
-      if (s.paused && !video.paused) video.pause();
-      if (!s.paused && video.paused && !player.classList.contains("hidden")) {
-        video.play().catch(() => {});
-      }
-      if (s.ready && !lastReady) setupPlayer();
-      lastReady = s.ready;
     } else {
       serverPaused = false;
       nowPlaying = null;
@@ -1507,8 +1499,6 @@ async function pollStatus() {
       dockSkipBtn.disabled = true;
       dockBackBtn.disabled = true;
       dockForwardBtn.disabled = true;
-      if (lastReady) teardownPlayer();
-      lastReady = false;
     }
     const v = s.viewers || 0;
     viewersEl.textContent = v ? `· ${v} viewer${v === 1 ? "" : "s"}` : "";
@@ -1535,90 +1525,10 @@ async function pollStatus() {
   } catch (e) {}
 }
 
-// --- Custom video controls (mute / volume / fullscreen) ---
-function syncMuteUI() {
-  unmuteOverlay.classList.toggle("hidden", !video.muted);
-  muteBtn.textContent = video.muted || video.volume === 0 ? "🔇" : "🔊";
-  volSlider.value = video.muted ? 0 : video.volume;
-}
-unmuteOverlay.addEventListener("click", () => {
-  video.muted = false;
-  if (video.volume === 0) video.volume = 1;
-  syncMuteUI();
-});
-muteBtn.addEventListener("click", () => {
-  video.muted = !video.muted;
-  if (!video.muted && video.volume === 0) video.volume = 1;
-  syncMuteUI();
-});
-volSlider.addEventListener("input", () => {
-  video.volume = parseFloat(volSlider.value);
-  video.muted = video.volume === 0;
-  syncMuteUI();
-});
-fsBtn.addEventListener("click", () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else playerWrap.requestFullscreen?.();
-});
-video.addEventListener("volumechange", syncMuteUI);
-// iOS Safari can leave the element paused after a fatal-error recovery cycle
-// without firing `pause`. `canplay` fires when the new buffer is ready —
-// auto-resumes without user gesture or page refresh.
-video.addEventListener("canplay", () => {
-  if (!serverPaused && video.paused) video.play().catch(() => {});
-});
-syncMuteUI();
-
-// Live-edge snap: on every fresh src/manifest load, jump to the live tail.
-// Without this the player picks a position 1+ segments behind live, so refresh
-// drops admin/viewer to ~4-8s lag and they stay there.
-function snapToLive() {
-  if (video.duration && isFinite(video.duration)) {
-    try { video.currentTime = video.duration; } catch {}
-  }
-}
-video.addEventListener("loadedmetadata", snapToLive);
-// Continuous server-time sync — same logic as the viewer page, but with a
-// tighter target. Admin watches what they're broadcasting; the closer to
-// the live edge the better, since every command (pause / seek / skip)
-// otherwise feels delayed by the lag visible on screen.
-const TARGET_LAG_S = 1.5;
+// Admin's inline video preview was removed — no mute/volume/fullscreen
+// controls to wire, no PDT-based drift loop, no live-edge snap. Admin
+// just controls the broadcast; viewing happens in a viewer tab.
 let serverClockOffsetMs = 0;
-
-function currentPlayingDateMs() {
-  if (hls && hls.playingDate instanceof Date) return hls.playingDate.getTime();
-  if (typeof video.getStartDate === "function") {
-    const start = video.getStartDate();
-    if (start && !isNaN(start.getTime())) return start.getTime() + video.currentTime * 1000;
-  }
-  return null;
-}
-
-// Continuous PDT-based sync. ±1.5% rate steering (preservesPitch=true keeps
-// audio clean) holds devices within ~1s of each other. Hard snap on >5s drift.
-try { video.preservesPitch = true; } catch {}
-setInterval(() => {
-  if (!video.duration || !isFinite(video.duration)) return;
-  if (video.paused || serverPaused) return;
-  const playing = currentPlayingDateMs();
-  if (playing == null) {
-    if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-    return;
-  }
-  const serverNowMs = Date.now() + serverClockOffsetMs;
-  const drift = (serverNowMs - playing) / 1000 - TARGET_LAG_S;
-  // Tighter snap threshold for admin (was 5s) — admin's player drifting
-  // beyond ~2s of target makes every control click feel laggy.
-  if (Math.abs(drift) > 2) {
-    snapToLive();
-    video.playbackRate = 1.0;
-    return;
-  }
-  let target = 1.0;
-  if (drift > 0.3) target = 1.015;
-  else if (drift < -0.3) target = 0.985;
-  if (video.playbackRate !== target) video.playbackRate = target;
-}, 2000);
 
 // --- Friends / invite tokens ---
 function tokenUrl(id) {
@@ -1757,6 +1667,15 @@ async function loadSettings() {
     if (!res.ok) return;
     const s = await res.json();
     publicToggle.checked = !!s.viewer_public;
+    if (streamQualitySelect) {
+      const options = Array.isArray(s.stream_quality_options) ? s.stream_quality_options : [];
+      streamQualitySelect.innerHTML = options.map(opt => {
+        const meta = `${opt.height}p / ${opt.video_bitrate}`;
+        return `<option value="${escapeHtml(opt.key)}">${escapeHtml(opt.label)} (${escapeHtml(meta)})</option>`;
+      }).join("");
+      streamQualitySelect.value = s.stream_quality || "default";
+      streamQualitySelect.dataset.current = streamQualitySelect.value;
+    }
   } catch {}
 }
 publicToggle.addEventListener("change", async () => {
@@ -1774,6 +1693,30 @@ publicToggle.addEventListener("change", async () => {
     showToast("Toggle failed: " + e.message);
   }
 });
+if (streamQualitySelect) {
+  streamQualitySelect.addEventListener("change", async () => {
+    const previous = streamQualitySelect.dataset.current || "default";
+    const value = streamQualitySelect.value;
+    streamQualitySelect.disabled = true;
+    try {
+      const res = await fetch("/admin/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stream_quality: value }),
+      });
+      const s = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(s.error || ("HTTP " + res.status));
+      streamQualitySelect.dataset.current = s.stream_quality || value;
+      streamQualitySelect.value = s.stream_quality || value;
+      showToast("Quality updated for next stream start");
+    } catch (e) {
+      streamQualitySelect.value = previous;
+      showToast("Quality update failed: " + e.message);
+    } finally {
+      streamQualitySelect.disabled = false;
+    }
+  });
+}
 
 friendForm.addEventListener("submit", async e => {
   e.preventDefault();
@@ -1803,7 +1746,7 @@ friendForm.addEventListener("submit", async e => {
 // valid so the rest of the script doesn't need null guards.
 if (!IS_ADMIN) {
   document.body.classList.add("controls-page");
-  for (const id of ["friends-panel", "viewers-panel", "requests-panel"]) {
+  for (const id of ["friends-panel", "stream-settings-panel", "viewers-panel", "requests-panel", "reports-panel", "reactions-panel"]) {
     const el = document.getElementById(id);
     if (el) el.style.display = "none";
   }
@@ -1812,9 +1755,7 @@ if (!IS_ADMIN) {
   if (sub) sub.textContent = "/ controls";
 }
 
-// Kick the player up before the first /api/status round-trip so playback
-// starts the instant the page renders.
-setupPlayer();
+// No inline player to kick — go straight to status polling.
 pollStatus();
 // 1s poll on admin — controls feel responsive when state propagates within
 // a tick of clicking. /api/status is ~1ms server-side; gunicorn handles it
@@ -1984,6 +1925,191 @@ requestsClear.addEventListener("click", async () => {
 if (IS_ADMIN) {
   setInterval(refreshRequests, 5000);
   refreshRequests();
+}
+
+// ---- Reports panel (host-only) ----------------------------------------
+// Viewers file playback-issue reports via the ⚑ Report button. They land here
+// newest-first with the context the client + server captured. Mark handled to
+// dim a row (keeps it for reference); delete to drop it; clear-all wipes the
+// pile. Same JSON the watcher-agent endpoint (/admin/api/reports) serves.
+const reportsList = document.getElementById("reports-list");
+const reportsCount = document.getElementById("reports-count");
+const reportsClear = document.getElementById("reports-clear");
+
+function reportAgo(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+
+function reportMetaLine(r) {
+  const c = r.client || {};
+  const h = r.stream_health || {};
+  const bits = [];
+  const title = c.title || h.title;
+  if (title) bits.push(`<span class="k">title</span> ${escapeHtml(title)}`);
+  if (c.path) bits.push(`<span class="k">path</span> <code>${escapeHtml(c.path)}</code>`);
+  if (c.position_seconds != null) bits.push(`<span class="k">at</span> ${formatTime(c.position_seconds)}`);
+  if (c.playback_mode) bits.push(`<span class="k">mode</span> ${escapeHtml(c.playback_mode)}`);
+  if (c.muted != null) bits.push(`<span class="k">muted</span> ${c.muted ? "yes" : "no"}`);
+  if (c.fullscreen != null) bits.push(`<span class="k">fs</span> ${c.fullscreen ? "yes" : "no"}`);
+  const health = [];
+  if (h.encoder) health.push(`<span class="k">enc</span> ${escapeHtml(h.encoder)}`);
+  health.push(`<span class="k">ffmpeg</span> ${h.ffmpeg_alive ? "alive" : "down"}`);
+  if (h.viewers != null) health.push(`<span class="k">viewers</span> ${h.viewers}`);
+  if (h.server_position_seconds != null) health.push(`<span class="k">srv@</span> ${formatTime(h.server_position_seconds)}`);
+  if (h.segments_on_disk != null) health.push(`<span class="k">segs</span> ${h.segments_on_disk}`);
+  if (h.paused) health.push(`<span class="k">paused</span>`);
+  const ua = r.user_agent ? `<span class="k">ua</span> ${escapeHtml(r.user_agent)}` : "";
+  const ipline = r.ip ? `<span class="k">ip</span> <code>${escapeHtml(r.ip)}</code>` : "";
+  return [bits.join(" &nbsp;·&nbsp; "), health.join(" &nbsp;·&nbsp; "), [ipline, ua].filter(Boolean).join(" &nbsp;·&nbsp; ")]
+    .filter(Boolean).map(x => `<div>${x}</div>`).join("");
+}
+
+// Render a watcher-agent triage verdict (object or string) attached to a report.
+function renderTriage(t) {
+  if (typeof t === "string") return `<span class="rtkey">triage</span> ${escapeHtml(t)}`;
+  if (typeof t !== "object" || t === null) return `<span class="rtkey">triage</span> ${escapeHtml(String(t))}`;
+  const parts = [];
+  if (t.cause) parts.push(`<span class="rtkey">cause</span> <strong>${escapeHtml(String(t.cause))}</strong>`);
+  if (t.confidence) parts.push(`<span class="rtkey">confidence</span> ${escapeHtml(String(t.confidence))}`);
+  if (t.reasoning) parts.push(`<div>${escapeHtml(String(t.reasoning))}</div>`);
+  if (t.suggested_action) parts.push(`<div><span class="rtkey">action</span> ${escapeHtml(String(t.suggested_action))}</div>`);
+  if (!parts.length) parts.push(`<code>${escapeHtml(JSON.stringify(t))}</code>`);
+  return parts.join(" ");
+}
+
+async function refreshReports() {
+  try {
+    const res = await fetch("/admin/api/reports");
+    if (!res.ok) return;
+    const reps = await res.json();
+    const unhandled = reps.filter(r => r.status === "new").length;
+    reportsCount.textContent = unhandled;
+    reportsCount.classList.toggle("waiting", unhandled > 0);
+    reportsClear.style.display = reps.length ? "" : "none";
+    if (!reps.length) {
+      reportsList.innerHTML = '<li class="empty-r">No issue reports.</li>';
+      return;
+    }
+    reportsList.innerHTML = "";
+    for (const r of reps) {
+      const li = document.createElement("li");
+      if (r.status === "handled") li.classList.add("handled");
+      const handled = r.status === "handled";
+      li.innerHTML = `
+        <div class="rtop">
+          <span class="rstatus ${handled ? "handled" : "new"}">${handled ? "handled" : "new"}</span>
+          <span class="rwho"></span>
+          <span class="rtime">${reportAgo(r.ts)}</span>
+        </div>
+        <div class="rmsg ${r.message ? "" : "none"}"></div>
+        <div class="rmeta">${reportMetaLine(r)}</div>
+        ${r.triage != null ? `<div class="rtriage">${renderTriage(r.triage)}</div>` : ""}
+        <div class="ractions">
+          <button type="button" class="handle" data-action="handle" data-id="${r.id}">${handled ? "Reopen" : "Mark handled"}</button>
+          <button type="button" data-action="delete" data-id="${r.id}">Delete</button>
+        </div>`;
+      li.querySelector(".rwho").textContent = r.viewer_label || "anonymous";
+      li.querySelector(".rmsg").textContent = r.message || "(no message)";
+      reportsList.appendChild(li);
+    }
+  } catch {}
+}
+
+reportsList.addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-action]");
+  if (!btn) return;
+  const id = parseInt(btn.dataset.id, 10);
+  const action = btn.dataset.action;
+  btn.disabled = true;
+  try {
+    if (action === "handle") {
+      // The button label tells us which way to flip: "Reopen" → unhandle.
+      const unhandle = btn.textContent.trim() === "Reopen";
+      const r = await fetch(`/admin/api/reports/${id}/handled`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unhandle }),
+      });
+      showToast(r.ok ? (unhandle ? "Report reopened" : "Marked handled") : "Update failed");
+    } else {
+      const r = await fetch(`/admin/api/reports/${id}`, { method: "DELETE" });
+      showToast(r.ok ? "Report deleted" : "Delete failed");
+    }
+    refreshReports();
+  } catch (e) { showToast("Failed: " + e.message); btn.disabled = false; }
+});
+
+reportsClear.addEventListener("click", async () => {
+  if (!confirm("Delete ALL issue reports? This can't be undone.")) return;
+  reportsClear.disabled = true;
+  try {
+    const r = await fetch("/admin/api/reports", { method: "DELETE" });
+    if (r.ok) {
+      const data = await r.json().catch(() => ({}));
+      showToast(`Cleared ${data.cleared ?? ""} report${data.cleared === 1 ? "" : "s"}`.trim());
+    } else {
+      showToast("Clear failed");
+    }
+    refreshReports();
+  } catch (e) {
+    showToast("Failed: " + e.message);
+  } finally {
+    reportsClear.disabled = false;
+  }
+});
+
+if (IS_ADMIN) {
+  setInterval(refreshReports, 5000);
+  refreshReports();
+}
+
+// ---- Custom reactions (host moderation) -------------------------------
+// Viewers upload their own reaction images; the host can remove anything
+// abusive here. Deleting drops the metadata and the backing file.
+const reactionsGrid = document.getElementById("reactions-grid");
+const reactionsCount = document.getElementById("reactions-count");
+
+async function refreshCustomReactions() {
+  try {
+    const res = await fetch("/admin/api/reactions");
+    if (!res.ok) return;
+    const list = await res.json();
+    reactionsCount.textContent = list.length;
+    if (!list.length) {
+      reactionsGrid.innerHTML = '<span class="empty-r">No custom reactions uploaded.</span>';
+      return;
+    }
+    reactionsGrid.innerHTML = "";
+    for (const c of list) {
+      const cell = document.createElement("div");
+      cell.className = "rx";
+      cell.title = (c.label || "") + (c.ip ? ` · ${c.ip}` : "");
+      cell.innerHTML = `<img src="/reactions/img/${c.id}" alt="">
+        <button type="button" data-id="${c.id}" title="Delete">✕</button>`;
+      reactionsGrid.appendChild(cell);
+    }
+  } catch {}
+}
+
+reactionsGrid.addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-id]");
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/admin/api/reactions/${btn.dataset.id}`, { method: "DELETE" });
+    showToast(r.ok ? "Reaction removed" : "Remove failed");
+    refreshCustomReactions();
+  } catch (e) { showToast("Failed: " + e.message); btn.disabled = false; }
+});
+
+if (IS_ADMIN) {
+  setInterval(refreshCustomReactions, 10000);
+  refreshCustomReactions();
 }
 
 // ---- Anonymous chat (admin) -------------------------------------------

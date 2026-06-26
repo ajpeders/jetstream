@@ -40,11 +40,20 @@ services:
       # `-preset veryfast`. If this drifts upward again, retune the player
       # constants in viewer.html in lockstep — otherwise the snap loop fights
       # hls.js's buffer (playback choppy / desync on every browser).
-      HLS_SEG_TIME: ${HLS_SEG_TIME:-4}
+      HLS_SEG_TIME: ${HLS_SEG_TIME:-1}
       # Live playlist window: 24×1s = 24s lookback. Short enough that Hls.js
       # / Safari can't pick a start position deep in scroll-back; long enough
       # that a hiccup doesn't drop a viewer outside the manifest.
-      HLS_LIST_SIZE: ${HLS_LIST_SIZE:-12}
+      HLS_LIST_SIZE: ${HLS_LIST_SIZE:-24}
+      # Continuous-watch cap (hours). A viewer streaming past this gets their
+      # /hls segments cut off and a "keep watching" prompt — reclaims forgotten
+      # tabs that would otherwise stream forever. Tapping the prompt resets the
+      # clock; it's a nudge, not a ban. Set to 0 to disable the cap entirely.
+      VIEWER_MAX_SESSION_HOURS: ${VIEWER_MAX_SESSION_HOURS:-8}
+      # Viewer Library roots. Format is "Label=relative/path,Label=relative/path".
+      # Viewers can browse/search/request only inside these roots; admin/control
+      # browsing remains unrestricted.
+      VIEWER_LIBRARY_ROOTS: ${VIEWER_LIBRARY_ROOTS:-Movies=movies,TV Shows=tv}
     volumes:
       - ${JETSTREAM_MEDIA_PATH:-/home/ween/share/media}:/media:ro
       - ../../state/jetstream:/data

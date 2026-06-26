@@ -118,6 +118,43 @@
     z-index: 1;
   }
   #unmute-overlay.hidden { display: none; }
+  /* Emoji reactions: a non-interactive layer the floats animate in, plus a
+     tap bar mirroring the volume controls on the opposite corner. Bar
+     background / idle-fade live in jetstream-theme.css; positioning + the
+     float animation are here. */
+  #reaction-layer {
+    position: absolute; inset: 0; overflow: hidden;
+    pointer-events: none; z-index: 5;
+  }
+  .reaction-float {
+    position: absolute; bottom: 64px;
+    font-size: 2.1rem; line-height: 1;
+    will-change: transform, opacity;
+    animation: reaction-rise 2.6s ease-out forwards;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.5);
+  }
+  .reaction-float img { width: 2.1rem; height: 2.1rem; display: block; }
+  @keyframes reaction-rise {
+    0%   { transform: translateY(0) scale(0.5); opacity: 0; }
+    14%  { transform: translateY(-14px) scale(1.15); opacity: 1; }
+    100% { transform: translateY(-230px) scale(1); opacity: 0; }
+  }
+  #reaction-bar {
+    position: absolute; bottom: 12px; left: 12px;
+    display: flex; gap: 0.25rem; align-items: center;
+    padding: 0.3rem 0.45rem; border-radius: 4px; z-index: 6;
+  }
+  #reaction-bar button {
+    background: transparent; border: none; cursor: pointer;
+    font-size: 1.2rem; line-height: 1; padding: 0.1rem 0.25rem;
+    transition: transform 0.1s;
+    min-width: 36px; min-height: 36px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  #reaction-bar button:hover { transform: scale(1.25); }
+  #reaction-bar button img { width: 1.5rem; height: 1.5rem; display: block; }
+  /* The "import your own" affordance at the end of the bar. */
+  #reaction-bar button.reaction-add { color: #c9a0d9; font-size: 1.35rem; font-weight: 700; }
   #vol-controls {
     position: absolute;
     bottom: 12px;
@@ -153,6 +190,17 @@
   #vol-controls input[type="range"] {
     width: 80px;
     accent-color: white;
+  }
+  #stability-btn {
+    min-width: 4.3rem;
+    padding: 0.1rem 0.65rem !important;
+    font-size: 0.78rem !important;
+    font-weight: 700;
+  }
+  #stability-btn.stable {
+    background: rgba(56, 189, 248, 0.18) !important;
+    border: 1px solid rgba(56, 189, 248, 0.34) !important;
+    color: #7dd3fc !important;
   }
   .placeholder {
     color: #555;
@@ -199,7 +247,7 @@
   #request-panel {
     background: #0e0e0e;
     border-top: 1px solid #1f1f1f;
-    max-height: 32vh; overflow-y: auto;
+    max-height: 46vh; overflow-y: auto;
   }
   #request-panel.collapsed { max-height: 2.4rem; overflow: hidden; }
   #request-head {
@@ -211,6 +259,55 @@
   #request-head h2 { margin: 0; font-size: 0.85rem; font-weight: 500; color: #ccc; letter-spacing: 0.02em; flex: 1; }
   #request-head .toggle { color: #666; font-size: 0.8rem; }
   #request-panel.collapsed #request-head { border-bottom: none; }
+  /* Reactions panel — import-your-own lives here (the in-player bar is
+     tap-to-react only). Same collapsible chrome as the library panel. */
+  #reactions-panel {
+    background: #0e0e0e; border-top: 1px solid #1f1f1f;
+    max-height: 46vh; overflow-y: auto;
+  }
+  #reactions-panel.collapsed { max-height: 2.4rem; overflow: hidden; }
+  #reactions-head {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.5rem 1rem; cursor: pointer; user-select: none;
+    position: sticky; top: 0; background: #0e0e0e; border-bottom: 1px solid #1a1a1a;
+  }
+  #reactions-head h2 { margin: 0; font-size: 0.85rem; font-weight: 500; color: #ccc; letter-spacing: 0.02em; flex: 1; }
+  #reactions-head .toggle { color: #666; font-size: 0.8rem; }
+  #reactions-panel.collapsed #reactions-head { border-bottom: none; }
+  #reactions-panel-body { padding: 0.6rem 1rem 0.9rem; }
+  .reactions-label { color: #888; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 0.4rem; }
+  /* Scrollable emoji picker — compact tiles, capped height so the grid scrolls
+     instead of pushing the page. */
+  #emoji-picker {
+    display: grid; grid-template-columns: repeat(auto-fill, 30px);
+    gap: 0.15rem; max-height: 8.5rem; overflow-y: auto;
+    margin-bottom: 0.8rem; padding-right: 0.2rem;
+  }
+  #emoji-picker button {
+    width: 30px; height: 30px; padding: 0; line-height: 1;
+    background: transparent; border: 0; border-radius: 5px; cursor: pointer;
+    font-size: 1.1rem; display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.1s, transform 0.1s;
+  }
+  #emoji-picker button:hover { background: #1f1f1f; transform: scale(1.15); }
+  #emoji-picker button img { width: 20px; height: 20px; }
+  #reaction-import-btn {
+    background: #2a1f30; color: #d9b8e6; border: 1px solid #4a3556;
+    border-radius: 6px; padding: 0.45rem 0.9rem; font-size: 0.85rem;
+    font-family: inherit; cursor: pointer;
+  }
+  #reaction-import-btn:hover { background: #352640; }
+  #reaction-import-btn:disabled { opacity: 0.5; cursor: default; }
+  #reactions-hint { color: #666; font-size: 0.75rem; margin: 0.45rem 0 0.6rem; line-height: 1.4; }
+  #reactions-gallery { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  #reactions-gallery .empty { color: #555; font-size: 0.8rem; }
+  #reactions-gallery button {
+    width: 44px; height: 44px; padding: 0; border-radius: 6px;
+    background: #161616; border: 1px solid #262626; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  #reactions-gallery button:hover { border-color: #4a3556; }
+  #reactions-gallery button img { max-width: 32px; max-height: 32px; }
   #request-search {
     width: calc(100% - 2rem); margin: 0.5rem 1rem;
     background: #1a1a1a; color: #eee;
@@ -218,29 +315,119 @@
     padding: 0.4rem 0.6rem; font-size: 0.85rem; font-family: inherit;
   }
   #request-search:focus { outline: none; border-color: #444; }
+  #library-nav {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0 1rem 0.45rem;
+    color: #777; font-size: 0.78rem;
+  }
+  #library-back {
+    background: #202833; color: #d7dee8; border: 1px solid #303a48;
+    border-radius: 4px; cursor: pointer; flex-shrink: 0;
+    font-family: inherit; font-size: 0.78rem; min-height: 30px;
+    padding: 0.25rem 0.55rem;
+  }
+  #library-back:disabled { opacity: 0.45; cursor: default; }
+  #library-path {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   #request-results { list-style: none; margin: 0; padding: 0 0 0.5rem; }
+  #request-results.library-grid {
+    display: grid;
+    gap: 0.85rem;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    padding: 0.65rem 1rem 1rem;
+  }
   #request-results li {
     display: flex; align-items: center; gap: 0.5rem;
     padding: 0.3rem 1rem; font-size: 0.85rem; color: #ccc;
+  }
+  #request-results.library-grid li {
+    align-items: stretch;
+    background: #111820;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 8px;
+    cursor: default;
+    display: grid;
+    gap: 0.5rem;
+    grid-template-rows: auto minmax(3.4rem, 1fr) auto;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0.55rem;
+  }
+  #request-results.library-grid li:hover {
+    background: #151e29;
+    border-color: rgba(148, 163, 184, 0.3);
   }
   #request-results .rthumb {
     flex-shrink: 0; width: 30px; height: 45px;
     background: #0e0e0e; border-radius: 3px; overflow: hidden;
   }
+  #request-results.library-grid .rthumb {
+    aspect-ratio: 2 / 3;
+    background: #0d131b;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 6px;
+    width: 100%;
+    height: auto;
+  }
   #request-results .rthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
   #request-results .rthumb img.loaded { opacity: 1; }
+  #request-results .rthumb.folder {
+    align-items: center; color: #8ca3ba; display: inline-flex;
+    font-size: 1.05rem; justify-content: center;
+  }
+  #request-results.library-grid .rthumb.folder {
+    aspect-ratio: 2 / 3;
+    background: linear-gradient(180deg, #172131, #101821);
+    color: #9ec7e8;
+    font-size: 0.9rem;
+    font-weight: 850;
+    letter-spacing: 0;
+    line-height: 1.15;
+    padding: 0.7rem;
+    text-align: center;
+    text-transform: uppercase;
+  }
   #request-results .rtitle { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; overflow: hidden; }
   #request-results .rtitle .rt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #request-results .rtitle .rt-parent { color: #666; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #request-results.library-grid .rtitle {
+    gap: 0.2rem;
+  }
+  #request-results.library-grid .rtitle .rt-name {
+    display: -webkit-box;
+    font-size: 0.83rem;
+    font-weight: 750;
+    line-height: 1.25;
+    min-height: 2.05rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  #request-results.library-grid .rtitle .rt-parent {
+    font-size: 0.68rem;
+    line-height: 1.2;
+  }
   #request-results button {
     background: #2a2a2a; color: #eee; border: 1px solid #333;
     padding: 0.2rem 0.6rem; font-size: 0.78rem; border-radius: 4px;
     cursor: pointer; font-family: inherit; flex-shrink: 0;
   }
+  #request-results.library-grid button {
+    justify-self: stretch;
+    min-height: 34px;
+    width: 100%;
+  }
   #request-results button:hover { background: #333; }
   #request-results button:disabled { opacity: 0.5; cursor: default; }
   #request-results button.done { background: #1f3326; color: #7dcc99; border-color: #2c4a37; }
   #request-results .empty { color: #555; padding: 0.4rem 1rem; }
+  #request-results.library-grid .empty {
+    grid-column: 1 / -1;
+    min-height: 4rem;
+  }
   /* Anonymous chat panel — collapsible. Sits below the player, takes the
      remaining viewport height up to 40vh. No usernames; each session gets a
      small color dot derived from a localStorage-stored opaque id. */
@@ -629,6 +816,63 @@
       min-height: 0;
     }
   }
+
+  /* ---- Report-issue modal ------------------------------------------- */
+  #report-modal {
+    position: fixed; inset: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    padding: 1rem;
+  }
+  #report-modal.hidden { display: none; }
+  #report-card {
+    width: 100%; max-width: 420px;
+    background: #14181f; border: 1px solid #2a3340; border-radius: 10px;
+    padding: 1.1rem 1.2rem; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  }
+  #report-card h2 { margin: 0 0 0.3rem; font-size: 1.05rem; color: #eee; }
+  #report-sub { margin: 0 0 0.8rem; font-size: 0.82rem; color: #8b96a5; line-height: 1.4; }
+  #report-message {
+    width: 100%; box-sizing: border-box; resize: vertical;
+    background: #0d1117; color: #e6e6e6;
+    border: 1px solid #2a3340; border-radius: 6px;
+    padding: 0.5rem 0.6rem; font-family: inherit; font-size: 0.9rem;
+  }
+  #report-message:focus { outline: none; border-color: #4a3556; }
+  #report-actions {
+    display: flex; align-items: center; gap: 0.5rem; margin-top: 0.8rem;
+  }
+  #report-feedback { flex: 1; font-size: 0.8rem; color: #8b96a5; }
+  #report-actions button {
+    font-family: inherit; font-size: 0.85rem; cursor: pointer;
+    padding: 0.4rem 0.8rem; border-radius: 6px; border: 1px solid #2a3340;
+    background: #1c2330; color: #cfd6df;
+  }
+  #report-actions button:hover { background: #232b3a; }
+  #report-send {
+    border-color: #4a3556 !important; background: #2a1f30 !important; color: #d9b8e6 !important;
+  }
+  #report-send:hover { background: #352640 !important; }
+  #report-send:disabled { opacity: 0.5; cursor: default; }
+
+  /* ---- Session-cap overlay ------------------------------------------ */
+  /* Shown over the player once a viewer hits the continuous-watch cap. */
+  #session-overlay {
+    position: absolute; inset: 0; z-index: 8;
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    background: rgba(0, 0, 0, 0.88); color: #eee; padding: 1rem;
+  }
+  #session-overlay.hidden { display: none; }
+  #session-overlay > div { display: flex; flex-direction: column; gap: 0.6rem; align-items: center; max-width: 22rem; }
+  #session-overlay strong { font-size: 1.1rem; }
+  #session-overlay span { color: #9aa6b2; font-size: 0.9rem; line-height: 1.4; }
+  #session-continue {
+    margin-top: 0.3rem; font-family: inherit; font-size: 0.95rem; cursor: pointer;
+    padding: 0.55rem 1.3rem; border-radius: 8px;
+    background: #1a3050; color: #cfe2ff; border: 1px solid #244266;
+  }
+  #session-continue:hover { background: #224066; }
+  #session-continue:disabled { opacity: 0.5; cursor: default; }
 </style>
 <link rel="stylesheet" href="/jetstream-theme.css">
 </head>
@@ -646,6 +890,9 @@
     <!-- Shown only for friend/admin tokens (see can_control in /api/status). -->
     <a id="controls-link" href="/controls"
        style="display:none;font-size:0.85rem;color:#6cb6ff;text-decoration:none;border:1px solid #244266;background:#1a3050;padding:0.25rem 0.6rem;border-radius:4px">🎛 Controls</a>
+    <!-- Always available: lets a viewer flag a playback issue to the host. -->
+    <button id="report-btn" type="button" title="Report a playback issue"
+            style="font-size:0.85rem;color:#c9a0d9;background:#2a1f30;border:1px solid #4a3556;padding:0.25rem 0.6rem;border-radius:4px;cursor:pointer">⚑ Report</button>
   </span>
 </header>
 <main id="main">
@@ -655,16 +902,26 @@
     <div id="vol-controls">
       <button id="mute-btn" title="Mute / unmute">🔊</button>
       <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="1" title="Volume">
+      <button id="stability-btn" type="button" title="Playback mode">Live</button>
       <button id="pip-btn" title="Picture in picture" style="display:none">⧉</button>
       <button id="fs-btn" title="Fullscreen" style="display:none">⛶</button>
     </div>
     <div id="unmute-overlay">tap to unmute</div>
+    <div id="reaction-layer"></div>
+    <div id="reaction-bar"></div>
+    <div id="session-overlay" class="hidden">
+      <div>
+        <strong>You've been watching for a while</strong>
+        <span>Tap below to keep the stream going.</span>
+        <button id="session-continue" type="button">Keep watching</button>
+      </div>
+    </div>
   </div>
 </main>
 
-<section id="queue-panel" style="display:none">
+<section id="queue-panel">
   <div id="queue-head">
-    <h2>up next</h2>
+    <h2>queue</h2>
     <span id="queue-count"></span>
     <span class="toggle" id="queue-toggle">▾</span>
   </div>
@@ -673,16 +930,58 @@
 
 <section id="request-panel">
   <div id="request-head">
-    <h2>request something</h2>
+    <h2>library</h2>
     <span class="toggle" id="request-toggle">▸</span>
   </div>
-  <input id="request-search" type="search" placeholder="🔍 Search the library…" autocomplete="off">
+  <input id="request-search" type="search" placeholder="Search movies and shows…" autocomplete="off">
+  <div id="library-nav">
+    <button id="library-back" type="button" disabled>Back</button>
+    <span id="library-path">Library</span>
+  </div>
   <ul id="request-results"><li class="empty">Search the library, then tap Request to ask the host to queue it.</li></ul>
+</section>
+
+<section id="reactions-panel" class="collapsed">
+  <div id="reactions-head">
+    <h2>reactions</h2>
+    <span class="toggle" id="reactions-toggle">▸</span>
+  </div>
+  <div id="reactions-panel-body">
+    <p class="reactions-label">Tap an emoji to react</p>
+    <div id="emoji-picker"></div>
+    <p class="reactions-label">Your own reactions</p>
+    <button id="reaction-import-btn" type="button">＋ Import your own reaction</button>
+    <p id="reactions-hint">PNG, GIF, WebP or JPEG · max 512 KB. Imported reactions appear in the tap bar over the video for everyone watching.</p>
+    <div id="reactions-gallery"><span class="empty">No custom reactions yet — import one above.</span></div>
+  </div>
 </section>
 
 <div id="chat-app"></div>
 
+<!-- Report-issue modal. Hidden until the header ⚑ Report button opens it. The
+     viewer optionally types a short note; the client attaches what it's
+     showing (title/path/position/mode/mute/fullscreen) and POSTs /api/report,
+     where the server adds authoritative context + a stream-health snapshot. -->
+<div id="report-modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="report-title">
+  <div id="report-card">
+    <h2 id="report-title">Report an issue</h2>
+    <p id="report-sub">Something wrong with playback? Tell the host. Current title, position, and stream health are attached automatically.</p>
+    <textarea id="report-message" maxlength="1000" rows="3"
+              placeholder="What's happening? (optional) — e.g. audio out of sync, buffering, black screen"></textarea>
+    <div id="report-actions">
+      <span id="report-feedback"></span>
+      <button id="report-cancel" type="button">Cancel</button>
+      <button id="report-send" type="button">Send report</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.10/dist/hls.min.js"></script>
+<!-- Twemoji: render reaction emoji as images so they show identically on
+     devices that lack a color-emoji font (where they'd otherwise be blank
+     "tofu" circles). If this CDN is blocked, twemojify() no-ops and the
+     plain emoji text is used as-is. -->
+<script src="https://cdn.jsdelivr.net/npm/@twemoji/api@15.1.0/dist/twemoji.min.js" crossorigin="anonymous"></script>
 <script type="module" src="/build/viewerChat.js"></script>
 <script>
 const video = document.getElementById("video");
@@ -714,6 +1013,7 @@ const positionEl = document.getElementById("position");
 const unmuteOverlay = document.getElementById("unmute-overlay");
 const muteBtn = document.getElementById("mute-btn");
 const volSlider = document.getElementById("vol-slider");
+const stabilityBtn = document.getElementById("stability-btn");
 const fsBtn = document.getElementById("fs-btn");
 const pipBtn = document.getElementById("pip-btn");
 
@@ -746,6 +1046,46 @@ if (pipSupported) pipBtn.style.display = "";
 let hls = null;
 let lastReady = false;
 let serverPaused = false;
+let lastStatus = null;  // most recent /api/status payload, for the report modal
+
+const PLAYBACK_MODE_KEY = "jetstream_playback_mode";
+let playbackMode = localStorage.getItem(PLAYBACK_MODE_KEY) === "stable" ? "stable" : "live";
+
+function isStablePlayback() {
+  return playbackMode === "stable";
+}
+
+function targetLagSeconds() {
+  if (isStablePlayback()) return IS_FIREFOX ? 9.0 : 8.0;
+  return IS_FIREFOX ? 5.0 : 2.5;
+}
+
+function driftSnapSeconds() {
+  return isStablePlayback() ? 14 : (IS_FIREFOX ? 8 : 5);
+}
+
+function hlsConfig() {
+  if (isStablePlayback()) {
+    return {
+      lowLatencyMode: false,
+      liveSyncDurationCount: 6,
+      liveMaxLatencyDurationCount: 14,
+      maxBufferLength: 18,
+      backBufferLength: 10,
+    };
+  }
+  return IS_FIREFOX
+    ? { lowLatencyMode: false, liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 10 }
+    : { lowLatencyMode: true, liveSyncDurationCount: 1 };
+}
+
+function updatePlaybackModeUI() {
+  stabilityBtn.textContent = isStablePlayback() ? "Stable" : "Live";
+  stabilityBtn.classList.toggle("stable", isStablePlayback());
+  stabilityBtn.title = isStablePlayback()
+    ? "Stable playback: more buffer, more delay"
+    : "Live playback: lower delay, less buffer";
+}
 
 function syncMuteUI() {
   // Surface the overlay whenever the user needs to interact: muted (so they
@@ -809,6 +1149,18 @@ volSlider.addEventListener("input", () => {
   video.play().catch(() => {});
   localStorage.setItem("jetstream_volume", String(v));
   syncMuteUI();
+});
+stabilityBtn.addEventListener("click", () => {
+  playbackMode = isStablePlayback() ? "live" : "stable";
+  localStorage.setItem(PLAYBACK_MODE_KEY, playbackMode);
+  updatePlaybackModeUI();
+  const wasPaused = video.paused;
+  hardTeardown();
+  video.removeAttribute("src");
+  video.load();
+  lastReady = false;
+  setupPlayer();
+  if (!wasPaused && !serverPaused) playWithFallback();
 });
 fsBtn.addEventListener("click", () => {
   // Prefer the webkit-prefixed video API whenever it exists, regardless of
@@ -879,9 +1231,11 @@ function snapToLive() {
   if (hls && typeof hls.liveSyncPosition === "number" && isFinite(hls.liveSyncPosition)) {
     target = hls.liveSyncPosition;
   } else if (video.buffered.length) {
-    target = video.buffered.end(video.buffered.length - 1) - 1.0;
+    const margin = isStablePlayback() ? targetLagSeconds() : 1.0;
+    target = video.buffered.end(video.buffered.length - 1) - margin;
   } else if (video.seekable.length) {
-    target = video.seekable.end(video.seekable.length - 1);
+    const margin = isStablePlayback() ? targetLagSeconds() : 0;
+    target = video.seekable.end(video.seekable.length - 1) - margin;
   }
   if (target != null && isFinite(target) && target >= 0) {
     try { video.currentTime = target; } catch {}
@@ -910,15 +1264,9 @@ video.addEventListener("loadedmetadata", () => {
 // UA sniff is fine here — we only need to recognise Gecko, not distinguish
 // forks of it.
 const IS_FIREFOX = /Firefox\//i.test(navigator.userAgent);
-// playhead = server_now − this. Tighter target for Chromium (which can sit
-// 2.5s behind the live edge cleanly); Firefox gets a wider lag so its
-// liveSyncDurationCount:3 buffer has room to play out without the snap loop
-// pulling the playhead past where Hls.js actually has frames appended.
-const TARGET_LAG_S = IS_FIREFOX ? 5.0 : 2.5;
-// Drift-correction snap threshold. Firefox's wider lag means casual PDT
-// drift looks bigger in absolute seconds — only step in on real desync, not
-// every small wobble. Chromium keeps the tighter window.
-const DRIFT_SNAP_S = IS_FIREFOX ? 8 : 5;
+// Playback mode is per viewer. Live keeps latency low; Stable sits farther
+// behind the live edge so distant networks have more buffer to absorb jitter.
+updatePlaybackModeUI();
 let serverClockOffsetMs = 0;  // updated by pollStatus from s.server_unix.
 
 function currentPlayingDateMs() {
@@ -946,8 +1294,8 @@ setInterval(() => {
   const playing = currentPlayingDateMs();
   if (playing == null) return;
   const serverNowMs = Date.now() + serverClockOffsetMs;
-  const drift = (serverNowMs - playing) / 1000 - TARGET_LAG_S;
-  if (Math.abs(drift) > DRIFT_SNAP_S) snapToLive();
+  const drift = (serverNowMs - playing) / 1000 - targetLagSeconds();
+  if (Math.abs(drift) > driftSnapSeconds()) snapToLive();
 }, 2000);
 // Disable space-bar pause and right-click menu — but only when no text
 // input is focused, otherwise the chat box can't take spaces.
@@ -1026,19 +1374,11 @@ function setupPlayer() {
     // suppresses autoplay. The `loadedmetadata`/`canplay` handlers cover
     // the case where autoplay still doesn't kick in.
   } else if (window.Hls && Hls.isSupported()) {
-    // Match admin's tuning: 1-segment live-edge headroom keeps lag tight and
-    // avoids the constant snap-to-live hammering that the previous 3-segment
-    // setting caused with PDT-drift correction. The encode side now forces
-    // IDR frames at exact segment boundaries (see app.py force_key_frames),
-    // so each segment is independently decodable and Firefox doesn't stall
-    // on mid-GOP segment starts.
-    // Firefox MSE: starves on lowLatencyMode + 1-segment buffer, surfacing as
-    // periodic micro-skips even with healthy 1 s segments. Wider headroom +
-    // standard latency mode lets Gecko's decoder stay ahead of presentation.
-    // Chromium keeps the tighter Chrome-optimised config it's always had.
-    hls = new Hls(IS_FIREFOX
-      ? { lowLatencyMode: false, liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 10 }
-      : { lowLatencyMode: true, liveSyncDurationCount: 1 });
+    // Hls.js tuning is per viewer. Live mode stays close to the edge; Stable
+    // mode sits farther back for distant or jittery networks. Firefox keeps
+    // wider headroom even in Live because Gecko starves on lowLatencyMode +
+    // a 1-segment buffer.
+    hls = new Hls(hlsConfig());
     hls.loadSource(src);
     hls.attachMedia(video);
     // Explicit play() after attach — iOS Safari can leave the element paused
@@ -1090,6 +1430,15 @@ async function pollStatus() {
   try {
     const res = await fetch("/api/status");
     const s = await res.json();
+    lastStatus = s;  // stashed so the report-issue modal can attach context
+    // Continuous-watch cap: show the "keep watching" overlay and stop the
+    // player rather than letting it stall silently on cut-off segments.
+    if (s.session_expired) {
+      sessionOverlay.classList.remove("hidden");
+      try { video.pause(); } catch {}
+    } else {
+      sessionOverlay.classList.add("hidden");
+    }
     // Reveal the Controls link once we know this token can drive playback.
     if (s.can_control) {
       const cl = document.getElementById("controls-link");
@@ -1202,9 +1551,314 @@ if (!chatSid) {
   localStorage.setItem("jetstream_chatsid", chatSid);
 }
 
-// ---- Up-next queue (read-only) ----------------------------------------
+// ---- Report an issue --------------------------------------------------
+// Header ⚑ Report opens a small modal. The client attaches what its player
+// currently believes it's showing (title/path/position/mode/mute/fullscreen);
+// the server fills in the authoritative context + stream-health snapshot.
+const reportBtn = document.getElementById("report-btn");
+const reportModal = document.getElementById("report-modal");
+const reportMessage = document.getElementById("report-message");
+const reportSend = document.getElementById("report-send");
+const reportCancel = document.getElementById("report-cancel");
+const reportFeedback = document.getElementById("report-feedback");
+
+function openReportModal() {
+  reportFeedback.textContent = "";
+  reportSend.disabled = false;
+  reportModal.classList.remove("hidden");
+  reportMessage.focus();
+}
+function closeReportModal() {
+  reportModal.classList.add("hidden");
+}
+async function submitReport() {
+  reportSend.disabled = true;
+  reportFeedback.textContent = "Sending…";
+  const s = lastStatus || {};
+  // Prefer the live <video> clock for what the viewer actually sees; fall back
+  // to the server-reported position when the element isn't playing yet.
+  const pos = (video && isFinite(video.currentTime) && video.currentTime > 0)
+    ? video.currentTime
+    : (s.position_seconds != null ? s.position_seconds : null);
+  const payload = {
+    message: reportMessage.value,
+    title: s.title || null,
+    path: s.path || null,
+    position_seconds: pos,
+    mode: isStablePlayback() ? "stable" : "live",
+    muted: !!video.muted,
+    fullscreen: !!(document.fullscreenElement || document.webkitFullscreenElement),
+  };
+  try {
+    const r = await fetch("/api/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (r.ok) {
+      reportFeedback.textContent = "Thanks — report sent.";
+      reportMessage.value = "";
+      setTimeout(closeReportModal, 900);
+    } else if (r.status === 429) {
+      reportFeedback.textContent = "Slow down — too many reports just now.";
+      reportSend.disabled = false;
+    } else {
+      reportFeedback.textContent = "Couldn't send — try again.";
+      reportSend.disabled = false;
+    }
+  } catch {
+    reportFeedback.textContent = "Network error — try again.";
+    reportSend.disabled = false;
+  }
+}
+reportBtn.addEventListener("click", openReportModal);
+reportCancel.addEventListener("click", closeReportModal);
+reportSend.addEventListener("click", submitReport);
+// Click the dim backdrop (not the card) to dismiss; Esc closes too.
+reportModal.addEventListener("click", (e) => { if (e.target === reportModal) closeReportModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !reportModal.classList.contains("hidden")) closeReportModal();
+});
+
+// ---- Session-cap overlay ----------------------------------------------
+// When /api/status reports session_expired, the /hls auth gate is already
+// cutting segments. Surface a "keep watching" prompt; tapping it resets the
+// server-side clock and re-kicks the player rather than leaving a silent stall.
+const sessionOverlay = document.getElementById("session-overlay");
+const sessionContinue = document.getElementById("session-continue");
+sessionContinue.addEventListener("click", async () => {
+  sessionContinue.disabled = true;
+  try { await fetch("/api/session/continue", { method: "POST" }); } catch {}
+  sessionOverlay.classList.add("hidden");
+  sessionContinue.disabled = false;
+  // Auth passes again now — rebuild the player and resume.
+  try { setupPlayer(); } catch {}
+  try { await playWithFallback(); } catch {}
+  pollStatus();
+});
+
+// ---- Emoji reactions --------------------------------------------------
+// Tap an emoji (or a viewer-imported custom image) → it floats up over the
+// video for everyone watching. Rides a dedicated ephemeral feed
+// (/reactions/recent), polled faster than chat for responsiveness. Reuses
+// chatSid so a client skips re-animating its own reaction (it spawns that one
+// optimistically on tap). The "＋" button lets a viewer import their own.
+const reactionLayer = document.getElementById("reaction-layer");
+const reactionBar = document.getElementById("reaction-bar");
+let reactionMaxId = 0;
+let reactionBarSig = "";  // rebuild the bar only when the available set changes
+
+// Swap emoji text → Twemoji <img> so it renders on devices without a color-
+// emoji font (where it'd be a blank "tofu" circle). No-op if the CDN script
+// didn't load, leaving the plain emoji text in place.
+function twemojify(el) {
+  if (window.twemoji) {
+    try { twemoji.parse(el, { folder: "svg", ext: ".svg" }); } catch {}
+  }
+}
+
+// Cap simultaneous floats. The server is already bounded (per-IP rate limit +
+// 100-entry ring + 6s recency window), so the most a single poll can ever hand
+// us is ~100 — but a returning background tab could try to spawn that whole
+// burst at once. Dropping floats past the cap keeps a flood from janking the
+// device; the animation is decorative, so a dropped float is harmless.
+const MAX_CONCURRENT_FLOATS = 40;
+
+// `r` is a reaction record: {emoji} for a built-in, or {custom_url} for an
+// imported image.
+function spawnReaction(r) {
+  if (reactionLayer.childElementCount >= MAX_CONCURRENT_FLOATS) return;
+  const el = document.createElement("span");
+  el.className = "reaction-float";
+  if (r && r.custom_url) {
+    const img = document.createElement("img");
+    img.src = r.custom_url; img.alt = "";
+    el.appendChild(img);
+  } else {
+    el.textContent = (r && r.emoji) || "";
+    twemojify(el);
+  }
+  // Random horizontal start across the middle band so floats don't all stack.
+  el.style.left = (8 + Math.random() * 78) + "%";
+  el.addEventListener("animationend", () => el.remove());
+  reactionLayer.appendChild(el);
+  // Safety net in case animationend never fires (tab backgrounded mid-anim).
+  setTimeout(() => el.remove(), 3000);
+}
+
+async function sendReaction(payload, optimistic) {
+  spawnReaction(optimistic); // optimistic — tapper sees it instantly
+  try {
+    await fetch("/reactions/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, sid: chatSid }),
+    });
+  } catch {}
+}
+
+function buildReactionBar(emojis, custom) {
+  const sig = emojis.join(",") + "|" + custom.map(c => c.id).join(",");
+  if (sig === reactionBarSig && reactionBar.childElementCount) return; // no change
+  reactionBarSig = sig;
+  reactionBar.innerHTML = "";
+  for (const e of emojis) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = e; b.title = "React " + e;
+    twemojify(b);
+    b.addEventListener("click", () => sendReaction({ emoji: e }, { emoji: e }));
+    reactionBar.appendChild(b);
+  }
+  for (const c of custom) {
+    const b = document.createElement("button");
+    b.type = "button"; b.title = c.label || "Custom reaction";
+    const img = document.createElement("img");
+    img.src = c.url; img.alt = c.label || "";
+    b.appendChild(img);
+    b.addEventListener("click", () => sendReaction({ custom_id: c.id }, { custom_url: c.url }));
+    reactionBar.appendChild(b);
+  }
+  // Importing your own reaction lives in the dedicated "reactions" panel
+  // below the player — not on this in-player tap bar.
+}
+
+// ---- Reactions panel (import + gallery) -------------------------------
+// The dedicated panel below the player owns importing. The in-player bar is
+// tap-to-react only.
+const reactionsPanel = document.getElementById("reactions-panel");
+const reactionsToggle = document.getElementById("reactions-toggle");
+const reactionImportBtn = document.getElementById("reaction-import-btn");
+const reactionsGallery = document.getElementById("reactions-gallery");
+
+if (localStorage.getItem("jetstream_reactions_collapsed") === "0") {
+  reactionsPanel.classList.remove("collapsed");
+  reactionsToggle.textContent = "▾";
+}
+document.getElementById("reactions-head").addEventListener("click", () => {
+  const c = reactionsPanel.classList.toggle("collapsed");
+  reactionsToggle.textContent = c ? "▸" : "▾";
+  localStorage.setItem("jetstream_reactions_collapsed", c ? "1" : "0");
+});
+
+// Scrollable emoji picker. The server accepts ANY emoji (it validates the
+// codepoints), so this list is purely the UI menu — extend it freely. Built
+// once on load; tapping a tile reacts for everyone.
+const EMOJI_PICKER = (
+  "😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃 🫠 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😙 🥲 😋 😛 😜 🤪 😝 🤑 " +
+  "🤗 🤭 🫢 🫣 🤫 🤔 🫡 🤐 🤨 😐 😑 😶 🫥 😏 😒 🙄 😬 🤥 😌 😔 😪 🤤 😴 😷 🤒 🤕 🤢 🤮 🤧 " +
+  "🥵 🥶 🥴 😵 🤯 🤠 🥳 🥸 😎 🤓 🧐 😕 🫤 😟 🙁 😮 😯 😲 😳 🥺 🥹 😦 😧 😨 😰 😥 😢 😭 😱 😖 " +
+  "😣 😞 😓 😩 😫 🥱 😤 😡 😠 🤬 😈 👿 💀 💩 🤡 👹 👺 👻 👽 👾 🤖 😺 😹 😻 😼 😽 🙀 😿 😾 " +
+  "❤️ 🧡 💛 💚 💙 💜 🤎 🖤 🤍 💔 ❣️ 💕 💞 💓 💗 💖 💘 💝 💯 💢 💥 💫 💦 💨 💬 💭 💤 " +
+  "👋 🤚 🖐️ ✋ 🖖 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 🫵 👈 👉 👆 🖕 👇 ☝️ 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 🫶 👐 🤲 🙏 ✍️ 💅 🤳 💪 " +
+  "🎉 🎊 🥂 🍻 🍿 🎬 🎥 📺 🎮 🕹️ 🎯 🎲 🏆 🥇 🎁 🎈 🔥 ⭐ 🌟 ✨ ⚡ ☀️ 🌙 🌈 ☁️ 🌧️ ❄️ 🎵 🎶 🎤 " +
+  "🍕 🍔 🍟 🌭 🥓 🍳 🥞 🧀 🥗 🌮 🌯 🍣 🍜 🍲 🍝 🍛 🍱 🍙 🍢 🍡 🍦 🍰 🎂 🧁 🍩 🍪 🍫 🍬 🍭 ☕ 🍵 🧋 🥤 🍺 🍷 🥃 🍸 🍹 🍾 " +
+  "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🦄 🐝 🐢 🦋 🐙 🐳 🐬 🐠 " +
+  "🚗 🚀 ✈️ 🏠 💡 🔑 📱 💻 ⌚ 📷 🎒 ✅ ❌ ❓ ❗ 🚫 ⚠️ ♻️ 🆗 🆒 🆕 🔝 🔔 🔕 💰 💲"
+).trim().split(/\s+/);
+
+function renderEmojiPicker() {
+  const grid = document.getElementById("emoji-picker");
+  grid.innerHTML = "";
+  for (const e of EMOJI_PICKER) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = e; b.title = "React " + e;
+    twemojify(b);
+    b.addEventListener("click", () => sendReaction({ emoji: e }, { emoji: e }));
+    grid.appendChild(b);
+  }
+}
+renderEmojiPicker();
+
+// Mirror the custom set into the panel gallery so viewers can see/tap what's
+// been imported without hunting the tiny in-player bar. Rebuilt only on change.
+let reactionGallerySig = "";
+function renderReactionGallery(custom) {
+  const sig = custom.map(c => c.id).join(",");
+  if (sig === reactionGallerySig) return;
+  reactionGallerySig = sig;
+  if (!custom.length) {
+    reactionsGallery.innerHTML = '<span class="empty">No custom reactions yet — import one above.</span>';
+    return;
+  }
+  reactionsGallery.innerHTML = "";
+  for (const c of custom) {
+    const b = document.createElement("button");
+    b.type = "button"; b.title = c.label || "Custom reaction";
+    const img = document.createElement("img");
+    img.src = c.url; img.alt = c.label || "";
+    b.appendChild(img);
+    b.addEventListener("click", () => sendReaction({ custom_id: c.id }, { custom_url: c.url }));
+    reactionsGallery.appendChild(b);
+  }
+}
+
+// Hidden file input drives the import flow (opened by the panel's button).
+const reactionUploadInput = document.createElement("input");
+reactionUploadInput.type = "file";
+reactionUploadInput.accept = "image/png,image/gif,image/webp,image/jpeg";
+reactionUploadInput.style.display = "none";
+document.body.appendChild(reactionUploadInput);
+reactionImportBtn.addEventListener("click", () => reactionUploadInput.click());
+reactionUploadInput.addEventListener("change", async () => {
+  const file = reactionUploadInput.files && reactionUploadInput.files[0];
+  reactionUploadInput.value = "";  // let the same file be re-picked later
+  if (!file) return;
+  if (file.size > 512 * 1024) { alert("That image is too large (max 512 KB)."); return; }
+  reactionImportBtn.disabled = true;
+  const fd = new FormData();
+  fd.append("image", file);
+  fd.append("sid", chatSid);
+  try {
+    const r = await fetch("/api/reactions/upload", { method: "POST", body: fd });
+    if (r.ok) {
+      const j = await r.json();
+      reactionBarSig = "";   // force a rebuild so the new button shows
+      reactionGallerySig = "";
+      reactionPoll();
+      if (j.id) sendReaction({ custom_id: j.id }, { custom_url: j.url }); // celebrate it
+    } else if (r.status === 409) {
+      alert("The reaction set is full — ask the host to clear some out.");
+    } else if (r.status === 413) {
+      alert("That image is too large (max 512 KB).");
+    } else if (r.status === 415) {
+      alert("Unsupported image — use PNG, GIF, WebP, or JPEG.");
+    } else if (r.status === 429) {
+      alert("Slow down — too many uploads just now.");
+    } else {
+      alert("Upload failed.");
+    }
+  } catch {
+    alert("Upload failed — network error.");
+  } finally {
+    reactionImportBtn.disabled = false;
+  }
+});
+
+async function reactionPoll() {
+  try {
+    const r = await fetch("/reactions/recent?since=" + reactionMaxId);
+    if (!r.ok) return;
+    const j = await r.json();
+    if (Array.isArray(j.emojis)) {
+      const custom = Array.isArray(j.custom) ? j.custom : [];
+      buildReactionBar(j.emojis, custom);
+      renderReactionGallery(custom);
+    }
+    if (typeof j.max_id === "number") reactionMaxId = j.max_id;
+    if (Array.isArray(j.reactions)) {
+      for (const x of j.reactions) {
+        if (x.sid !== chatSid) spawnReaction(x); // skip our own echo
+      }
+    }
+  } catch {}
+}
+setInterval(reactionPoll, 1000);
+reactionPoll();
+
+// ---- Queue (read-only) ------------------------------------------------
 // Viewers see what's coming but can't touch it — adding/reordering stays on
-// the control surface. Panel hides itself when the queue is empty.
+// the control surface. Keep the panel visible even when empty so the lower
+// Library / Queue layout stays stable.
 const queuePanel = document.getElementById("queue-panel");
 const queueList = document.getElementById("queue-list");
 const queueCount = document.getElementById("queue-count");
@@ -1223,10 +1877,12 @@ async function queuePoll() {
     const r = await fetch("/api/queue");
     if (!r.ok) return;
     const q = (await r.json()).queue || [];
-    if (!q.length) { queuePanel.style.display = "none"; return; }
-    queuePanel.style.display = "";
     queueCount.textContent = q.length + (q.length === 1 ? " item" : " items");
     queueList.innerHTML = "";
+    if (!q.length) {
+      queueList.innerHTML = '<li class="empty">Nothing queued yet.</li>';
+      return;
+    }
     q.forEach((it, i) => {
       const li = document.createElement("li");
       li.innerHTML = `<span class="qpos"></span><span class="qthumb"><img loading="lazy" alt=""></span><span class="qtitle"></span><span class="qdur"></span>`;
@@ -1246,18 +1902,18 @@ async function queuePoll() {
 setInterval(queuePoll, 5000);
 queuePoll();
 
-// ---- Request something -------------------------------------------------
+// ---- Library requests --------------------------------------------------
 // Watch-only viewers can't drive playback, but they can search the library
 // and ask the host to queue an item. The request lands in a pending list the
-// host approves/denies (see admin.html "Requests"). Collapsed by default so
-// it stays out of the way until a viewer goes looking. Reuses the chat name
+// host approves/denies (see admin.html "Requests"). Reuses the chat name
 // (jetstream_chatname) as the requester so the host sees who asked.
 const requestPanel = document.getElementById("request-panel");
 const requestToggle = document.getElementById("request-toggle");
 const requestSearch = document.getElementById("request-search");
 const requestResults = document.getElementById("request-results");
-if (localStorage.getItem("jetstream_request_collapsed") !== "0") {
-  // Default collapsed — only expand if the viewer explicitly opened it before.
+const libraryBack = document.getElementById("library-back");
+const libraryPath = document.getElementById("library-path");
+if (localStorage.getItem("jetstream_request_collapsed") === "1") {
   requestPanel.classList.add("collapsed");
   requestToggle.textContent = "▸";
 } else {
@@ -1270,8 +1926,162 @@ document.getElementById("request-head").addEventListener("click", () => {
 });
 
 let requestSeq = 0;
+let libraryPathCurrent = "";
+
+function libraryLabel(path) {
+  if (!path) return "Library";
+  const parts = path.split("/").filter(Boolean);
+  const labels = [];
+  for (let idx = 0; idx < parts.length; idx++) {
+    const part = parts[idx];
+    const low = part.toLowerCase();
+    if (low === "__season__") {
+      const season = Number(parts[idx + 1]);
+      labels.push(season === 0 ? "Specials" : `Season ${Number.isFinite(season) ? season : parts[idx + 1]}`);
+      idx++;
+      continue;
+    }
+    if (idx === 0 && low === "tv") labels.push("TV Shows");
+    else if (idx === 0 && (low === "movie" || low === "movies")) labels.push("Movies");
+    else labels.push(part);
+  }
+  return labels.join(" / ");
+}
+
+function parentLibraryPath(path) {
+  const parts = (path || "").split("/").filter(Boolean);
+  if (parts.length >= 2 && parts[parts.length - 2].toLowerCase() === "__season__") {
+    parts.splice(parts.length - 2, 2);
+  } else {
+    parts.pop();
+  }
+  return parts.join("/");
+}
+
+function friendlyDirectoryName(item) {
+  if (item.viewer_root) return item.name || basename(item.path);
+  const low = (item.path || item.name || "").toLowerCase();
+  if (low === "tv" || low.endsWith("/tv")) return "TV Shows";
+  if (low === "movie" || low === "movies" || low.endsWith("/movie") || low.endsWith("/movies")) return "Movies";
+  return item.name || basename(item.path);
+}
+
+function requestParent(path) {
+  return path && path.includes("/") ? path.substring(0, path.lastIndexOf("/")) : "";
+}
+
+function pathParts(item) {
+  return (item.path || item.name || "").toLowerCase().split("/").filter(Boolean);
+}
+
+function isMovieDirectory(item) {
+  const parts = pathParts(item);
+  return (parts[0] === "movies" || parts[0] === "movie") && parts.length >= 2;
+}
+
+function isTvShowDirectory(item) {
+  const parts = pathParts(item);
+  return parts[0] === "tv" && parts.length === 2;
+}
+
+function directoryIcon(item) {
+  const parts = pathParts(item);
+  const path = parts.join("/");
+  if (path === "movies" || path === "movie") return "Movies";
+  if (path === "tv") return "TV";
+  if (isMovieDirectory(item)) return "Movie";
+  if (parts[0] === "tv" && parts.length === 2) return "Show";
+  if (parts[0] === "tv" && parts.length >= 3) return "Season";
+  return "Folder";
+}
+
+function renderFileResult(item, subtitle = "") {
+  const li = document.createElement("li");
+  li.innerHTML = `<span class="rthumb"><img loading="lazy" alt=""></span><span class="rtitle"><span class="rt-name"></span><span class="rt-parent"></span></span><button type="button">Request</button>`;
+  li.querySelector(".rt-name").textContent = item.name || basename(item.path) || "(untitled)";
+  li.querySelector(".rt-parent").textContent = subtitle;
+  if (item.path) {
+    const img = li.querySelector(".rthumb img");
+    img.addEventListener("load", () => img.classList.add("loaded"));
+    img.src = `/poster?path=${encodeURIComponent(item.path)}`;
+  }
+  const btn = li.querySelector("button");
+  btn.addEventListener("click", () => sendRequest(item.path, btn));
+  return li;
+}
+
+function renderDirectoryResult(item) {
+  const li = document.createElement("li");
+  li.innerHTML = `<span class="rthumb folder"></span><span class="rtitle"><span class="rt-name"></span><span class="rt-parent"></span></span><button type="button">Open</button>`;
+  const thumb = li.querySelector(".rthumb");
+  thumb.textContent = directoryIcon(item);
+  if ((isMovieDirectory(item) || isTvShowDirectory(item)) && item.path) {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = "";
+    img.addEventListener("load", () => {
+      thumb.textContent = "";
+      img.classList.add("loaded");
+    });
+    img.src = `/poster?path=${encodeURIComponent(item.path)}`;
+    thumb.appendChild(img);
+  }
+  li.querySelector(".rt-name").textContent = friendlyDirectoryName(item);
+  li.querySelector(".rt-parent").textContent = item.path ? libraryLabel(item.path) : "";
+  const open = () => browseLibrary(item.path || "");
+  li.addEventListener("click", (e) => {
+    if (e.target && e.target.tagName === "BUTTON") return;
+    open();
+  });
+  li.querySelector("button").addEventListener("click", open);
+  return li;
+}
+
+function renderBrowseItems(items) {
+  libraryPath.textContent = libraryLabel(libraryPathCurrent);
+  libraryBack.disabled = !libraryPathCurrent;
+  requestResults.classList.add("library-grid");
+  requestResults.innerHTML = "";
+  let dirs = items.filter(it => it.type === "directory");
+  const files = items.filter(it => it.type === "file");
+  const rows = [...dirs, ...files];
+  if (!rows.length) {
+    requestResults.innerHTML = '<li class="empty">Nothing here.</li>';
+    return;
+  }
+  for (const it of rows) {
+    if (it.type === "directory") {
+      requestResults.appendChild(renderDirectoryResult(it));
+    } else {
+      requestResults.appendChild(renderFileResult(it, requestParent(it.path)));
+    }
+  }
+}
+
+async function browseLibrary(path) {
+  const seq = ++requestSeq;
+  libraryPathCurrent = path || "";
+  requestSearch.value = "";
+  libraryPath.textContent = libraryLabel(libraryPathCurrent);
+  libraryBack.disabled = !libraryPathCurrent;
+  requestResults.classList.add("library-grid");
+  requestResults.innerHTML = '<li class="empty">Loading library…</li>';
+  try {
+    const r = await fetch("/api/library/browse?path=" + encodeURIComponent(libraryPathCurrent));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const items = await r.json();
+    if (seq !== requestSeq) return;
+    renderBrowseItems(Array.isArray(items) ? items : []);
+  } catch {
+    if (seq === requestSeq) requestResults.innerHTML = '<li class="empty">Library failed to load.</li>';
+  }
+}
+
 async function requestDoSearch(q) {
   const seq = ++requestSeq;
+  libraryPath.textContent = "Search";
+  libraryBack.disabled = !libraryPathCurrent;
+  requestResults.classList.add("library-grid");
   requestResults.innerHTML = '<li class="empty">Searching…</li>';
   try {
     const r = await fetch("/api/library/search?q=" + encodeURIComponent(q));
@@ -1285,23 +2095,8 @@ async function requestDoSearch(q) {
     }
     requestResults.innerHTML = "";
     for (const it of results) {
-      const li = document.createElement("li");
-      // Wrap title + parent in a column so meaningless scene-rip filenames
-      // (clue-sun401.avi) reveal which show they belong to (the folder).
-      li.innerHTML = `<span class="rthumb"><img loading="lazy" alt=""></span><span class="rtitle"><span class="rt-name"></span><span class="rt-parent"></span></span><button type="button">Request</button>`;
-      li.querySelector(".rt-name").textContent = it.name;
-      if (it.path && it.path.includes("/")) {
-        li.querySelector(".rt-parent").textContent =
-          "↳ " + it.path.substring(0, it.path.lastIndexOf("/"));
-      }
-      if (it.path) {
-        const img = li.querySelector(".rthumb img");
-        img.addEventListener("load", () => img.classList.add("loaded"));
-        img.src = `/poster?path=${encodeURIComponent(it.path)}`;
-      }
-      const btn = li.querySelector("button");
-      btn.addEventListener("click", () => sendRequest(it.path, btn));
-      requestResults.appendChild(li);
+      const parent = it.path && it.path.includes("/") ? "↳ " + requestParent(it.path) : "";
+      requestResults.appendChild(renderFileResult(it, parent));
     }
   } catch {
     if (seq === requestSeq) requestResults.innerHTML = '<li class="empty">Search failed.</li>';
@@ -1313,11 +2108,18 @@ requestSearch.addEventListener("input", () => {
   const q = requestSearch.value.trim();
   clearTimeout(requestDebounce);
   if (!q) {
-    requestResults.innerHTML = '<li class="empty">Search the library, then tap Request to ask the host to queue it.</li>';
+    browseLibrary(libraryPathCurrent);
     return;
   }
   requestDebounce = setTimeout(() => requestDoSearch(q), 250);
 });
+
+libraryBack.addEventListener("click", () => {
+  if (!libraryPathCurrent) return;
+  browseLibrary(parentLibraryPath(libraryPathCurrent));
+});
+
+browseLibrary("");
 
 async function sendRequest(path, btn) {
   btn.disabled = true;
