@@ -23,7 +23,7 @@ One ffmpeg per source writes per-run fmp4 segments + a per-rendition idx playlis
 
 Input is per-source — file path or yt-dlp-resolved URL (separate audio URL on YouTube DASH). Filter chain branches on three independent decisions:
 
-1. **HW decode** (`USE_VAAPI_DECODE=1`, source codec in HEVC/H.264/VP8/VP9/MPEG-2, source is SDR). On this iGPU, broken — see #7. Pinned off in prod and dev `.env`.
+1. **HW decode** (`USE_VAAPI_DECODE=1`, source codec in HEVC/H.264/VP8/VP9/MPEG-2, source is SDR). On this iGPU, broken; pinned off by default. NVENC/NVDEC is enabled through the GPU compose overlay on hosts that support it.
 2. **HDR source** (color_transfer in `smpte2084` PQ or `arib-std-b67` HLG) → CPU decode + zscale tonemap → BT.709 SDR.
 3. **Subtitle burn-in** (file source has English-tagged text sub track via `_pick_default_subtitle`) → libavfilter `subtitles=` filter inserted after tonemap (if any) and before the scale.
 
@@ -164,7 +164,7 @@ lagS = (Date.now() + serverClockOffsetMs - playingDateMs) / 1000 - TARGET_LAG_S
 
 Every 2s, if `|lagS| > 5` → `snapToLive()` (sets `currentTime = duration`). Otherwise leave alone. `playbackRate` is held at 1.0 — earlier attempts at continuous rate steering (1.05/0.95) caused audible pitch wobble on iOS.
 
-Realistic floor: **~1.7 s** with `HLS_SEG_TIME=1` (dev default), ~3-4 s with the 4-s default. Sub-second sync would need real LL-HLS via `EXT-X-PART` (ffmpeg 7.1 doesn't emit it).
+Realistic floor: **~1.7 s** with the default `HLS_SEG_TIME=1`. A 4-s override raises sync lag to roughly 3-4 s and should be paired with player retuning. Sub-second sync would need real LL-HLS via `EXT-X-PART` (ffmpeg 7.1 doesn't emit it).
 
 ### iPhone specifics
 
@@ -176,8 +176,8 @@ Realistic floor: **~1.7 s** with `HLS_SEG_TIME=1` (dev default), ~3-4 s with the
 
 ## HLS specifics
 
-- Segments live on a tmpfs named volume (`livestream-hls` / `livestream-dev-hls`, 1.5 GiB) shared between Flask and nginx.
-- Default segment time = 4 s, list size = 6 → 24 s playlist (prod). Dev runs at 1 s + 30 = 30 s playlist for ~1.7 s sync floor.
+- Segments live on a tmpfs named volume (`jetstream-hls`, 1.5 GiB) shared between Flask and nginx.
+- Default segment time = 1 s, list size = 24 → 24 s playlist tuned for the current player live-edge constants.
 - `omit_endlist` keeps clients in live mode.
 - `delete_segments` rolls old segments off disk per-run; the composer cleans up an entire run dir once all its segments have aged out of the global window.
 - `+program_date_time` is the linchpin for cross-device sync.
@@ -187,15 +187,14 @@ Realistic floor: **~1.7 s** with `HLS_SEG_TIME=1` (dev default), ~3-4 s with the
 
 Intel UHD 630 (`8086:3E92`, Coffee Lake). `vainfo` shows decode (VLD) for H.264, HEVC Main + Main10, VP8, VP9, MPEG-2. H.264 encode (EncSliceLP) works. **No `VAEntrypointVideoProc`** — meaning `scale_vaapi` cannot run, so the HW-decode path has to download frames to CPU memory for the scale step.
 
-That works mechanically, but with `-f hls` + a VAAPI-decoded source, segment timestamps come out wrong: the muxer produces segments with ~5 minutes of content despite the playlist claiming 4 s. Same chain to `-f null /dev/null` runs at 0.995× realtime — so the bug is in HLS-muxer/timestamp interaction, not in decode/scale/encode. Workaround: `USE_VAAPI_DECODE=0` everywhere. Real fix lives in roadmap #7; needs deeper debugging or a hardware swap (Intel ≥11th gen has VPP, NVIDIA NVENC sidesteps VAAPI entirely).
+That works mechanically, but with `-f hls` + a VAAPI-decoded source, segment timestamps come out wrong: the muxer produces segments with ~5 minutes of content despite the playlist claiming 4 s. Same chain to `-f null /dev/null` runs at 0.995× realtime — so the bug is in HLS-muxer/timestamp interaction, not in decode/scale/encode. Workaround: `USE_VAAPI_DECODE=0` everywhere. A hardware path with NVIDIA NVDEC/NVENC sidesteps this.
 
 ## Network
 
 - `web` Docker network (external) — Traefik front-door for prod.
-- `livestream-internal` / `livestream-dev-internal` (per-environment bridge networks) — nginx ⇆ Flask hop, never leaves the docker daemon.
-- Prod's Traefik routes go to `nginx-livestream:80` (was `livestream:8080` before #9). nginx then proxies to Flask or serves /hls direct.
-- Dev binds `127.0.0.1:8081:80` on `nginx-livestream-dev`. No Traefik on dev, no DNS, no cert. Reach via SSH tunnel.
-- The `local-only@file` middleware (defined in `services/traefik/dynamic.yml`) restricts to LAN/WireGuard/Docker but is NOT on the prod livestream router — friends connect from public internet via tokens.
+- `jetstream-internal` bridge network — nginx ⇆ Flask hop, never leaves the docker daemon.
+- Traefik routes go to `nginx-jetstream:80`; nginx then proxies to Flask or serves /hls direct.
+- Friends connect from public internet via invite tokens. Admin routes are additionally protected by Traefik basicauth.
 
 ## Things that look weird but are deliberate
 

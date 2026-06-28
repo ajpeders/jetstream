@@ -1716,6 +1716,12 @@ def _start_sub_extract(input_path: str, sub_idx: int) -> None:
                     # converts in cleanly.
                     "-map", f"0:s:{sub_idx}",
                     "-c:s", "srt",
+                    # Force the muxer explicitly: the atomic-write temp name ends
+                    # in `.srt.tmp`, and ffmpeg picks the output format from the
+                    # extension — `.tmp` is unknown, so without -f it bails with
+                    # "Unable to choose an output format" (exit 234) and burn-in
+                    # silently never happens.
+                    "-f", "srt",
                     str(tmp),
                 ],
                 check=True,
@@ -2065,10 +2071,14 @@ def _build_ffmpeg_cmd(
         cmd += [
             "-vf", vf,
             "-c:v", "h264_nvenc",
-            # p1..p7 quality/speed dial: p4 is the balanced middle. ll tune
-            # keeps latency low for live HLS (b-frames off, single-frame look-
-            # ahead). cbr keeps segment sizes predictable for HLS.
-            "-preset", "p4",
+            # p1..p7 quality/speed dial. p6 (NVIDIA's documented low-latency
+            # preset) over the old p4: 1080p NVENC runs many× realtime here so
+            # the encoder has ample headroom — spend it on quality-per-bitrate
+            # at the same 5M. `ll` tune keeps b-frames off + per-segment IDR so
+            # HLS segmentation and the Firefox fmp4 demuxer stay happy. cbr
+            # keeps segment sizes predictable; bufsize stays generous (10M ≈ 2s
+            # VBV) since the watch-party lag budget is ~2.5s, not sub-second.
+            "-preset", "p6",
             "-tune", "ll",
             "-rc", "cbr",
             "-b:v", video_bitrate,
@@ -3007,11 +3017,19 @@ def _reaction_rate_check(ip: str) -> bool:
         return True
 
 
-def _custom_reactions_public() -> list[dict]:
-    """The viewer-facing view of the custom set: id + image url + label."""
+def _custom_reactions_public(caller_sid: str | None = None, is_admin: bool = False) -> list[dict]:
+    """The viewer-facing view of the custom set: id + image url + label, plus a
+    per-caller `can_delete` flag. An admin can delete any; a friend can delete
+    only ones they uploaded (matched on the opaque client `sid` tag). Viewers
+    never match, so they get can_delete=False for everything."""
     with custom_reactions_lock:
         return [
-            {"id": r["id"], "url": f"/reactions/img/{r['id']}", "label": r.get("label")}
+            {
+                "id": r["id"],
+                "url": f"/reactions/img/{r['id']}",
+                "label": r.get("label"),
+                "can_delete": bool(is_admin or (caller_sid and r.get("sid") == caller_sid)),
+            }
             for r in custom_reactions
         ]
 
@@ -3067,11 +3085,13 @@ def api_reaction_recent():
         cutoff = time.time() - REACTION_RATE_WINDOW
         for ip in [k for k, ts in reaction_rate.items() if not any(t > cutoff for t in ts)]:
             del reaction_rate[ip]
+    caller_sid = request.args.get("sid")
+    is_admin = _token_level(request.cookies.get(TOKEN_COOKIE)) == "admin"
     return jsonify({
         "reactions": out,
         "max_id": max_id,
         "emojis": list(REACTION_EMOJIS),
-        "custom": _custom_reactions_public(),
+        "custom": _custom_reactions_public(caller_sid, is_admin),
     })
 
 
@@ -3081,7 +3101,13 @@ def api_reaction_upload():
     (+ optional `label`). Strictly validated — magic-byte image sniff, size
     cap, bounded total set, per-IP rate limit. The stored filename is derived
     from the content hash (deduped) so two viewers uploading the same image
-    share one file. Returns the new reaction's id + url."""
+    share one file. Returns the new reaction's id + url.
+
+    Friend/admin only: viewers can tap existing custom reactions but can't add
+    new ones to the shared set. The viewer page hides the import UI for them,
+    but enforce it here too since the UI gate is bypassable."""
+    if not _caller_can_control():
+        return jsonify({"error": "friends only"}), 403
     ip = _client_ip()
     now = time.time()
     cutoff = now - CUSTOM_REACTION_UPLOAD_WINDOW
@@ -3175,6 +3201,34 @@ def api_reaction_delete(cid: int):
     return jsonify({"ok": True})
 
 
+@app.route("/api/reactions/<int:cid>", methods=["DELETE"])
+def api_reaction_delete_own(cid: int):
+    """Viewer-page delete: a friend prunes a custom reaction they uploaded (sid
+    match), an admin prunes any. Lets the friend group manage the shared set
+    without the admin surface — e.g. to free a slot when it hits the cap.
+    Viewers (no control tier) can't delete. Same file-unlink dedup as the admin
+    endpoint above."""
+    level = _token_level(request.cookies.get(TOKEN_COOKIE))
+    if level not in CONTROL_LEVELS:
+        return jsonify({"error": "friends only"}), 403
+    caller_sid = (request.args.get("sid") or "").strip()
+    with custom_reactions_lock:
+        cr = next((r for r in custom_reactions if r["id"] == cid), None)
+        if cr is None:
+            return jsonify({"error": "reaction not found"}), 404
+        if level != "admin" and cr.get("sid") != caller_sid:
+            return jsonify({"error": "not yours"}), 403
+        custom_reactions.remove(cr)
+        still_used = any(r["file"] == cr["file"] for r in custom_reactions)
+        _save_custom_reactions()
+    if not still_used:
+        try:
+            (REACTIONS_DIR / cr["file"]).unlink(missing_ok=True)
+        except Exception as e:
+            print(f"reactions: failed to unlink {cr['file']}: {e}", file=sys.stderr)
+    return jsonify({"ok": True})
+
+
 def _request_rate_check(ip: str) -> bool:
     """Per-IP token-bucket-ish check, same shape as _chat_rate_check. True if
     this IP can file one more request within the rolling window; records the
@@ -3189,6 +3243,127 @@ def _request_rate_check(ip: str) -> bool:
         ts.append(now)
         request_rate[ip] = ts
         return True
+
+
+def _voter_key(data: dict | None = None) -> str:
+    """Stable per-viewer identity for request votes: the client `sid` tag when
+    supplied (survives reloads, distinguishes tabs), else the IP. Auth-free —
+    requests are a low-stakes viewer voice, not a security boundary."""
+    data = data or {}
+    sid = (data.get("sid") or request.args.get("sid") or "").strip()[:32]
+    return ("sid:" + sid) if sid else ("ip:" + _client_ip())
+
+
+def _request_votes(r: dict) -> list[str]:
+    """Voter list for a request, tolerating legacy entries saved before votes
+    existed (seed them with the original requester's IP so they count as 1)."""
+    v = r.get("voters")
+    if v is None:
+        v = ["ip:" + r["ip"]] if r.get("ip") else []
+        r["voters"] = v
+    return v
+
+
+def _public_request(r: dict, key: str) -> dict:
+    """Viewer-facing view of a request: no IP/path leakage, just what the list
+    needs — title, who asked, the tally, and whether *this* caller voted."""
+    voters = _request_votes(r)
+    return {
+        "id": r["id"],
+        "title": r.get("title") or Path(r["path"]).name,
+        "requester": r.get("requester"),
+        "votes": len(voters),
+        "voted": key in voters,
+        "ts": r.get("ts", 0),
+    }
+
+
+def _do_approve_request(rid: int):
+    """Pop a pending request and append it to the playlist as a real file item.
+    Shared by the admin and friend-control approve routes."""
+    with requests_lock:
+        req = next((r for r in media_requests if r["id"] == rid), None)
+        if req is None:
+            return jsonify({"error": "request not found"}), 404
+        media_requests.remove(req)
+        _save_requests()
+    path = req["path"]
+    try:
+        full = _safe_resolve(path, must_be_file=True)
+    except Exception:
+        # The file vanished between request and approval — the request is gone
+        # either way, so report it rather than leaving a dangling entry.
+        return jsonify({"error": "file not found"}), 400
+    item = {
+        "type": "file", "ref": path, "title": Path(path).name,
+        "duration": _probe_duration(full), "is_live": False,
+        "subtitle_idx": _pick_default_subtitle(str(full)),
+    }
+    with playlist_lock:
+        playlist.append(item)
+        _save_playlist()
+        length = len(playlist)
+    return jsonify({"ok": True, "queue_length": length})
+
+
+def _do_deny_request(rid: int):
+    """Drop a pending request without touching the playlist. Shared by the
+    admin and friend-control deny routes."""
+    with requests_lock:
+        req = next((r for r in media_requests if r["id"] == rid), None)
+        if req is None:
+            return jsonify({"error": "request not found"}), 404
+        media_requests.remove(req)
+        _save_requests()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/requests")
+def api_requests_public():
+    """Viewer-facing request list with vote tallies, most-wanted first. Anyone
+    with viewer access sees it; `can_manage` tells the client whether to show
+    the friend/admin approve+deny affordances."""
+    key = _voter_key()
+    with requests_lock:
+        _expire_old_requests()
+        items = [_public_request(r, key) for r in media_requests]
+    items.sort(key=lambda x: (-x["votes"], x["ts"]))
+    return jsonify({"requests": items, "can_manage": _caller_can_control()})
+
+
+@app.route("/api/request/<int:rid>/vote", methods=["POST"])
+def api_request_vote(rid: int):
+    """Toggle the caller's vote on a pending request. Viewer-accessible — this
+    is the viewers' lever; acting on the result (approve) stays friend/admin."""
+    data = request.get_json(silent=True) or {}
+    if not _request_rate_check(_client_ip()):
+        return jsonify({"error": "rate limited"}), 429
+    key = _voter_key(data)
+    with requests_lock:
+        req = next((r for r in media_requests if r["id"] == rid), None)
+        if req is None:
+            return jsonify({"error": "request not found"}), 404
+        voters = _request_votes(req)
+        if key in voters:
+            voters.remove(key)
+        else:
+            voters.append(key)
+        _save_requests()
+        votes, voted = len(voters), key in voters
+    return jsonify({"ok": True, "votes": votes, "voted": voted})
+
+
+@app.route("/api/control/requests/<int:rid>/approve", methods=["POST"])
+def api_request_approve_friend(rid: int):
+    """Friend/admin approves a request → queues it. Gated to control tiers by
+    the /api/control/ branch of _gate_viewer_routes."""
+    return _do_approve_request(rid)
+
+
+@app.route("/api/control/requests/<int:rid>", methods=["DELETE"])
+def api_request_deny_friend(rid: int):
+    """Friend/admin denies a request. Control-tier gated like approve."""
+    return _do_deny_request(rid)
 
 
 @app.route("/api/library/browse")
@@ -3227,6 +3402,7 @@ def api_request_add():
     if not _request_rate_check(_client_ip()):
         return jsonify({"error": "rate limited"}), 429
     requester = _clean_chat_name(data.get("name"))
+    key = _voter_key(data)
     global request_next_id
     with requests_lock:
         # Sweep ghosts before dedup so an expired request for the same path
@@ -3234,7 +3410,13 @@ def api_request_add():
         _expire_old_requests()
         existing = next((r for r in media_requests if r["path"] == path), None)
         if existing:
-            return jsonify({"ok": True, "duplicate": True, "request": existing})
+            # Re-requesting an already-pending title is an upvote, not a no-op —
+            # that's how a second viewer's interest registers.
+            voters = _request_votes(existing)
+            if key not in voters:
+                voters.append(key)
+                _save_requests()
+            return jsonify({"ok": True, "duplicate": True, "request": _public_request(existing, key)})
         req = {
             "id": request_next_id,
             "ts": time.time(),
@@ -3242,11 +3424,12 @@ def api_request_add():
             "title": Path(path).name,
             "requester": requester,
             "ip": _client_ip(),
+            "voters": [key],  # the requester is the first vote
         }
         request_next_id += 1
         media_requests.append(req)
         _save_requests()
-    return jsonify({"ok": True, "request": req})
+    return jsonify({"ok": True, "request": _public_request(req, key)})
 
 
 def _report_rate_check(ip: str) -> bool:
@@ -3726,45 +3909,15 @@ def api_requests_clear():
 
 @app.route("/admin/api/requests/<int:rid>/approve", methods=["POST"])
 def api_request_approve(rid: int):
-    """Approve a pending request: pop it and append a real file item to the
-    playlist, mirroring api_queue_add's file branch (probe duration, subtitle
-    pick — which returns None while burn-in is disabled). Idempotent against a
-    missing id (404)."""
-    with requests_lock:
-        req = next((r for r in media_requests if r["id"] == rid), None)
-        if req is None:
-            return jsonify({"error": "request not found"}), 404
-        media_requests.remove(req)
-        _save_requests()
-    path = req["path"]
-    try:
-        full = _safe_resolve(path, must_be_file=True)
-    except Exception:
-        # The file vanished between request and approval — the request is gone
-        # either way, so report it rather than leaving a dangling entry.
-        return jsonify({"error": "file not found"}), 400
-    item = {
-        "type": "file", "ref": path, "title": Path(path).name,
-        "duration": _probe_duration(full), "is_live": False,
-        "subtitle_idx": _pick_default_subtitle(str(full)),
-    }
-    with playlist_lock:
-        playlist.append(item)
-        _save_playlist()
-        length = len(playlist)
-    return jsonify({"ok": True, "queue_length": length})
+    """Approve a pending request → queue it. Shares _do_approve_request with the
+    friend-control route; idempotent against a missing id (404)."""
+    return _do_approve_request(rid)
 
 
 @app.route("/admin/api/requests/<int:rid>", methods=["DELETE"])
 def api_request_deny(rid: int):
     """Deny a pending request: drop it without touching the playlist."""
-    with requests_lock:
-        req = next((r for r in media_requests if r["id"] == rid), None)
-        if req is None:
-            return jsonify({"error": "request not found"}), 404
-        media_requests.remove(req)
-        _save_requests()
-    return jsonify({"ok": True})
+    return _do_deny_request(rid)
 
 
 @app.route("/admin/api/reports", methods=["GET"])
@@ -3974,8 +4127,6 @@ def api_stop():
     return jsonify({"ok": True})
 
 
-@app.route("/admin/api/skip", methods=["POST"])
-@app.route("/api/control/skip", methods=["POST"])
 def _skip_locked():
     """Terminate ffmpeg + retire the run so the watcher advances to the next
     item (queue first, then auto_fill). Caller must hold state_lock."""
@@ -3990,9 +4141,12 @@ def _skip_locked():
     current_paused = False
 
 
+@app.route("/admin/api/skip", methods=["POST"])
+@app.route("/api/control/skip", methods=["POST"])
 def api_skip():
     """Skip to the next item: terminate ffmpeg without clearing source state and
-    let the watcher pick the next thing (queue first, then auto_fill if on)."""
+    let the watcher pick the next thing (queue first, then auto_fill if on).
+    Acquires state_lock and delegates the teardown to _skip_locked."""
     with state_lock:
         if current_source is None:
             return jsonify({"error": "nothing playing"}), 400

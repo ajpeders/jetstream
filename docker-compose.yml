@@ -6,7 +6,10 @@ services:
       dockerfile: Dockerfile
     image: homelab/jetstream:latest
     restart: unless-stopped
-    mem_limit: 1g
+    # 4K HEVC decode (NVDEC frames pulled to host for filters/HLS muxing) peaks
+    # well past 1g and was getting the gunicorn worker OOM-killed mid-stream
+    # (black screen on viewers). 3g gives 4K headroom.
+    mem_limit: 3g
     environment:
       MEDIA_ROOT: /media
       HLS_DIR: /hls

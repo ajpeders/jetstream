@@ -155,6 +155,8 @@
   #reaction-bar button img { width: 1.5rem; height: 1.5rem; display: block; }
   /* The "import your own" affordance at the end of the bar. */
   #reaction-bar button.reaction-add { color: #c9a0d9; font-size: 1.35rem; font-weight: 700; }
+  /* Desktop shows the reaction row inline, so the mobile FAB trigger is off. */
+  #reaction-fab { display: none; }
   #vol-controls {
     position: absolute;
     bottom: 12px;
@@ -227,6 +229,43 @@
   }
   #queue-head .toggle { color: #666; font-size: 0.8rem; }
   #queue-panel.collapsed #queue-head { border-bottom: none; }
+
+  /* ---- Viewer request list (votable). Mirrors the queue panel chrome; the
+     row carries a vote pill on the left and friend/admin Queue/✕ on the
+     right. ---- */
+  #reqlist-panel { background: #0e0e0e; border-top: 1px solid #1f1f1f; max-height: 30vh; overflow-y: auto; }
+  #reqlist-panel.collapsed { max-height: 2.4rem; overflow: hidden; }
+  #reqlist-head {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.5rem 1rem; cursor: pointer; user-select: none;
+    position: sticky; top: 0; background: #0e0e0e; border-bottom: 1px solid #1a1a1a;
+  }
+  #reqlist-head h2 { margin: 0; font-size: 0.85rem; font-weight: 500; color: #ccc; letter-spacing: 0.02em; }
+  #reqlist-count { flex: 1; color: #666; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+  #reqlist-head .toggle { color: #666; font-size: 0.8rem; }
+  #reqlist-panel.collapsed #reqlist-head { border-bottom: none; }
+  #reqlist { list-style: none; margin: 0; padding: 0.3rem 0 0.5rem; }
+  #reqlist .empty { color: #555; font-size: 0.8rem; padding: 0.4rem 1rem; }
+  #reqlist li { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 1rem; }
+  .req-vote {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-width: 2.5rem; padding: 0.2rem 0; line-height: 1.05; flex-shrink: 0;
+    background: #161616; border: 1px solid #2a2a2a; border-radius: 6px;
+    color: #bbb; cursor: pointer; font-family: inherit;
+  }
+  .req-vote .req-arrow { font-size: 0.65rem; opacity: 0.8; }
+  .req-vote .req-n { font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .req-vote:hover { border-color: #3a4a5a; }
+  .req-vote.voted { background: #16242f; border-color: #2c5a7a; color: #7dd3fc; }
+  .req-meta { flex: 1; min-width: 0; }
+  .req-title { color: #ddd; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .req-by { color: #666; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .req-actions { display: flex; gap: 0.3rem; flex-shrink: 0; }
+  .req-actions button { font-family: inherit; font-size: 0.76rem; border-radius: 5px; cursor: pointer; padding: 0.28rem 0.55rem; }
+  .req-ok { background: #16241a; color: #7dcc99; border: 1px solid #2c4a37; }
+  .req-ok:hover { background: #1d3325; }
+  .req-no { background: #241a1a; color: #e09b9b; border: 1px solid #4a2c2c; }
+  .req-no:hover { background: #331f1f; }
   #queue-list { list-style: none; margin: 0; padding: 0.3rem 0 0.5rem; }
   #queue-list li {
     display: flex; align-items: center; gap: 0.5rem;
@@ -276,21 +315,66 @@
   #reactions-panel.collapsed #reactions-head { border-bottom: none; }
   #reactions-panel-body { padding: 0.6rem 1rem 0.9rem; }
   .reactions-label { color: #888; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 0.4rem; }
-  /* Scrollable emoji picker — compact tiles, capped height so the grid scrolls
-     instead of pushing the page. */
-  #emoji-picker {
-    display: grid; grid-template-columns: repeat(auto-fill, 30px);
-    gap: 0.15rem; max-height: 8.5rem; overflow-y: auto;
-    margin-bottom: 0.8rem; padding-right: 0.2rem;
+  /* Emoji reactions picker — search box + category jump-bar + scrollable
+     sections with sticky category labels and a Recently-used row. */
+  #emoji-picker { margin-bottom: 0.8rem; }
+  #emoji-search {
+    width: 100%; box-sizing: border-box; margin-bottom: 0.5rem;
+    background: #161616; color: #eee; border: 1px solid #2a2a2a; border-radius: 6px;
+    padding: 0.45rem 0.6rem; font-size: 0.85rem; font-family: inherit;
   }
-  #emoji-picker button {
-    width: 30px; height: 30px; padding: 0; line-height: 1;
-    background: transparent; border: 0; border-radius: 5px; cursor: pointer;
-    font-size: 1.1rem; display: inline-flex; align-items: center; justify-content: center;
+  #emoji-search:focus { outline: none; border-color: #4a3556; }
+  #emoji-nav {
+    display: flex; gap: 0.15rem; margin-bottom: 0.5rem;
+    padding-bottom: 0.4rem; border-bottom: 1px solid #1f1f1f;
+  }
+  #emoji-nav button {
+    flex: 1; height: 32px; padding: 0; border: 0; border-radius: 6px;
+    background: transparent; cursor: pointer; font-size: 1.05rem; opacity: 0.55;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.1s, opacity 0.1s;
+  }
+  /* `flex`/`inline-flex` above would otherwise override the [hidden] attr the
+     Recent/Custom sections toggle when empty — keep their nav icons hidden. */
+  #emoji-nav button[hidden] { display: none; }
+  #emoji-nav button:hover { background: #1f1f1f; opacity: 1; }
+  #emoji-nav button.active { opacity: 1; background: #241a2b; box-shadow: inset 0 -2px 0 #8a5fa6; }
+  #emoji-nav button img { width: 20px; height: 20px; }
+  #emoji-scroll {
+    position: relative; max-height: 16rem; overflow-y: auto;
+    padding-right: 0.2rem; scroll-behavior: smooth;
+  }
+  .emoji-section[hidden] { display: none; }
+  .emoji-cat-label {
+    position: sticky; top: 0; z-index: 1; background: #0e0e0e;
+    color: #888; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; padding: 0.3rem 0.1rem 0.25rem;
+  }
+  .emoji-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, 34px);
+    gap: 0.15rem; justify-content: space-between;
+  }
+  .emoji-btn {
+    width: 34px; height: 34px; padding: 0; line-height: 1;
+    background: transparent; border: 0; border-radius: 6px; cursor: pointer;
+    font-size: 1.25rem; display: inline-flex; align-items: center; justify-content: center;
     transition: background 0.1s, transform 0.1s;
   }
-  #emoji-picker button:hover { background: #1f1f1f; transform: scale(1.15); }
-  #emoji-picker button img { width: 20px; height: 20px; }
+  .emoji-btn:hover { background: #1f1f1f; transform: scale(1.15); }
+  .emoji-btn img { width: 22px; height: 22px; }
+  /* Custom tiles can carry a delete × (only rendered when the caller may prune
+     it). overflow:visible so the corner badge isn't clipped; the tile must not
+     scale on hover or the badge drifts off the pointer. */
+  .emoji-btn.emoji-custom { position: relative; overflow: visible; }
+  .emoji-btn.emoji-custom:hover { transform: none; }
+  .emoji-custom-del {
+    position: absolute; top: -5px; right: -5px;
+    width: 15px; height: 15px; border-radius: 999px;
+    background: #3a1f1f; color: #ff9b9b; border: 1px solid #6a3030;
+    font-size: 11px; line-height: 13px; text-align: center;
+    cursor: pointer; z-index: 2;
+  }
+  .emoji-custom-del:hover { background: #5a2a2a; color: #ffcaca; }
   #reaction-import-btn {
     background: #2a1f30; color: #d9b8e6; border: 1px solid #4a3556;
     border-radius: 6px; padding: 0.45rem 0.9rem; font-size: 0.85rem;
@@ -602,6 +686,7 @@
   }
 
   #queue-panel,
+  #reqlist-panel,
   #request-panel,
   #chat-app,
   #chat {
@@ -609,6 +694,7 @@
     border-top: 1px solid var(--line);
   }
   #queue-head,
+  #reqlist-head,
   #request-head,
   #chat-header {
     min-height: 2.7rem;
@@ -617,6 +703,7 @@
     border-bottom: 1px solid var(--line);
   }
   #queue-head h2,
+  #reqlist-head h2,
   #request-head h2,
   #chat-header h2 {
     color: var(--text);
@@ -626,7 +713,9 @@
     text-transform: uppercase;
   }
   #queue-count,
+  #reqlist-count,
   #queue-head .toggle,
+  #reqlist-head .toggle,
   #request-head .toggle,
   #chat-header .toggle {
     color: var(--dim);
@@ -751,19 +840,71 @@
       right: auto;
       transform: translateX(-50%);
     }
+    /* Reactions: show the small round trigger, collapse the full row into a
+       popover that opens above it. Keeps the row off the centered controls. */
+    #reaction-fab {
+      display: inline-flex; align-items: center; justify-content: center;
+      position: absolute; bottom: 12px; left: 12px; z-index: 6;
+      width: 44px; height: 44px; padding: 0; border-radius: 999px;
+      background: rgba(13, 18, 25, 0.86); border: 1px solid rgba(226, 232, 240, 0.14);
+      color: #fff; font-size: 1.35rem; line-height: 1; cursor: pointer;
+      opacity: 0.92; transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+    /* Fade the trigger with the rest of the player chrome when controls idle,
+       but keep it up while its popover is open. */
+    #main #player-wrap.controls-idle #reaction-fab {
+      opacity: 0; pointer-events: none; transform: translateY(6px);
+    }
+    #main #player-wrap.reactions-open #reaction-fab {
+      opacity: 0.92; pointer-events: auto; transform: none;
+    }
+    #reaction-bar {
+      display: none;
+      bottom: 66px; left: 12px;
+      flex-wrap: wrap; max-width: min(78vw, 360px);
+      max-height: 42vh; overflow-y: auto;
+    }
+    /* #main raises specificity above the theme's .controls-idle fade so an
+       open popover stays visible even after the controls auto-hide. */
+    #main #player-wrap.reactions-open #reaction-bar {
+      display: flex !important; opacity: 1 !important; transform: none !important; pointer-events: auto !important;
+    }
     #chat-form {
       display: grid;
       grid-template-columns: minmax(0, 7rem) minmax(0, 1fr) auto;
       gap: 0.45rem;
     }
     #chat-name-input { width: 100%; }
+
+    /* ---- Header: the Vote skip / Controls / Report cluster reads cramped on
+       a phone. Shrink the buttons and tighten their gap so they sit on one
+       tidy right-aligned row. ---- */
+    header { gap: 0.4rem 0.5rem; }
+    header > span:last-child { gap: 0.4rem !important; }
+    #voteskip-btn, #controls-link, #report-btn {
+      font-size: 0.76rem !important; padding: 0.3rem 0.55rem !important;
+    }
+
+    /* ---- Player controls: drop the volume slider (phones have hardware
+       volume) and tighten the pill so it stops crowding the row. ---- */
+    #vol-slider { display: none; }
+    #vol-controls { gap: 0.15rem; padding: 0.25rem 0.4rem; }
+
+    /* ---- Below-player panels: shrink the library posters so the top-level
+       Movies/TV folders don't dominate the page, and trim panel-header height
+       so the stack reads tighter. ---- */
+    #request-results.library-grid {
+      grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+      gap: 0.5rem; padding: 0.6rem 0.85rem 0.85rem;
+    }
+    #queue-head, #request-head, #chat-header, #reactions-head { min-height: 2.4rem; }
   }
 
   @media (min-width: 960px) {
     body {
       display: grid;
       grid-template-columns: minmax(0, 1fr) clamp(320px, 24vw, 420px);
-      grid-template-rows: auto minmax(0, 1fr) auto auto;
+      grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
       min-height: 100vh;
     }
     header {
@@ -786,13 +927,21 @@
       grid-column: 1;
       grid-row: 3;
     }
-    #request-panel {
+    #reqlist-panel {
       grid-column: 1;
       grid-row: 4;
     }
+    #request-panel {
+      grid-column: 1;
+      grid-row: 5;
+    }
+    #reactions-panel {
+      grid-column: 1;
+      grid-row: 6;
+    }
     #chat-app {
       grid-column: 2;
-      grid-row: 2 / 5;
+      grid-row: 2 / -1;
       min-height: 0;
       border-left: 1px solid var(--line);
       box-shadow: -18px 0 60px rgba(0,0,0,0.18);
@@ -908,6 +1057,10 @@
     </div>
     <div id="unmute-overlay">tap to unmute</div>
     <div id="reaction-layer"></div>
+    <!-- Mobile: a single small trigger that pops the reaction row open as a
+         panel above it, so the full row no longer overlaps the centered
+         volume/fullscreen controls. Hidden on desktop (the row shows inline). -->
+    <button id="reaction-fab" type="button" aria-label="Reactions" aria-expanded="false">😄</button>
     <div id="reaction-bar"></div>
     <div id="session-overlay" class="hidden">
       <div>
@@ -926,6 +1079,18 @@
     <span class="toggle" id="queue-toggle">▾</span>
   </div>
   <ol id="queue-list"></ol>
+</section>
+
+<!-- Votable viewer request list. Everyone sees it + can up-vote; friends/admin
+     additionally get Queue/✕ (can_manage from /api/requests). Filing happens in
+     the Library panel below; popular asks float to the top here. -->
+<section id="reqlist-panel" class="collapsed">
+  <div id="reqlist-head">
+    <h2>requests</h2>
+    <span id="reqlist-count"></span>
+    <span class="toggle" id="reqlist-toggle">▸</span>
+  </div>
+  <ul id="reqlist"><li class="empty">No requests yet — find something in the library below and tap Request.</li></ul>
 </section>
 
 <section id="request-panel">
@@ -949,10 +1114,13 @@
   <div id="reactions-panel-body">
     <p class="reactions-label">Tap an emoji to react</p>
     <div id="emoji-picker"></div>
-    <p class="reactions-label">Your own reactions</p>
-    <button id="reaction-import-btn" type="button">＋ Import your own reaction</button>
-    <p id="reactions-hint">PNG, GIF, WebP or JPEG · max 512 KB. Imported reactions appear in the tap bar over the video for everyone watching.</p>
-    <div id="reactions-gallery"><span class="empty">No custom reactions yet — import one above.</span></div>
+    <!-- Import lives here but only for friend/admin tokens — revealed by the
+         /api/status can_control hint. Custom reactions are shared with everyone
+         and show up in the picker's "Custom" section + the in-player bar. -->
+    <div id="reaction-import-wrap" hidden>
+      <button id="reaction-import-btn" type="button">＋ Import a custom reaction</button>
+      <p id="reactions-hint">PNG, GIF, WebP or JPEG · max 512 KB. Imported reactions are shared with everyone watching.</p>
+    </div>
   </div>
 </section>
 
@@ -1439,10 +1607,13 @@ async function pollStatus() {
     } else {
       sessionOverlay.classList.add("hidden");
     }
-    // Reveal the Controls link once we know this token can drive playback.
+    // Reveal the Controls link + custom-reaction import once we know this
+    // token can drive playback (friend/admin). Viewers can tap existing custom
+    // reactions but can't add new ones to the shared set.
     if (s.can_control) {
       const cl = document.getElementById("controls-link");
       if (cl) cl.style.display = "";
+      if (reactionImportWrap) reactionImportWrap.hidden = false;
     }
     if (s.playing) {
       // No more per-source-change teardown: the server's composer keeps
@@ -1722,13 +1893,41 @@ function buildReactionBar(emojis, custom) {
   // below the player — not on this in-player tap bar.
 }
 
+// Mobile: the in-player row is collapsed behind a small FAB (see the
+// max-width:700px rules). Toggling `reactions-open` on the player wrap pops the
+// row open as a panel; it's a no-op affordance on desktop where the row is
+// always inline. Tapping a reaction or anywhere outside closes it.
+const reactionFab = document.getElementById("reaction-fab");
+const reactionPlayerWrap = document.getElementById("player-wrap");
+function setReactionsOpen(open) {
+  if (!reactionPlayerWrap) return;
+  reactionPlayerWrap.classList.toggle("reactions-open", open);
+  if (reactionFab) reactionFab.setAttribute("aria-expanded", open ? "true" : "false");
+}
+if (reactionFab && reactionPlayerWrap) {
+  reactionFab.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setReactionsOpen(!reactionPlayerWrap.classList.contains("reactions-open"));
+  });
+  // Picking a reaction dismisses the popover.
+  reactionBar.addEventListener("click", (e) => {
+    if (e.target.closest("button")) setReactionsOpen(false);
+  });
+  // Any tap outside the popover/trigger closes it.
+  document.addEventListener("click", (e) => {
+    if (!reactionPlayerWrap.classList.contains("reactions-open")) return;
+    if (e.target.closest("#reaction-bar") || e.target.closest("#reaction-fab")) return;
+    setReactionsOpen(false);
+  });
+}
+
 // ---- Reactions panel (import + gallery) -------------------------------
 // The dedicated panel below the player owns importing. The in-player bar is
 // tap-to-react only.
 const reactionsPanel = document.getElementById("reactions-panel");
 const reactionsToggle = document.getElementById("reactions-toggle");
 const reactionImportBtn = document.getElementById("reaction-import-btn");
-const reactionsGallery = document.getElementById("reactions-gallery");
+const reactionImportWrap = document.getElementById("reaction-import-wrap");
 
 if (localStorage.getItem("jetstream_reactions_collapsed") === "0") {
   reactionsPanel.classList.remove("collapsed");
@@ -1740,57 +1939,197 @@ document.getElementById("reactions-head").addEventListener("click", () => {
   localStorage.setItem("jetstream_reactions_collapsed", c ? "1" : "0");
 });
 
-// Scrollable emoji picker. The server accepts ANY emoji (it validates the
-// codepoints), so this list is purely the UI menu — extend it freely. Built
-// once on load; tapping a tile reacts for everyone.
-const EMOJI_PICKER = (
-  "😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃 🫠 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😙 🥲 😋 😛 😜 🤪 😝 🤑 " +
-  "🤗 🤭 🫢 🫣 🤫 🤔 🫡 🤐 🤨 😐 😑 😶 🫥 😏 😒 🙄 😬 🤥 😌 😔 😪 🤤 😴 😷 🤒 🤕 🤢 🤮 🤧 " +
-  "🥵 🥶 🥴 😵 🤯 🤠 🥳 🥸 😎 🤓 🧐 😕 🫤 😟 🙁 😮 😯 😲 😳 🥺 🥹 😦 😧 😨 😰 😥 😢 😭 😱 😖 " +
-  "😣 😞 😓 😩 😫 🥱 😤 😡 😠 🤬 😈 👿 💀 💩 🤡 👹 👺 👻 👽 👾 🤖 😺 😹 😻 😼 😽 🙀 😿 😾 " +
-  "❤️ 🧡 💛 💚 💙 💜 🤎 🖤 🤍 💔 ❣️ 💕 💞 💓 💗 💖 💘 💝 💯 💢 💥 💫 💦 💨 💬 💭 💤 " +
-  "👋 🤚 🖐️ ✋ 🖖 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 🫵 👈 👉 👆 🖕 👇 ☝️ 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 🫶 👐 🤲 🙏 ✍️ 💅 🤳 💪 " +
-  "🎉 🎊 🥂 🍻 🍿 🎬 🎥 📺 🎮 🕹️ 🎯 🎲 🏆 🥇 🎁 🎈 🔥 ⭐ 🌟 ✨ ⚡ ☀️ 🌙 🌈 ☁️ 🌧️ ❄️ 🎵 🎶 🎤 " +
-  "🍕 🍔 🍟 🌭 🥓 🍳 🥞 🧀 🥗 🌮 🌯 🍣 🍜 🍲 🍝 🍛 🍱 🍙 🍢 🍡 🍦 🍰 🎂 🧁 🍩 🍪 🍫 🍬 🍭 ☕ 🍵 🧋 🥤 🍺 🍷 🥃 🍸 🍹 🍾 " +
-  "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🦄 🐝 🐢 🦋 🐙 🐳 🐬 🐠 " +
-  "🚗 🚀 ✈️ 🏠 💡 🔑 📱 💻 ⌚ 📷 🎒 ✅ ❌ ❓ ❗ 🚫 ⚠️ ♻️ 🆗 🆒 🆕 🔝 🔔 🔕 💰 💲"
-).trim().split(/\s+/);
+// Categorized, searchable emoji reactions picker. The server accepts ANY
+// emoji (it validates codepoints); EMOJI_CATEGORIES is purely the UI menu and
+// EMOJI_KEYWORDS maps each emoji to Unicode-derived search terms (built from
+// Python's unicodedata — see scripts/gen if regenerating).
+const EMOJI_CATEGORIES = [{"id": "smileys", "icon": "😀", "label": "Smileys", "emojis": ["😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "🫠", "😉", "😊", "😇", "🥰", "😍", "🤩", "😘", "😗", "😚", "😙", "🥲", "😋", "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🫢", "🫣", "🤫", "🤔", "🫡", "🤐", "🤨", "😐", "😑", "😶", "🫥", "😏", "😒", "🙄", "😬", "🤥", "😌", "😔", "😪", "🤤", "😴", "😷", "🤒", "🤕", "🤢", "🤮", "🤧", "🥵", "🥶", "🥴", "😵", "🤯", "🤠", "🥳", "🥸", "😎", "🤓", "🧐", "😕", "🫤", "😟", "🙁", "😮", "😯", "😲", "😳", "🥺", "🥹", "😦", "😧", "😨", "😰", "😥", "😢", "😭", "😱", "😖", "😣", "😞", "😓", "😩", "😫", "🥱", "😤", "😡", "😠", "🤬", "😈", "👿", "💀", "💩", "🤡", "👹", "👺", "👻", "👽", "👾", "🤖", "😺", "😹", "😻", "😼", "😽", "🙀", "😿", "😾"]}, {"id": "hearts", "icon": "❤️", "label": "Hearts", "emojis": ["❤️", "🧡", "💛", "💚", "💙", "💜", "🤎", "🖤", "🤍", "💔", "❣️", "💕", "💞", "💓", "💗", "💖", "💘", "💝", "💯", "💢", "💥", "💫", "💦", "💨", "💬", "💭", "💤"]}, {"id": "hands", "icon": "👋", "label": "Hands", "emojis": ["👋", "🤚", "🖐️", "✋", "🖖", "👌", "🤌", "🤏", "✌️", "🤞", "🫰", "🤟", "🤘", "🤙", "🫵", "👈", "👉", "👆", "🖕", "👇", "☝️", "👍", "👎", "✊", "👊", "🤛", "🤜", "👏", "🙌", "🫶", "👐", "🤲", "🙏", "✍️", "💅", "🤳", "💪"]}, {"id": "fun", "icon": "🎉", "label": "Fun", "emojis": ["🎉", "🎊", "🥂", "🍻", "🍿", "🎬", "🎥", "📺", "🎮", "🕹️", "🎯", "🎲", "🏆", "🥇", "🎁", "🎈", "🔥", "⭐", "🌟", "✨", "⚡", "☀️", "🌙", "🌈", "☁️", "🌧️", "❄️", "🎵", "🎶", "🎤"]}, {"id": "food", "icon": "🍕", "label": "Food", "emojis": ["🍕", "🍔", "🍟", "🌭", "🥓", "🍳", "🥞", "🧀", "🥗", "🌮", "🌯", "🍣", "🍜", "🍲", "🍝", "🍛", "🍱", "🍙", "🍢", "🍡", "🍦", "🍰", "🎂", "🧁", "🍩", "🍪", "🍫", "🍬", "🍭", "☕", "🍵", "🧋", "🥤", "🍺", "🍷", "🥃", "🍸", "🍹", "🍾"]}, {"id": "animals", "icon": "🐶", "label": "Animals", "emojis": ["🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦄", "🐝", "🐢", "🦋", "🐙", "🐳", "🐬", "🐠"]}, {"id": "objects", "icon": "🚀", "label": "Objects", "emojis": ["🚗", "🚀", "✈️", "🏠", "💡", "🔑", "📱", "💻", "⌚", "📷", "🎒", "✅", "❌", "❓", "❗", "🚫", "⚠️", "♻️", "🆗", "🆒", "🆕", "🔝", "🔔", "🔕", "💰", "💲"]}];
+const EMOJI_KEYWORDS = {"😀": "grinning", "😃": "mouth open smiling", "😄": "eyes mouth open smiling", "😁": "eyes grinning smiling", "😆": "closed eyes mouth open smiling tightly", "😅": "cold mouth open smiling sweat", "🤣": "floor laughing on rolling", "😂": "joy tears", "🙂": "slightly smiling", "🙃": "down upside", "🫠": "melting", "😉": "winking", "😊": "eyes smiling", "😇": "halo smiling", "🥰": "eyes hearts smiling three", "😍": "eyes heart shaped smiling", "🤩": "eyes grinning star", "😘": "a kiss throwing", "😗": "kissing", "😚": "closed eyes kissing", "😙": "eyes kissing smiling", "🥲": "smiling tear", "😋": "delicious food savouring", "😛": "out stuck tongue", "😜": "eye out stuck tongue winking", "🤪": "eye grinning large one", "😝": "closed eyes out stuck tightly tongue", "🤑": "money mouth", "🤗": "hugging", "🤭": "covering eyes hand mouth smiling", "🫢": "eyes hand mouth open over", "🫣": "eye peeking", "🤫": "closed covering finger lips", "🤔": "thinking", "🫡": "saluting", "🤐": "mouth zipper", "🤨": "eyebrow one raised", "😐": "neutral", "😑": "expressionless", "😶": "mouth without", "🫥": "dotted line", "😏": "smirking", "😒": "unamused", "🙄": "eyes rolling", "😬": "grimacing", "🤥": "lying", "😌": "relieved", "😔": "pensive", "😪": "sleepy", "🤤": "drooling", "😴": "sleeping", "😷": "mask medical", "🤒": "thermometer", "🤕": "bandage head", "🤢": "nauseated", "🤮": "mouth open vomiting", "🤧": "sneezing", "🥵": "overheated", "🥶": "freezing", "🥴": "eyes mouth uneven wavy", "😵": "dizzy", "🤯": "exploding head shocked", "🤠": "cowboy hat", "🥳": "hat horn party", "🥸": "disguised", "😎": "smiling sunglasses", "🤓": "nerd", "🧐": "monocle", "😕": "confused", "🫤": "diagonal mouth", "😟": "worried", "🙁": "frowning slightly", "😮": "mouth open", "😯": "hushed", "😲": "astonished", "😳": "flushed", "🥺": "eyes pleading", "🥹": "back holding tears", "😦": "frowning mouth open", "😧": "anguished", "😨": "fearful", "😰": "cold mouth open sweat", "😥": "but disappointed relieved", "😢": "crying", "😭": "crying loudly", "😱": "fear in screaming", "😖": "confounded", "😣": "persevering", "😞": "disappointed", "😓": "cold sweat", "😩": "weary", "😫": "tired", "🥱": "yawning", "😤": "look triumph", "😡": "pouting", "😠": "angry", "🤬": "covering mouth serious symbols", "😈": "horns smiling", "👿": "imp", "💀": "skull", "💩": "pile poo", "🤡": "clown", "👹": "japanese ogre", "👺": "goblin japanese", "👻": "ghost", "👽": "alien extraterrestrial", "👾": "alien monster", "🤖": "robot", "😺": "cat mouth open smiling", "😹": "cat joy tears", "😻": "cat eyes heart shaped smiling", "😼": "cat smile wry", "😽": "cat closed eyes kissing", "🙀": "cat weary", "😿": "cat crying", "😾": "cat pouting", "❤️": "heart", "🧡": "heart orange", "💛": "heart yellow", "💚": "green heart", "💙": "blue heart", "💜": "heart purple", "🤎": "brown heart", "🖤": "heart", "🤍": "heart", "💔": "broken heart", "❣️": "exclamation heart ornament", "💕": "hearts two", "💞": "hearts revolving", "💓": "beating heart", "💗": "growing heart", "💖": "heart sparkling", "💘": "arrow heart", "💝": "heart ribbon", "💯": "hundred points", "💢": "anger", "💥": "collision", "💫": "dizzy", "💦": "splashing sweat", "💨": "dash", "💬": "balloon speech", "💭": "balloon thought", "💤": "sleeping", "👋": "hand waving", "🤚": "back hand raised", "🖐️": "fingers hand raised splayed", "✋": "hand raised", "🖖": "between fingers hand middle part raised ring", "👌": "hand ok", "🤌": "fingers pinched", "🤏": "hand pinching", "✌️": "hand victory", "🤞": "crossed fingers hand index middle", "🫰": "crossed finger hand index thumb", "🤟": "hand i love you", "🤘": "horns", "🤙": "call hand me", "🫵": "at index pointing viewer", "👈": "backhand index left pointing", "👉": "backhand index pointing right", "👆": "backhand index pointing up", "🖕": "extended finger hand middle reversed", "👇": "backhand down index pointing", "☝️": "index pointing up", "👍": "thumbs up", "👎": "down thumbs", "✊": "fist raised", "👊": "fisted hand", "🤛": "facing fist left", "🤜": "facing fist right", "👏": "clapping hands", "🙌": "both celebration hands in person raising", "🫶": "hands heart", "👐": "hands open", "🤲": "palms together up", "🙏": "folded hands person", "✍️": "hand writing", "💅": "nail polish", "🤳": "selfie", "💪": "biceps flexed", "🎉": "party popper", "🎊": "ball confetti", "🥂": "clinking glasses", "🍻": "beer clinking mugs", "🍿": "popcorn", "🎬": "board clapper", "🎥": "camera movie", "📺": "television", "🎮": "game video", "🕹️": "joystick", "🎯": "direct hit", "🎲": "die game", "🏆": "trophy", "🥇": "first medal place", "🎁": "present wrapped", "🎈": "balloon", "🔥": "fire", "⭐": "medium star", "🌟": "glowing star", "✨": "sparkles", "⚡": "high voltage", "☀️": "rays sun", "🌙": "crescent moon", "🌈": "rainbow", "☁️": "cloud", "🌧️": "cloud rain", "❄️": "snowflake", "🎵": "musical note", "🎶": "multiple musical notes", "🎤": "microphone", "🍕": "pizza slice", "🍔": "hamburger", "🍟": "french fries", "🌭": "dog hot", "🥓": "bacon", "🍳": "cooking", "🥞": "pancakes", "🧀": "cheese wedge", "🥗": "green salad", "🌮": "taco", "🌯": "burrito", "🍣": "sushi", "🍜": "bowl steaming", "🍲": "food pot", "🍝": "spaghetti", "🍛": "curry rice", "🍱": "bento box", "🍙": "ball rice", "🍢": "oden", "🍡": "dango", "🍦": "cream ice soft", "🍰": "shortcake", "🎂": "birthday cake", "🧁": "cupcake", "🍩": "doughnut", "🍪": "cookie", "🍫": "bar chocolate", "🍬": "candy", "🍭": "lollipop", "☕": "beverage hot", "🍵": "handle teacup without", "🧋": "bubble tea", "🥤": "cup straw", "🍺": "beer mug", "🍷": "glass wine", "🥃": "glass tumbler", "🍸": "cocktail glass", "🍹": "drink tropical", "🍾": "bottle cork popping", "🐶": "dog", "🐱": "cat", "🐭": "mouse", "🐹": "hamster", "🐰": "rabbit", "🦊": "fox", "🐻": "bear", "🐼": "panda", "🐨": "koala", "🐯": "tiger", "🦁": "lion", "🐮": "cow", "🐷": "pig", "🐸": "frog", "🐵": "monkey", "🐔": "chicken", "🐧": "penguin", "🐦": "bird", "🦄": "unicorn", "🐝": "honeybee", "🐢": "turtle", "🦋": "butterfly", "🐙": "octopus", "🐳": "spouting whale", "🐬": "dolphin", "🐠": "fish tropical", "🚗": "automobile", "🚀": "rocket", "✈️": "airplane", "🏠": "building house", "💡": "bulb electric light", "🔑": "key", "📱": "mobile phone", "💻": "computer personal", "⌚": "watch", "📷": "camera", "🎒": "satchel school", "✅": "check", "❌": "cross", "❓": "ornament question", "❗": "exclamation", "🚫": "entry no", "⚠️": "warning", "♻️": "recycling universal", "🆗": "ok squared", "🆒": "cool squared", "🆕": "new squared", "🔝": "above arrow top upwards", "🔔": "bell", "🔕": "bell cancellation stroke", "💰": "bag money", "💲": "dollar"};
 
-function renderEmojiPicker() {
-  const grid = document.getElementById("emoji-picker");
+const EMOJI_RECENT_KEY = "jetstream_recent_emoji";
+function emojiRecent() {
+  try { return JSON.parse(localStorage.getItem(EMOJI_RECENT_KEY) || "[]"); }
+  catch { return []; }
+}
+function emojiPushRecent(e) {
+  const r = emojiRecent().filter(x => x !== e);
+  r.unshift(e);
+  localStorage.setItem(EMOJI_RECENT_KEY, JSON.stringify(r.slice(0, 24)));
+}
+
+let emojiNav, emojiScroll;
+
+function makeEmojiButton(e) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "emoji-btn";
+  b.textContent = e;
+  b.title = "React " + e;
+  b.dataset.kw = (EMOJI_KEYWORDS[e] || "") + " " + e;
+  twemojify(b);
+  b.addEventListener("click", () => {
+    emojiPushRecent(e);
+    renderEmojiRecent();
+    sendReaction({ emoji: e }, { emoji: e });
+  });
+  return b;
+}
+
+function renderEmojiRecent() {
+  const sec = document.getElementById("emoji-sec-recent");
+  if (!sec) return;
+  const recent = emojiRecent();
+  const navBtn = emojiNav && emojiNav.querySelector('[data-cat="recent"]');
+  const has = recent.length > 0;
+  sec.hidden = !has;
+  if (navBtn) navBtn.hidden = !has;
+  if (!has) return;
+  const grid = sec.querySelector(".emoji-grid");
   grid.innerHTML = "";
-  for (const e of EMOJI_PICKER) {
-    const b = document.createElement("button");
-    b.type = "button"; b.textContent = e; b.title = "React " + e;
-    twemojify(b);
-    b.addEventListener("click", () => sendReaction({ emoji: e }, { emoji: e }));
-    grid.appendChild(b);
-  }
+  for (const e of recent) grid.appendChild(makeEmojiButton(e));
 }
-renderEmojiPicker();
 
-// Mirror the custom set into the panel gallery so viewers can see/tap what's
-// been imported without hunting the tiny in-player bar. Rebuilt only on change.
-let reactionGallerySig = "";
-function renderReactionGallery(custom) {
-  const sig = custom.map(c => c.id).join(",");
-  if (sig === reactionGallerySig) return;
-  reactionGallerySig = sig;
-  if (!custom.length) {
-    reactionsGallery.innerHTML = '<span class="empty">No custom reactions yet — import one above.</span>';
-    return;
+// A custom (viewer-imported, shared) reaction renders as an <img> tile inside
+// the picker rather than a Twemoji glyph. Tapping reacts for everyone. If the
+// server flags it `can_delete` (admin → any, friend → their own uploads), a
+// small × overlay lets them prune it from the shared set.
+function makeCustomButton(c) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "emoji-btn emoji-custom";
+  b.title = c.label || "Custom reaction";
+  b.dataset.kw = ((c.label || "") + " custom").toLowerCase();
+  const img = document.createElement("img");
+  img.src = c.url; img.alt = c.label || "";
+  b.appendChild(img);
+  b.addEventListener("click", () => sendReaction({ custom_id: c.id }, { custom_url: c.url }));
+  if (c.can_delete) {
+    const del = document.createElement("span");
+    del.className = "emoji-custom-del";
+    del.textContent = "×";
+    del.title = "Remove this reaction for everyone";
+    del.addEventListener("click", (e) => { e.stopPropagation(); deleteCustomReaction(c); });
+    b.appendChild(del);
   }
-  reactionsGallery.innerHTML = "";
-  for (const c of custom) {
-    const b = document.createElement("button");
-    b.type = "button"; b.title = c.label || "Custom reaction";
-    const img = document.createElement("img");
-    img.src = c.url; img.alt = c.label || "";
-    b.appendChild(img);
-    b.addEventListener("click", () => sendReaction({ custom_id: c.id }, { custom_url: c.url }));
-    reactionsGallery.appendChild(b);
+  return b;
+}
+
+async function deleteCustomReaction(c) {
+  if (!confirm(`Remove the "${c.label || "custom"}" reaction for everyone?`)) return;
+  try {
+    const r = await fetch("/api/reactions/" + c.id + "?sid=" + encodeURIComponent(chatSid), { method: "DELETE" });
+    if (r.ok) {
+      reactionBarSig = "";   // force the in-player bar to drop it
+      emojiCustomSig = " ";  // force the picker's Custom section to rebuild
+      reactionPoll();
+    } else {
+      alert("Couldn't remove that reaction.");
+    }
+  } catch {
+    alert("Couldn't remove that reaction — network error.");
   }
 }
+
+// Populate the picker's "Custom" section from the shared set. Hidden (along
+// with its nav icon) when no customs exist. Cheap-guarded so the 1s reaction
+// poll only rebuilds the grid when the set actually changes.
+let emojiCustomSig = " ";
+function renderEmojiCustom(custom) {
+  const sec = document.getElementById("emoji-sec-custom");
+  if (!sec) return;
+  const sig = custom.map(c => c.id).join(",");
+  if (sig === emojiCustomSig) return;
+  emojiCustomSig = sig;
+  const navBtn = emojiNav && emojiNav.querySelector('[data-cat="custom"]');
+  const has = custom.length > 0;
+  sec.hidden = !has;
+  if (navBtn) navBtn.hidden = !has;
+  const grid = sec.querySelector(".emoji-grid");
+  grid.innerHTML = "";
+  for (const c of custom) grid.appendChild(makeCustomButton(c));
+}
+
+function buildEmojiPicker() {
+  const body = document.getElementById("emoji-picker");
+  body.innerHTML = "";
+
+  const search = document.createElement("input");
+  search.type = "search";
+  search.id = "emoji-search";
+  search.placeholder = "Search emoji…";
+  search.autocomplete = "off";
+
+  emojiNav = document.createElement("div");
+  emojiNav.id = "emoji-nav";
+
+  emojiScroll = document.createElement("div");
+  emojiScroll.id = "emoji-scroll";
+
+  const cats = [
+    { id: "custom", icon: "🖼️", label: "Custom", emojis: [] },
+    { id: "recent", icon: "🕘", label: "Recent", emojis: [] },
+  ].concat(EMOJI_CATEGORIES);
+  for (const cat of cats) {
+    const navBtn = document.createElement("button");
+    navBtn.type = "button";
+    navBtn.dataset.cat = cat.id;
+    navBtn.title = cat.label;
+    navBtn.textContent = cat.icon;
+    twemojify(navBtn);
+    navBtn.addEventListener("click", () => {
+      const sec = document.getElementById("emoji-sec-" + cat.id);
+      if (sec) emojiScroll.scrollTo({ top: sec.offsetTop, behavior: "smooth" });
+    });
+    emojiNav.appendChild(navBtn);
+
+    const sec = document.createElement("div");
+    sec.className = "emoji-section";
+    sec.id = "emoji-sec-" + cat.id;
+    const label = document.createElement("div");
+    label.className = "emoji-cat-label";
+    label.textContent = cat.label;
+    const grid = document.createElement("div");
+    grid.className = "emoji-grid";
+    for (const e of cat.emojis) grid.appendChild(makeEmojiButton(e));
+    sec.appendChild(label);
+    sec.appendChild(grid);
+    emojiScroll.appendChild(sec);
+  }
+
+  search.addEventListener("input", () => {
+    const q = search.value.trim().toLowerCase();
+    const searching = q.length > 0;
+    emojiNav.style.display = searching ? "none" : "";
+    for (const sec of emojiScroll.querySelectorAll(".emoji-section")) {
+      if (sec.id === "emoji-sec-recent") { sec.hidden = searching || !emojiRecent().length; continue; }
+      let any = false;
+      for (const b of sec.querySelectorAll(".emoji-btn")) {
+        const hit = !searching || b.dataset.kw.includes(q);
+        b.style.display = hit ? "" : "none";
+        if (hit) any = true;
+      }
+      sec.hidden = !any;
+      sec.querySelector(".emoji-cat-label").style.display = searching ? "none" : "";
+    }
+  });
+
+  // Highlight the category whose section is at the top of the scroll area.
+  emojiScroll.addEventListener("scroll", () => {
+    const secs = [...emojiScroll.querySelectorAll(".emoji-section")].filter(s => !s.hidden);
+    let active = secs[0];
+    for (const s of secs) { if (s.offsetTop - emojiScroll.scrollTop <= 12) active = s; }
+    for (const nb of emojiNav.children) {
+      nb.classList.toggle("active", !!active && ("emoji-sec-" + nb.dataset.cat) === active.id);
+    }
+  });
+
+  body.appendChild(search);
+  body.appendChild(emojiNav);
+  body.appendChild(emojiScroll);
+  renderEmojiRecent();
+  renderEmojiCustom([]);  // starts hidden; the reaction poll fills it in
+}
+buildEmojiPicker();
 
 // Hidden file input drives the import flow (opened by the panel's button).
 const reactionUploadInput = document.createElement("input");
@@ -1804,16 +2143,22 @@ reactionUploadInput.addEventListener("change", async () => {
   reactionUploadInput.value = "";  // let the same file be re-picked later
   if (!file) return;
   if (file.size > 512 * 1024) { alert("That image is too large (max 512 KB)."); return; }
+  // Name it so it's findable in the picker's search (server caps at 24 chars).
+  // Default to the filename sans extension; Cancel aborts the whole import.
+  const suggested = file.name.replace(/\.[^.]+$/, "").slice(0, 24);
+  const label = prompt("Name this reaction (so people can find it in search):", suggested);
+  if (label === null) return;
   reactionImportBtn.disabled = true;
   const fd = new FormData();
   fd.append("image", file);
   fd.append("sid", chatSid);
+  if (label.trim()) fd.append("label", label.trim().slice(0, 24));
   try {
     const r = await fetch("/api/reactions/upload", { method: "POST", body: fd });
     if (r.ok) {
       const j = await r.json();
       reactionBarSig = "";   // force a rebuild so the new button shows
-      reactionGallerySig = "";
+      emojiCustomSig = " ";  // force the picker's Custom section to refresh
       reactionPoll();
       if (j.id) sendReaction({ custom_id: j.id }, { custom_url: j.url }); // celebrate it
     } else if (r.status === 409) {
@@ -1836,13 +2181,13 @@ reactionUploadInput.addEventListener("change", async () => {
 
 async function reactionPoll() {
   try {
-    const r = await fetch("/reactions/recent?since=" + reactionMaxId);
+    const r = await fetch("/reactions/recent?since=" + reactionMaxId + "&sid=" + encodeURIComponent(chatSid));
     if (!r.ok) return;
     const j = await r.json();
     if (Array.isArray(j.emojis)) {
       const custom = Array.isArray(j.custom) ? j.custom : [];
       buildReactionBar(j.emojis, custom);
-      renderReactionGallery(custom);
+      renderEmojiCustom(custom);
     }
     if (typeof j.max_id === "number") reactionMaxId = j.max_id;
     if (Array.isArray(j.reactions)) {
@@ -2020,7 +2365,12 @@ function renderDirectoryResult(item) {
     img.loading = "lazy";
     img.alt = "";
     img.addEventListener("load", () => {
+      // Clearing the placeholder label via textContent="" would also strip the
+      // <img> child, so drop the folder placeholder styling and re-attach the
+      // poster instead — leaving a clean cover image filling the tile.
       thumb.textContent = "";
+      thumb.classList.remove("folder");
+      thumb.appendChild(img);
       img.classList.add("loaded");
     });
     img.src = `/poster?path=${encodeURIComponent(item.path)}`;
@@ -2130,6 +2480,7 @@ async function sendRequest(path, btn) {
       body: JSON.stringify({
         path,
         name: localStorage.getItem("jetstream_chatname") || "",
+        sid: chatSid,
       }),
     });
     if (r.ok) {
@@ -2137,6 +2488,7 @@ async function sendRequest(path, btn) {
       // the viewer just needs to know it's been registered.
       btn.textContent = "Requested ✓";
       btn.classList.add("done");
+      reqListPoll();  // surface it (or its bumped vote) in the requests panel
     } else {
       const j = await r.json().catch(() => ({}));
       btn.textContent = j.error === "rate limited" ? "slow down" : "failed";
@@ -2149,6 +2501,101 @@ async function sendRequest(path, btn) {
     setTimeout(() => { btn.textContent = "Request"; }, 1800);
   }
 }
+
+// ---- Viewer request list + votes --------------------------------------
+// The community wishlist: viewers up-vote what they want, friends/admin (per
+// can_manage) approve→queue or deny. Polled on the same cadence as the queue.
+const reqlistPanel = document.getElementById("reqlist-panel");
+const reqlist = document.getElementById("reqlist");
+const reqlistCount = document.getElementById("reqlist-count");
+const reqlistToggle = document.getElementById("reqlist-toggle");
+if (localStorage.getItem("jetstream_reqlist_collapsed") === "0") {
+  reqlistPanel.classList.remove("collapsed");
+  reqlistToggle.textContent = "▾";
+}
+document.getElementById("reqlist-head").addEventListener("click", () => {
+  const c = reqlistPanel.classList.toggle("collapsed");
+  reqlistToggle.textContent = c ? "▸" : "▾";
+  localStorage.setItem("jetstream_reqlist_collapsed", c ? "1" : "0");
+});
+
+async function voteRequest(id) {
+  try {
+    const r = await fetch("/api/request/" + id + "/vote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sid: chatSid }),
+    });
+    if (r.ok) reqListPoll();
+  } catch {}
+}
+async function approveRequest(id, btn) {
+  if (btn) btn.disabled = true;
+  try { await fetch("/api/control/requests/" + id + "/approve", { method: "POST" }); } catch {}
+  reqListPoll(); queuePoll();
+}
+async function denyRequest(id) {
+  try { await fetch("/api/control/requests/" + id, { method: "DELETE" }); } catch {}
+  reqListPoll();
+}
+
+async function reqListPoll() {
+  try {
+    const r = await fetch("/api/requests?sid=" + encodeURIComponent(chatSid));
+    if (!r.ok) return;
+    const j = await r.json();
+    const items = Array.isArray(j.requests) ? j.requests : [];
+    const canManage = !!j.can_manage;
+    reqlistCount.textContent = items.length
+      ? items.length + (items.length === 1 ? " request" : " requests") : "";
+    reqlist.innerHTML = "";
+    if (!items.length) {
+      reqlist.innerHTML = '<li class="empty">No requests yet — find something in the library below and tap Request.</li>';
+      return;
+    }
+    for (const it of items) {
+      const li = document.createElement("li");
+
+      const vote = document.createElement("button");
+      vote.type = "button";
+      vote.className = "req-vote" + (it.voted ? " voted" : "");
+      vote.title = it.voted ? "Remove your vote" : "Vote for this";
+      const arrow = document.createElement("span"); arrow.className = "req-arrow"; arrow.textContent = "▲";
+      const n = document.createElement("span"); n.className = "req-n"; n.textContent = it.votes;
+      vote.appendChild(arrow); vote.appendChild(n);
+      vote.addEventListener("click", () => voteRequest(it.id));
+      li.appendChild(vote);
+
+      const meta = document.createElement("div");
+      meta.className = "req-meta";
+      const title = document.createElement("div");
+      title.className = "req-title"; title.textContent = it.title || "(untitled)";
+      meta.appendChild(title);
+      if (it.requester) {
+        const by = document.createElement("div");
+        by.className = "req-by"; by.textContent = "by " + it.requester;
+        meta.appendChild(by);
+      }
+      li.appendChild(meta);
+
+      if (canManage) {
+        const actions = document.createElement("div");
+        actions.className = "req-actions";
+        const ok = document.createElement("button");
+        ok.type = "button"; ok.className = "req-ok"; ok.textContent = "Queue"; ok.title = "Approve & queue";
+        ok.addEventListener("click", () => approveRequest(it.id, ok));
+        const no = document.createElement("button");
+        no.type = "button"; no.className = "req-no"; no.textContent = "✕"; no.title = "Deny";
+        no.addEventListener("click", () => denyRequest(it.id));
+        actions.appendChild(ok); actions.appendChild(no);
+        li.appendChild(actions);
+      }
+      reqlist.appendChild(li);
+    }
+  } catch {}
+}
+setInterval(reqListPoll, 5000);
+reqListPoll();
 
 </script>
 </body>

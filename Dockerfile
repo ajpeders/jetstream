@@ -1,3 +1,11 @@
+FROM node:22-slim AS ui-build
+
+WORKDIR /ui
+COPY package.json package-lock.json vite.config.js /ui/
+COPY src /ui/src
+RUN npm ci
+RUN npm run build
+
 FROM python:3.12-slim
 
 RUN apt-get update \
@@ -17,6 +25,7 @@ RUN pip install --no-cache-dir flask==3.0.3 yt-dlp gunicorn==23.0.0
 WORKDIR /app
 COPY app.py /app/app.py
 COPY static /app/static
+COPY --from=ui-build /ui/static/build /app/static/build
 
 EXPOSE 8080
 # gunicorn replaces the dev-server Werkzeug. One worker (the app's background

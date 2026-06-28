@@ -1,0 +1,29 @@
+# NVIDIA GPU overlay for jetstream.
+#
+# Adds GPU passthrough + NVENC env to both `jetstream` and `jetstream-dev`.
+# Apply by chaining this on top of the base compose via COMPOSE_FILE in
+# services/.env:
+#
+#   COMPOSE_FILE=docker-compose.yml:jetstream/docker-compose.gpu.yml
+#
+# bin/install writes this automatically when it finds nvidia-smi +
+# nvidia-container-toolkit. On hosts without an NVIDIA GPU, leave it out —
+# the base compose runs the libx264 CPU path and works on any machine.
+#
+# Why a separate file:
+#   - `gpus: all` fails container startup when the nvidia container runtime
+#     isn't installed, so it can't live in the base compose.
+#   - The CPU/VAAPI/NVENC selection is already env-driven in app.py
+#     (USE_NVENC=1 picks the NVENC branch); this overlay just sets the env
+#     and wires the device.
+#
+# NVIDIA_DRIVER_CAPABILITIES must include `video` — the toolkit's default
+# (`compute,utility`) injects libcuda but not libnvidia-encode / libnvcuvid,
+# so ffmpeg silently fails to produce NVENC output.
+
+services:
+  jetstream:
+    gpus: all
+    environment:
+      USE_NVENC: 1
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility

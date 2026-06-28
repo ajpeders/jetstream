@@ -1,54 +1,50 @@
 # jetstream
 
-A small Flask + ffmpeg service that broadcasts video files (and yt-dlp-resolvable URLs) to friends over HLS, gated by per-friend invite tokens. Source lives at `~/homelab/apps/jetstream/`; deployed via the `livestream` Docker Compose stack in `~/homelab/services/livestream/`.
+A small Flask + ffmpeg service that broadcasts video files (and yt-dlp-resolvable URLs) to friends over HLS, gated by per-friend invite tokens. Source lives at `~/homelab/apps/jetstream/`; deployed via the `jetstream` Docker Compose include in `~/homelab/services/jetstream/`.
 
 ```
 ~/homelab/apps/jetstream/         ← code (this directory)
   app.py                          Flask backend
+  src/                            Svelte UI islands
   static/admin.html               admin UI
   static/viewer.html              viewer UI
+  static/build/                   generated frontend bundle (gitignored)
+  package.json                    frontend build tooling
   Dockerfile                      python:3.12-slim + ffmpeg + gunicorn + yt-dlp
   ARCHITECTURE.md                 how it works
   ROADMAP.md                      what's left
 
-~/homelab/services/livestream/    ← deployment
-  docker-compose.yml              prod + dev stacks (Flask + nginx sidecar each)
+~/homelab/services/jetstream/     ← deployment include
+  docker-compose.yml              includes this app compose file
   nginx-default.conf.template     shared nginx config (envsubst at start)
   .env.example                    required env vars
 ```
 
 ## Running
 
-Each environment is two containers: a Flask app and an nginx sidecar that fronts it (serves `/hls/*` straight off a shared tmpfs, proxies everything else to Flask).
+The stack is two containers: a Flask app and an nginx sidecar that fronts it (serves `/hls/*` straight off a shared tmpfs, proxies everything else to Flask).
 
 | | URL | Flask image | nginx | State dir | HW decode |
 |---|---|---|---|---|---|
-| **prod** | `https://live.thelunadog.com` | `homelab/livestream:latest` | `nginx-livestream` | `state/livestream/` | OFF |
-| **dev**  | `http://127.0.0.1:8081` | `homelab/livestream:dev` | `nginx-livestream-dev` | `state/livestream-dev/` | OFF (workaround — see ROADMAP #7) |
+| **prod** | `https://live.thelunadog.com` | `homelab/jetstream:latest` | `nginx-jetstream` | `state/jetstream/` | OFF unless the GPU overlay enables NVENC |
 
 ```sh
-cd services/livestream
+cd services
 
-# Prod (rebuilds image so app.py changes get baked in; recreates both containers):
-docker compose up -d --build livestream nginx-livestream
-
-# Dev (separate image tag, isolated state, app.py + static/ bind-mounted from source):
-docker compose up -d --build livestream-dev nginx-livestream-dev
-
-# Reach dev from a remote machine via SSH tunnel:
-ssh -L 8081:127.0.0.1:8081 ween@192.168.0.176
-# then http://localhost:8081 in the browser
+# Rebuilds image so app.py/static/frontend changes get baked in:
+docker compose up -d --build jetstream nginx-jetstream
 ```
 
 **Hot-deploy patterns:**
 
-| Change | Dev | Prod |
+| Change | Local source tree | Prod |
 |---|---|---|
-| `static/*.html` | live (bind-mounted) | `docker cp static/foo.html livestream:/app/static/foo.html` |
-| `app.py` | `docker restart livestream-dev` (bind-mounted, picks up new code) | rebuild + recreate (see above) |
+| `src/*` frontend | `npm run build` (writes `static/build/`) | rebuild + recreate |
+| `static/*.html` / CSS | local file changes | rebuild + recreate, or short-lived `docker cp static/foo.html jetstream:/app/static/foo.html` |
+| `app.py` | local file changes | rebuild + recreate |
 | `Dockerfile` / `nginx-default.conf.template` | rebuild + recreate | rebuild + recreate |
 
-Don't rely on `docker cp` for `app.py` on prod — it survives until the next `docker compose up -d`, then gets clobbered by the image-baked copy. Always rebuild for `app.py` changes.
+Don't rely on `docker cp` for `app.py` on prod — it survives until the next `docker compose up -d`, then gets clobbered by the image-baked copy. Always rebuild for app changes that need to stick.
 
 ## Endpoints
 
@@ -67,7 +63,7 @@ Friend (a `friend`-level invite token; never needs the admin password):
 - `GET /api/control/browse?path=…`
 - These are the same view functions as the matching `/admin/api/*` routes (a second route alias), gated to `friend`+`admin` tokens by the request gate. Host-only surface (settings, tokens, viewers, perf) is **not** aliased.
 
-Admin (Traefik basicauth on prod; open on dev):
+Admin (Traefik basicauth on prod):
 - `POST /admin/api/play` `{path, start_seconds, subtitle_idx?}`
 - `POST /admin/api/play_url` `{url}` — yt-dlp resolves; playlists expand into the queue
 - `POST /admin/api/seek` `{to_seconds | delta_seconds}`
@@ -84,7 +80,7 @@ Admin (Traefik basicauth on prod; open on dev):
 - **Per-source subtitle burn-in.** Files with English-tagged text subs (SRT/ASS/SSA/mov_text) render burned-in via the libavfilter `subtitles=` filter. PGS bitmap subs are skipped (not renderable). Auto-on for files; pass explicit `subtitle_idx: null` at queue/play time to force off. URLs (yt-dlp) don't get subs.
 - **HDR → SDR tonemap.** Sources tagged with PQ (`smpte2084`) or HLG (`arib-std-b67`) transfer go through a CPU-side zscale tonemap chain (`linear → BT.709 SDR → Hable`) before encode. SDR sources skip the chain.
 - **4K passthrough.** Set `TARGET_HEIGHT=2160` to keep 4K sources at 4K (still capped to source height — no upscaling).
-- **Low-latency mode.** Set `HLS_SEG_TIME=1` + `HLS_LIST_SIZE=30` for ~1.7s sync floor (vs ~3–5s with the 4s default). True LL-HLS via `EXT-X-PART` would need a patched ffmpeg; this is the no-code-change win.
+- **Low-latency mode.** Defaults to `HLS_SEG_TIME=1` + `HLS_LIST_SIZE=24` for a tight live edge. True LL-HLS via `EXT-X-PART` would need a patched ffmpeg.
 - **YouTube DASH.** yt-dlp returns separate video + audio formats for HD; ffmpeg merges them via two `-i` inputs. (YouTube's muxed `best` tops out at 360p.)
 
 ## URL sources (`play_url` / queue-by-URL)
@@ -111,21 +107,23 @@ Not supported:
 
 | Var | Default | Notes |
 |---|---|---|
-| `USE_VAAPI` | `1` | Enable hardware H.264 encoder (`h264_vaapi`) |
-| `USE_VAAPI_DECODE` | `0` (prod), `0` (dev override in `.env`) | HW decode for HEVC/H.264. Broken on this iGPU — see ROADMAP #7. Workaround pinned off. |
+| `USE_VAAPI` | `0` | Enable hardware H.264 encoder (`h264_vaapi`) |
+| `USE_VAAPI_DECODE` | `0` | HW decode for HEVC/H.264. Broken on this iGPU; workaround pinned off. |
 | `VAAPI_DEVICE` | `/dev/dri/renderD128` | |
+| `USE_NVENC` | `0` | GPU overlay can enable NVIDIA encode/decode. |
 | `VIDEO_BITRATE` | `5M` | Used on the libx264 (non-VAAPI) path; VAAPI uses CQP |
 | `VIDEO_QP` | `23` | CQP target for h264_vaapi |
 | `AUDIO_BITRATE` | `160k` | |
-| `TARGET_HEIGHT` | `1080` (prod), `2160` (dev override) | Output cap. Source-bounded — smaller sources don't get upscaled. |
-| `HLS_SEG_TIME` | `4` (prod), `1` (dev override) | Segment seconds. Lower = lower live-edge sync, more files. |
-| `HLS_LIST_SIZE` | `6` (prod), `30` (dev override) | Live playlist depth. |
+| `USE_SUBTITLES` | `1` | Enables cached subtitle burn-in for files with text subs. |
+| `TARGET_HEIGHT` | `1080` | Output cap. Source-bounded — smaller sources don't get upscaled. |
+| `HLS_SEG_TIME` | `1` | Segment seconds. Matches the player live-edge tuning. |
+| `HLS_LIST_SIZE` | `24` | Live playlist depth. |
 
 WSGI: gunicorn 23.0 (`-w 1 -k gthread --threads 16 --timeout 120`). One worker shares the in-process state (watcher, composer, viewers dict); 16 threads handle concurrent `/api/_authcheck` + admin requests.
 
 ## State
 
-State files live under `/data/` (mounted from `state/livestream{,-dev}/`):
+State files live under `/data/` (mounted from `state/jetstream/`):
 - `tokens.json` — invite tokens
 - `playlist.json` — pending queue (items keep `subtitle_idx` if set)
 - `settings.json` — `viewer_public`, `auto_fill`

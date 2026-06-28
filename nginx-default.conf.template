@@ -1,0 +1,85 @@
+## jetstream front-proxy.
+## Serves /hls/* directly off the shared tmpfs (faster than routing through
+## Flask), gates access via auth_request to the Flask app's /api/_authcheck,
+## proxies everything else through to the Flask app. Same template runs in
+## front of both `jetstream` (prod) and `jetstream-dev` (dev) — only the
+## upstream backend changes via $JETSTREAM_BACKEND.
+
+upstream jetstream_backend {
+  server ${JETSTREAM_BACKEND}:8080;
+  keepalive 16;
+}
+
+server {
+  listen 80;
+  server_name _;
+
+  # Generous request body — admin can POST URL queues, settings, etc.
+  client_max_body_size 8m;
+
+  # /hls/* — static manifests and segments. Auth via subrequest to Flask;
+  # if the viewer's token cookie is invalid (and we're not in public mode),
+  # nginx rejects with 401 here without ever reading the file.
+  location /hls/ {
+    auth_request /__authcheck;
+
+    alias /hls/;
+
+    # Manifests roll every segment-time; segments are small. No-store keeps
+    # CDN caches and browser caches honest.
+    add_header Cache-Control "no-store" always;
+
+    # Allow Hls.js to read across origins if a viewer ever embeds the
+    # stream from a different host. Doesn't widen attack surface — auth
+    # already gated by the cookie.
+    add_header Access-Control-Allow-Origin "*" always;
+
+    # Use sendfile for the segment transfer — copies bytes from tmpfs to
+    # the socket without touching userland.
+    sendfile on;
+    tcp_nopush on;
+  }
+
+  # Internal — not reachable from outside. nginx hits this for every /hls/*
+  # request and only allows the file through on 2xx. Doubles as the viewer-
+  # tracking hook: Flask's _authcheck calls _track_viewer() so the active
+  # viewers list / history keep working even though /hls/* itself never
+  # touches Python anymore.
+  location = /__authcheck {
+    internal;
+    proxy_pass http://jetstream_backend/api/_authcheck;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    # Pass cookies along so Flask sees the viewer's token.
+    proxy_set_header Cookie $http_cookie;
+    # Forward the real client IP so _track_viewer logs the right thing —
+    # without these, Flask sees nginx's container IP for every viewer.
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header User-Agent $http_user_agent;
+    # Keep-alive to the Flask upstream.
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+  }
+
+  # Everything else — Flask proxy. Includes the viewer page, admin page,
+  # /api/*, /admin/api/*, etc.
+  location / {
+    proxy_pass http://jetstream_backend;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection "";
+
+    # Flask /api/status etc. are short-lived; admin URL resolution can be
+    # 30-60s for some yt-dlp paths. 120s window matches Flask's gunicorn
+    # --timeout 120.
+    proxy_read_timeout 120s;
+    proxy_send_timeout 120s;
+
+    # No buffering — preserves any future SSE / long-poll endpoints.
+    proxy_buffering off;
+  }
+}
