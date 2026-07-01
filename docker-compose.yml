@@ -36,6 +36,14 @@ services:
       # on capable bandwidth — output still shrinks to source height when the
       # source is smaller, so smaller files don't get pointlessly upscaled.
       TARGET_HEIGHT: ${TARGET_HEIGHT:-1080}
+      # Adaptive-bitrate ladder. OFF by default — single 1080p rendition, the
+      # safe legacy path. Set ABR_LADDER=1 to fan a SINGLE decode out to the
+      # 1080p/720p/480p rungs (STREAM_QUALITY_PRESETS high/balanced/data_saver)
+      # in one ffmpeg; /hls/stream.m3u8 becomes a multi-variant master and
+      # hls.js auto-selects/downshifts. Best paired with USE_NVENC=1 (one decode
+      # → 3 NVENC encodes; verified realtime on a 1080p source). On a 4K source
+      # the single decode + tonemap is the bottleneck — see ROADMAP.
+      ABR_LADDER: ${ABR_LADDER:-0}
       # 1s segments: keeps the live-edge lag tight (~1.7s end-to-end) and
       # matches the player's `liveSyncDurationCount: 1` + `TARGET_LAG_S: 2.5`
       # tuning in static/viewer.html. NVENC handles the smaller GOP fine

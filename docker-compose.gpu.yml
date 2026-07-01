@@ -27,3 +27,8 @@ services:
     environment:
       USE_NVENC: 1
       NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+      # ABR ladder: one NVDEC decode → 1080p/720p/480p NVENC rungs in a single
+      # ffmpeg, so weak-connection viewers auto-downshift. Enabled here (not the
+      # base compose) because it's only sane paired with NVENC. Flip to 0 to
+      # revert to the single-rendition path.
+      ABR_LADDER: 1

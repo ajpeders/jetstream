@@ -130,6 +130,45 @@ STREAM_QUALITY_PRESETS = {
     },
 }
 
+# ── Adaptive-bitrate (ABR) ladder ────────────────────────────────────────
+# Opt-in via ABR_LADDER=1. When OFF (default) the server emits a single
+# rendition exactly as before — single-rendition is the safe fallback. When
+# ON, a SINGLE ffmpeg decode fans out to N NVENC (or CPU/VAAPI) outputs in one
+# process; the composer publishes a real multi-variant master playlist whose
+# variants each accumulate runs+discontinuities like the legacy single stream.
+# hls.js then auto-selects/downshifts based on the viewer's bandwidth.
+#
+# The ladder reuses STREAM_QUALITY_PRESETS heights/bitrates (highest → lowest).
+# In ABR mode the per-session `stream_quality` admin setting is ignored — the
+# player picks the rendition, not the admin.
+ABR_LADDER = os.environ.get("ABR_LADDER", "0") == "1"
+ABR_LADDER_KEYS = ["high", "balanced", "data_saver"]
+
+
+def _abr_ladder() -> list[dict]:
+    """The active ABR ladder as a list of preset dicts, highest quality first.
+    Variant index in the master playlist == index in this list."""
+    return [
+        STREAM_QUALITY_PRESETS[k]
+        for k in ABR_LADDER_KEYS
+        if k in STREAM_QUALITY_PRESETS
+    ]
+
+
+def _bitrate_to_bps(value) -> int:
+    """Parse an ffmpeg bitrate string ("5M", "2500k", "1200000") to bits/sec.
+    Used to fill EXT-X-STREAM-INF BANDWIDTH in the master playlist."""
+    s = str(value).strip().lower()
+    try:
+        if s.endswith("k"):
+            return int(float(s[:-1]) * 1000)
+        if s.endswith("m"):
+            return int(float(s[:-1]) * 1_000_000)
+        return int(float(s))
+    except ValueError:
+        return 0
+
+
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".webm", ".avi"}
 
 # Cover art via Sonarr + Radarr. Both run on the same Docker network; we
@@ -607,6 +646,10 @@ def _stream_health_snapshot() -> dict:
         "stream_quality": _stream_quality_key(),
         "hls_seg_time": HLS_SEG_TIME,
         "subtitles": SUBTITLE_BURN_IN,
+        # ABR ladder: false in single-rendition mode, else the rung heights the
+        # master playlist exposes (highest first). Lets triage/the UI see that
+        # the player is choosing the rendition, not the admin's stream_quality.
+        "abr_ladder": [int(r["height"]) for r in _abr_ladder()] if ABR_LADDER else False,
     }
 
 
@@ -1249,7 +1292,8 @@ def _start_preroll_locked() -> bool:
     run_dir = _run_dir(run_id)
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
-        cmd = _build_ffmpeg_cmd(
+        builder = _build_ffmpeg_abr_cmd if ABR_LADDER else _build_ffmpeg_cmd
+        cmd = builder(
             str(full), run_dir, 0.0, audio_idx, next_source.get("subtitle_idx"),
         )
         proc = _spawn_ffmpeg(cmd, run_dir / "ffmpeg.log")
@@ -2230,6 +2274,268 @@ def _build_ffmpeg_cmd(
     return cmd
 
 
+def _build_ffmpeg_abr_cmd(
+    input_path: Path | str,
+    run_dir: Path,
+    start_seconds: float = 0.0,
+    audio_idx: int | None = None,
+    subtitle_idx: int | None = None,
+    audio_input: str | None = None,
+) -> list[str]:
+    """ABR sibling of `_build_ffmpeg_cmd`: ONE decode → N NVENC/CPU/VAAPI
+    encodes in a single ffmpeg, emitting one HLS variant per ladder rung.
+
+    Output layout (per run):
+        run/<id>/v0/{init.mp4,seg_*.m4s,idx.m3u8}   # highest rung
+        run/<id>/v1/{...}                            # next rung down
+        ...
+        run/<id>/master.m3u8                         # ffmpeg's per-run master
+    The composer ignores ffmpeg's per-run master and stitches the GLOBAL
+    master + per-variant media playlists itself (see `_composer_tick_abr`).
+
+    Time alignment across variants is guaranteed by giving every encoder the
+    SAME GOP / forced-IDR cadence keyed off presentation time, fed from the
+    same decoded frames — so seg_NNNNN.m4s covers the identical wall-clock
+    window in every rung and a viewer can switch rungs without a reseek.
+
+    Covers NVENC (primary), libx264 (CPU) and VAAPI. HDR tonemap and burned-in
+    subtitles run ONCE on the shared pre-split chain, then the result is
+    `split` into the ladder and each branch is scaled to its rung height.
+    """
+    input_str = str(input_path)
+    info = _probe_video_info(input_str) or {}
+    src_codec = info.get("codec")
+    src_height = info.get("height")
+    is_hdr = bool(info.get("is_hdr"))
+
+    ladder = _abr_ladder()
+    nv = len(ladder)
+    # Per-rung output height — never upscale beyond the source. A 720p source
+    # with a 1080p top rung just emits 720p for that rung (no quality gain to
+    # be had, and upscaling wastes encoder cycles).
+    heights = [
+        (min(src_height, int(r["height"])) if src_height else int(r["height"]))
+        for r in ladder
+    ]
+    # The shared pre-split chain (tonemap / sub burn-in) runs at the TALLEST
+    # rung — cheaper than running it at source 4K, and the rungs below scale
+    # down from there.
+    top_h = max(heights)
+
+    # Pre-create the per-variant output subdirs; ffmpeg's HLS muxer won't mkdir
+    # them itself.
+    for i in range(nv):
+        (run_dir / f"v{i}").mkdir(parents=True, exist_ok=True)
+
+    hw_decode = (
+        USE_VAAPI and USE_VAAPI_DECODE
+        and src_codec in HWACCEL_DECODE_CODECS
+        and not is_hdr
+    )
+    nv_decode = (
+        USE_NVENC and src_codec in NVDEC_DECODE_CODECS
+        and not info.get("is_dovi")
+    )
+
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin"]
+    if USE_NVENC:
+        if nv_decode:
+            cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+    elif USE_VAAPI:
+        cmd += [
+            "-init_hw_device", f"vaapi=va:{VAAPI_DEVICE}",
+            "-filter_hw_device", "va",
+        ]
+        if hw_decode:
+            cmd += ["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi",
+                    "-hwaccel_device", "va"]
+    if start_seconds > 0:
+        cmd += ["-ss", f"{start_seconds:.3f}"]
+    cmd += ["-re", "-i", input_str]
+    if audio_input:
+        if start_seconds > 0:
+            cmd += ["-ss", f"{start_seconds:.3f}"]
+        cmd += ["-re", "-i", audio_input]
+    if audio_input:
+        audio_map = "1:a:0"
+    else:
+        audio_map = f"0:a:{audio_idx}" if audio_idx is not None else "0:a:0?"
+
+    # Subtitle burn-in (same cache contract as the single-rendition builder).
+    sub_filter = None
+    if SUBTITLE_BURN_IN and subtitle_idx is not None:
+        cached = _cached_sub_path(input_str, subtitle_idx)
+        if cached.exists():
+            sub_filter = _subtitles_filter(str(cached), 0)
+        else:
+            _start_sub_extract(input_str, subtitle_idx)
+            print(
+                f"sub cache miss; extracting in background for next play "
+                f"({Path(input_str).name} #{subtitle_idx})",
+                file=sys.stderr,
+            )
+
+    # Build the shared pre-split filter `base` and a per-rung `scale(h)` that
+    # turns the post-split frames into encoder-ready frames.
+    #   - base: tonemap + sub burn-in, run once, leaving frames on the surface
+    #     the per-rung scaler expects.
+    #   - scale(h): downscale to the rung height + put frames where the encoder
+    #     wants them (CUDA for nvenc, system nv12 for x264, GPU for vaapi).
+    base = ""
+    if USE_NVENC:
+        if is_hdr:
+            tonemap = (
+                "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+                "tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv"
+            )
+            if nv_decode:
+                base = (
+                    f"scale_cuda=-2:{top_h}:format=p010le,"
+                    f"hwdownload,format=p010le,{tonemap}"
+                )
+            else:
+                base = f"scale=-2:{top_h},{tonemap}"
+            if sub_filter:
+                base += f",{sub_filter}"
+            base += ",format=nv12,hwupload_cuda"
+            scale = lambda h: f"scale_cuda=-2:{h}:format=nv12"
+        elif nv_decode:
+            if sub_filter:
+                # libass is CPU-only: pull tallest-rung frames down, burn, push
+                # back to the GPU; rungs scale down from there on the GPU.
+                base = (
+                    f"scale_cuda=-2:{top_h}:format=nv12,"
+                    f"hwdownload,format=nv12,{sub_filter},format=nv12,hwupload_cuda"
+                )
+                scale = lambda h: f"scale_cuda=-2:{h}:format=nv12"
+            else:
+                # All-GPU fast path: frames never leave the card. Each rung is a
+                # cheap scale_cuda off the shared decoded surface.
+                base = ""
+                scale = lambda h: f"scale_cuda=-2:{h}:format=nv12"
+        else:
+            # CPU decode → NVENC encode. Shared chain stays in system memory;
+            # each rung scales (CPU) then uploads to CUDA for its encoder.
+            base = sub_filter or ""
+            scale = lambda h: f"scale=-2:{h},format=nv12,hwupload_cuda"
+        venc = lambda i, vb, buf: [
+            f"-c:v:{i}", "h264_nvenc",
+            f"-preset:v:{i}", "p4",
+            f"-tune:v:{i}", "ll",
+            f"-rc:v:{i}", "cbr",
+            f"-b:v:{i}", vb,
+            f"-maxrate:v:{i}", vb,
+            f"-bufsize:v:{i}", buf,
+            f"-profile:v:{i}", "main",
+        ]
+        # GOP/IDR + AUD are global so EVERY rung shares the cadence — this is
+        # what keeps the rungs segment-aligned.
+        gop = max(1, int(round((info.get("fps") or 30) * float(HLS_SEG_TIME))))
+        global_v = [
+            "-g", str(gop),
+            "-forced-idr", "1",
+            "-no-scenecut", "1",
+            "-bsf:v", "h264_metadata=aud=insert",
+        ]
+    elif USE_VAAPI:
+        if is_hdr:
+            tonemap = (
+                "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+                "tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv"
+            )
+            base = f"scale=-2:{top_h},{tonemap}"
+            if sub_filter:
+                base += f",{sub_filter}"
+        elif hw_decode:
+            # iGPU lacks VAEntrypointVideoProc: download for the CPU scale, burn
+            # subs on CPU frames, re-upload per rung.
+            base = "hwdownload,format=nv12|p010le"
+            if sub_filter:
+                base += f",{sub_filter}"
+        else:
+            base = sub_filter or ""
+        scale = lambda h: f"scale=-2:{h},format=nv12,hwupload"
+        venc = lambda i, vb, buf: [
+            f"-c:v:{i}", "h264_vaapi",
+            f"-low_power:v:{i}", "1",
+            f"-rc_mode:v:{i}", "CQP",
+            f"-qp:v:{i}", VIDEO_QP,
+            f"-profile:v:{i}", "main",
+        ]
+        global_v = [
+            "-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_TIME})",
+            "-color_range", "tv",
+            "-colorspace", "bt709",
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+            "-bsf:v", "h264_metadata=aud=insert",
+        ]
+    else:
+        # Pure CPU (libx264). Tonemap + subs once on the shared chain; rungs
+        # are plain CPU downscales.
+        if is_hdr:
+            tonemap = (
+                "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+                "tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv"
+            )
+            base = f"scale=-2:{top_h},{tonemap}"
+            if sub_filter:
+                base += f",{sub_filter}"
+        else:
+            base = sub_filter or ""
+        scale = lambda h: f"scale=-2:{h}"
+        venc = lambda i, vb, buf: [
+            f"-c:v:{i}", "libx264",
+            f"-preset:v:{i}", "veryfast",
+            f"-tune:v:{i}", "zerolatency",
+            f"-b:v:{i}", vb,
+        ]
+        global_v = [
+            "-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_TIME})",
+            "-color_range", "tv",
+            "-colorspace", "bt709",
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+        ]
+
+    # filter_complex: shared base (optional), then split into N, then per-rung
+    # scale. Labels: [v0]..[v{N-1}] feed the encoders in ladder order.
+    split_labels = "".join(f"[t{i}]" for i in range(nv))
+    head = f"[0:v]{base + ',' if base else ''}split={nv}{split_labels}"
+    parts = [head]
+    for i, h in enumerate(heights):
+        parts.append(f"[t{i}]{scale(h)}[v{i}]")
+    filter_complex = ";".join(parts)
+    cmd += ["-filter_complex", filter_complex, "-sn"]
+
+    # Per-rung video maps + encoder args, in ladder order.
+    for i, r in enumerate(ladder):
+        cmd += ["-map", f"[v{i}]"]
+        cmd += venc(i, str(r["video_bitrate"]), str(r["bufsize"]))
+    cmd += global_v
+    # Audio: one encoded copy per rung so each variant playlist is self-
+    # contained (video+audio muxed in the same fmp4 segment, matching the
+    # legacy single-rendition layout the composer already understands).
+    for _ in range(nv):
+        cmd += ["-map", audio_map]
+    cmd += ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ac", "2"]
+
+    var_stream_map = " ".join(f"v:{i},a:{i}" for i in range(nv))
+    cmd += [
+        "-f", "hls",
+        "-hls_time", HLS_SEG_TIME,
+        "-hls_list_size", HLS_LIST_SIZE,
+        "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments+program_date_time",
+        "-hls_segment_type", "fmp4",
+        "-hls_fmp4_init_filename", "init.mp4",
+        "-hls_segment_filename", str(run_dir / "v%v" / "seg_%05d.m4s"),
+        "-master_pl_name", "master.m3u8",
+        "-var_stream_map", var_stream_map,
+        str(run_dir / "v%v" / "idx.m3u8"),
+    ]
+    return cmd
+
+
 _library_cache_lock = threading.Lock()
 _library_cache: dict = {"sig": None, "files": None}
 
@@ -2310,11 +2616,14 @@ def _pick_random_from_library() -> dict | None:
     }
 
 
-def _parse_run_idx(run_dir: Path) -> tuple[str | None, list[dict]]:
+def _parse_run_idx(run_dir: Path, subdir: str = "") -> tuple[str | None, list[dict]]:
     """Read a run's idx.m3u8 and return (init_uri, [segment dicts]). Each
     segment dict has 'filename', 'duration', 'pdt'. Skips runs that don't
-    have an EXT-X-MAP yet (ffmpeg starting up) or whose idx.m3u8 is missing."""
-    idx = run_dir / "idx.m3u8"
+    have an EXT-X-MAP yet (ffmpeg starting up) or whose idx.m3u8 is missing.
+
+    `subdir` (e.g. "v0") reads a per-variant playlist under the run dir in ABR
+    mode; "" reads the legacy single-rendition idx.m3u8 at the run root."""
+    idx = (run_dir / subdir / "idx.m3u8") if subdir else (run_dir / "idx.m3u8")
     init_uri: str | None = None
     segments: list[dict] = []
     pending_pdt: str | None = None
@@ -2388,39 +2697,42 @@ def _composer_assign_seqs(run_id: int, segments: list[dict]):
                 _composer_state["next_seq"] += 1
 
 
-def _composer_tick():
-    """Stitch /hls/stream.m3u8 from all run dirs' idx.m3u8 files. Atomic write.
-    If no runs have any segments, deletes /hls/stream.m3u8 (idle signal so the
-    client knows there's nothing to play)."""
-    run_ids = _list_run_ids()
-    runs: list[tuple[int, str, list[dict]]] = []  # (run_id, init_uri, segments)
-    for rid in run_ids:
-        init_uri, segs = _parse_run_idx(_run_dir(rid))
-        if init_uri is None or not segs:
-            continue
-        _composer_assign_seqs(rid, segs)
-        runs.append((rid, init_uri, segs))
-
-    master = HLS_DIR / "stream.m3u8"
-    if not runs:
-        # No playable content. Drop the master so /api/status's playlist_ready
-        # check (and viewer's idle path) reflects reality.
+def _atomic_write(path: Path, text: str) -> bool:
+    """Write `text` to `path` atomically (write-tmp + rename). POSIX rename is
+    atomic so a reader never sees a half-written playlist. Returns success."""
+    tmp = path.with_name("." + path.name + ".tmp")
+    try:
+        tmp.write_text(text)
+        tmp.replace(path)
+        return True
+    except Exception as e:
+        print(f"composer: write {path.name} failed: {e}", file=sys.stderr)
         try:
-            master.unlink()
+            tmp.unlink()
         except FileNotFoundError:
             pass
-        return
+        return False
 
+
+def _stitch_media_playlist(runs, prefix) -> tuple[str | None, set[int]]:
+    """Build ONE live media playlist (text) from `runs` — a list of
+    (run_id, init_uri, [segment dicts]) tuples in chronological order. `prefix`
+    is a callable run_id -> URI-prefix that locates that run's segments + init
+    relative to /hls (e.g. "run/7/" single, or "run/7/v0/" for ABR rung 0).
+
+    Returns (playlist_text_or_None, run_ids_still_in_window). Caller assigns
+    seqs (via `_composer_assign_seqs`) BEFORE calling. In ABR mode this is
+    invoked once per rung; because seqs are keyed by (run_id, filename) and the
+    rungs share identical segment filenames + timing, every rung gets matching
+    MEDIA-SEQUENCE numbering and a player can switch rungs without a reseek."""
+    if not runs:
+        return None, set()
     # Truncate the global window from the FRONT to the most recent
-    # GLOBAL_HLS_LIST_SIZE segments. Older segments roll off — their files
-    # may still be on disk (until ffmpeg's per-run delete_segments rotation
-    # or our finished-run cleanup catches up), but they stop being referenced.
+    # HLS_LIST_SIZE segments. Older segments roll off (files may linger until
+    # ffmpeg's delete_segments or finished-run cleanup catches up).
     global_window = int(HLS_LIST_SIZE)
     total = sum(len(segs) for _, _, segs in runs)
     drop = max(0, total - global_window)
-    # Walk front-to-back dropping segments from the oldest run(s) until we've
-    # dropped `drop` of them. A run that ends up with zero kept segments is
-    # excluded from the master entirely.
     kept: list[tuple[int, str, list[dict]]] = []
     for rid, init_uri, segs in runs:
         if drop >= len(segs):
@@ -2431,11 +2743,8 @@ def _composer_tick():
             drop = 0
         kept.append((rid, init_uri, segs))
     if not kept:
-        return
+        return None, set()
 
-    # Header values: MEDIA-SEQUENCE = the assigned seq of the first kept
-    # segment; DISCONTINUITY-SEQUENCE = the assigned disc of the first kept
-    # run.
     first_run_id, _, first_segs = kept[0]
     first_seg_key = (first_run_id, first_segs[0]["filename"])
     with _composer_state_lock:
@@ -2457,44 +2766,34 @@ def _composer_tick():
         "#EXT-X-INDEPENDENT-SEGMENTS",
     ]
     for run_idx, (rid, init_uri, segs) in enumerate(kept):
-        # Discontinuity marker between runs (not before the very first run
-        # in the playlist — that boundary is implicit, and DISCONTINUITY-SEQUENCE
+        # Discontinuity marker between runs (not before the very first run in
+        # the playlist — that boundary is implicit, and DISCONTINUITY-SEQUENCE
         # already accounts for runs that rolled off).
         if run_idx > 0:
             lines.append("#EXT-X-DISCONTINUITY")
-        # EXT-X-MAP MUST appear before the segments it applies to. Each run
-        # has its own init.mp4, so we emit a fresh MAP at every run boundary.
-        lines.append(f'#EXT-X-MAP:URI="run/{rid}/{init_uri}"')
+        # EXT-X-MAP MUST appear before the segments it applies to. Each run has
+        # its own init.mp4, so we emit a fresh MAP at every run boundary.
+        lines.append(f'#EXT-X-MAP:URI="{prefix(rid)}{init_uri}"')
         for seg in segs:
             if seg["pdt"]:
                 lines.append(f"#EXT-X-PROGRAM-DATE-TIME:{seg['pdt']}")
             duration = seg["duration"] if seg["duration"] is not None else float(HLS_SEG_TIME)
             lines.append(f"#EXTINF:{duration:.3f},")
-            lines.append(f"run/{rid}/{seg['filename']}")
+            lines.append(f"{prefix(rid)}{seg['filename']}")
     # No EXT-X-ENDLIST — this is a live playlist, the player must keep polling.
     body = "\n".join(lines) + "\n"
-    tmp = HLS_DIR / ".stream.m3u8.tmp"
-    try:
-        tmp.write_text(body)
-        tmp.replace(master)  # atomic on POSIX — viewers never read a half-written manifest
-    except Exception as e:
-        print(f"composer: master write failed: {e}", file=sys.stderr)
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
+    return body, {rid for rid, _, _ in kept}
 
-    # Clean up finished runs whose segments have all rolled out of the kept
-    # window. The active run is never cleaned up here — only _stop_locked
-    # / a fresh _start_stream will retire it.
-    kept_run_ids = {rid for rid, _, _ in kept}
+
+def _composer_cleanup_finished(kept_run_ids: set[int]) -> None:
+    """Remove finished runs whose segments have all rolled out of the live
+    window. The active run is never touched here (only _stop_locked / a fresh
+    _start_stream retire it). Shared by the single + ABR composer paths."""
     with state_lock:
         finished_snapshot = set(finished_run_ids)
         currently_active = active_run_id
     for rid in finished_snapshot:
-        if rid == currently_active:
-            continue
-        if rid in kept_run_ids:
+        if rid == currently_active or rid in kept_run_ids:
             continue
         try:
             shutil.rmtree(_run_dir(rid))
@@ -2510,6 +2809,112 @@ def _composer_tick():
             for key in [k for k in _composer_state["seg_to_seq"] if k[0] == rid]:
                 del _composer_state["seg_to_seq"][key]
             _composer_state["run_to_disc"].pop(rid, None)
+
+
+def _composer_tick():
+    """Stitch /hls/stream.m3u8 from all run dirs. In ABR mode (ABR_LADDER=1)
+    this delegates to `_composer_tick_abr` which publishes a multi-variant
+    master + per-rung media playlists. Otherwise it builds the single
+    live media playlist. Deletes the master when nothing is playable (idle
+    signal for /api/status's playlist_ready check)."""
+    if ABR_LADDER:
+        _composer_tick_abr()
+        return
+    run_ids = _list_run_ids()
+    runs: list[tuple[int, str, list[dict]]] = []  # (run_id, init_uri, segments)
+    for rid in run_ids:
+        init_uri, segs = _parse_run_idx(_run_dir(rid))
+        if init_uri is None or not segs:
+            continue
+        _composer_assign_seqs(rid, segs)
+        runs.append((rid, init_uri, segs))
+
+    master = HLS_DIR / "stream.m3u8"
+    text, kept_run_ids = _stitch_media_playlist(runs, lambda rid: f"run/{rid}/")
+    if text is None:
+        try:
+            master.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    _atomic_write(master, text)
+    _composer_cleanup_finished(kept_run_ids)
+
+
+def _composer_tick_abr() -> None:
+    """ABR composer: publish /hls/stream.m3u8 as a multi-variant MASTER and one
+    /hls/v<k>.m3u8 live media playlist per ladder rung.
+
+    Each run's ffmpeg writes run/<id>/v<k>/{init.mp4,seg_*.m4s,idx.m3u8}. We
+    stitch each rung's runs into its own media playlist (reusing the single-
+    rendition stitcher) and emit a master that points at them with
+    BANDWIDTH/RESOLUTION so hls.js can auto-select/downshift.
+
+    Sequence numbering is assigned from the UNION of segments across rungs per
+    run, so even if one rung is briefly a segment ahead at the live edge, every
+    rung that DOES have a given segment numbers it identically — keeping the
+    rungs time-aligned for seamless switching."""
+    ladder = _abr_ladder()
+    nv = len(ladder)
+    run_ids = _list_run_ids()
+    per_variant: list[list[tuple[int, str, list[dict]]]] = [[] for _ in range(nv)]
+    for rid in run_ids:
+        union: dict[str, dict] = {}
+        for k in range(nv):
+            init_uri, segs = _parse_run_idx(_run_dir(rid), f"v{k}")
+            if init_uri is None or not segs:
+                continue
+            for s in segs:
+                union.setdefault(s["filename"], s)
+            per_variant[k].append((rid, init_uri, segs))
+        # Assign seqs once per run from the union, in filename order, so seqs
+        # advance monotonically with time across all rungs.
+        if union:
+            _composer_assign_seqs(rid, [union[fn] for fn in sorted(union)])
+
+    master = HLS_DIR / "stream.m3u8"
+    written: list[int] = []
+    all_kept: set[int] = set()
+    for k in range(nv):
+        text, kept_ids = _stitch_media_playlist(
+            per_variant[k], lambda rid, kk=k: f"run/{rid}/v{kk}/"
+        )
+        vpath = HLS_DIR / f"v{k}.m3u8"
+        if text is None:
+            try:
+                vpath.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        if _atomic_write(vpath, text):
+            written.append(k)
+            all_kept |= kept_ids
+
+    if not written:
+        for p in [master] + [HLS_DIR / f"v{k}.m3u8" for k in range(nv)]:
+            try:
+                p.unlink()
+            except FileNotFoundError:
+                pass
+        return
+
+    audio_bps = _bitrate_to_bps(AUDIO_BITRATE)
+    mlines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"]
+    for k in written:
+        r = ladder[k]
+        bw = _bitrate_to_bps(r["video_bitrate"]) + audio_bps
+        h = int(r["height"])
+        # Nominal 16:9 width for RESOLUTION — the real frame width tracks source
+        # aspect ratio (we scale height-locked with -2), so this is advisory for
+        # the player's capLevelToPlayerSize heuristic, not exact.
+        w = (round(h * 16 / 9) // 2) * 2
+        mlines.append(
+            f"#EXT-X-STREAM-INF:BANDWIDTH={bw},RESOLUTION={w}x{h},"
+            f'CODECS="avc1.4d401f,mp4a.40.2"'
+        )
+        mlines.append(f"v{k}.m3u8")
+    _atomic_write(master, "\n".join(mlines) + "\n")
+    _composer_cleanup_finished(all_kept)
 
 
 def _composer_thread():
@@ -2662,7 +3067,8 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
         next_run_id += 1
         run_dir = _run_dir(run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
-        cmd = _build_ffmpeg_cmd(
+        builder = _build_ffmpeg_abr_cmd if ABR_LADDER else _build_ffmpeg_cmd
+        cmd = builder(
             ffmpeg_input, run_dir, start_seconds, audio_idx, subtitle_idx,
             audio_input=audio_input,
         )
