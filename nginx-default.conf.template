@@ -17,11 +17,29 @@ server {
   # Generous request body — admin can POST URL queues, settings, etc.
   client_max_body_size 8m;
 
+  # Recover the real client IP from Traefik's X-Forwarded-For so the /hls/ LAN
+  # bypass below can gate on it. Only the docker `web` subnet (where Traefik
+  # talks to us) is trusted; recursive walk means a spoofed XFF from a remote
+  # client can't make them look local — Traefik appends the true peer last.
+  set_real_ip_from 172.24.0.0/16;
+  real_ip_header X-Forwarded-For;
+  real_ip_recursive on;
+
   # /hls/* — static manifests and segments. Auth via subrequest to Flask;
   # if the viewer's token cookie is invalid (and we're not in public mode),
   # nginx rejects with 401 here without ever reading the file.
   location /hls/ {
-    auth_request /__authcheck;
+    # LAN bypass: clients on the private network (e.g. the living-room Apple TV
+    # AirPlaying the stream) skip the token entirely — AirPlay has the TV fetch
+    # the HLS itself and it can't carry the viewer cookie. `satisfy any` means a
+    # private-range client is allowed OR a valid token passes; remote/public
+    # friends fall through to the cookie check unchanged.
+    satisfy any;
+    allow 127.0.0.1;
+    allow 10.0.0.0/8;        # LAN + WireGuard VPN (10.8.0.0/24)
+    allow 192.168.0.0/16;    # LAN (living-room Apple TV @ 192.168.0.39)
+    deny all;                # everyone else (incl. Traefik's own IP if XFF ever
+    auth_request /__authcheck;   # goes missing) falls through to the token check
 
     alias /hls/;
 
