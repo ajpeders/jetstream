@@ -11,12 +11,13 @@ A small Flask + ffmpeg service that broadcasts video files (and yt-dlp-resolvabl
   static/build/                   generated frontend bundle (gitignored)
   package.json                    frontend build tooling
   Dockerfile                      python:3.12-slim + ffmpeg + gunicorn + yt-dlp
+  nginx-default.conf.template     nginx sidecar config (envsubst at start)
   ARCHITECTURE.md                 how it works
   ROADMAP.md                      what's left
 
 ~/homelab/services/jetstream/     ← deployment include
   docker-compose.yml              includes this app compose file
-  nginx-default.conf.template     shared nginx config (envsubst at start)
+  docker-compose.gpu.yml          NVENC overlay (chained via COMPOSE_FILE)
   .env.example                    required env vars
 ```
 
