@@ -3132,6 +3132,8 @@ def _gate_viewer_routes():
         return None  # Traefik handles admin auth
     if p == "/api/_authcheck":
         return None  # nginx subrequest endpoint — has its own logic below
+    if p == "/api/now-playing":
+        return None  # title-only external display feed — deliberately tokenless
     # Control surface (the /controls page + /api/control/* endpoints) requires
     # a friend-or-admin token regardless of public mode — viewers and the
     # anonymous public can watch but never drive playback. Check this before
@@ -4700,6 +4702,70 @@ def api_status():
             # stall. Matches the same check the /hls auth gate enforces.
             "session_expired": _viewer_session_expired(_client_ip()),
         })
+
+
+# Scene-release tokens that mark where a human-facing title ends. Matched
+# case-insensitively against whitespace-split tokens; the title is everything
+# BEFORE the first such token. Kept deliberately small — leaving a little cruft
+# is better than trimming a real word out of a title.
+_TITLE_STOP = re.compile(
+    r"^(?:\d{3,4}p|4k|x26[45]|h\.?26[45]|hevc|avc|xvid|divx|"
+    r"web[\-]?dl|web[\-]?rip|webrip|bluray|bdrip|brrip|dvdrip|hdrip|hdtv|"
+    r"remux|amzn|nf|hulu|dsnp|atvp|hmax|"
+    r"ddp?\d?|dd5|aac\d?|ac3|eac3|dts|truehd|atmos|flac|"
+    r"repack|proper|internal|limited|extended|unrated|remastered|"
+    r"complete|multi|dual|hdr|hdr10|dv|sdr|imax)$",
+    re.IGNORECASE,
+)
+
+
+def _display_title(name: str) -> str:
+    """Best-effort clean of a media filename into a human title for external
+    displays. Strips the extension, normalizes dot/underscore separators to
+    spaces, and cuts the string at the first scene-release token (resolution /
+    source / codec / audio / tag). Purely cosmetic and used ONLY by
+    /api/now-playing — the app's own UI keeps the raw filename. Falls back to
+    the extension-stripped name if cleaning would empty it out."""
+    stem = re.sub(r"\.[A-Za-z0-9]{2,4}$", "", name).strip()
+    norm = re.sub(r"[._]+", " ", stem)
+    kept = []
+    for t in norm.split():
+        if _TITLE_STOP.match(t.strip("()[]")):
+            break
+        kept.append(t)
+    return " ".join(kept).strip(" -") or stem
+
+
+@app.route("/api/now-playing")
+def api_now_playing():
+    """Unauthenticated, title-only feed for external displays (e.g. the
+    living-room hub / dashboard). Returns the currently-playing,
+    filename-derived title so a dumb client can show "The Matrix" instead of
+    a generic "Jetstream livestream" label. Deliberately tokenless and
+    minimal — no paths, viewers, positions, or tokens leak, just the title
+    that every viewer already sees in the up-next panel. `title` is "" and
+    `playing` is false when nothing is loaded, so the client can fall back to
+    its own default. Same title source as /api/status."""
+    with state_lock:
+        src = current_source
+        playing = src is not None
+        raw = (src or {}).get("title") or ""
+        stype = (src or {}).get("type")
+        ref = (src or {}).get("ref", "")
+    if src is None:
+        title = ""
+    elif stype == "file" or not raw:
+        # File sources carry a raw scene-release filename (Path(path).name);
+        # prettify it. URL/live sources already have a human title from yt-dlp,
+        # so only prettify them when the title is missing (fall back to ref).
+        title = _display_title(raw or os.path.basename(ref))
+    else:
+        title = raw
+    resp = jsonify({"title": title, "playing": playing})
+    # Short cache so a polling display doesn't hammer Flask, but still tracks
+    # source changes within a couple seconds.
+    resp.headers["Cache-Control"] = "public, max-age=2"
+    return resp
 
 
 @app.route("/hls/<path:filename>")

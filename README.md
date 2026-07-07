@@ -51,6 +51,9 @@ Don't rely on `docker cp` for `app.py` on prod — it survives until the next `d
 
 Three access tiers. **Viewer** and **friend** are both invite tokens (the `lt` cookie, minted from the admin page, no password); **admin** is Traefik basicauth. A token's tier is its `level` field in `tokens.json` (`viewer` | `friend`; tokens predating the field default to `viewer`). The admin token (`_admin_`) is the implicit top tier.
 
+Public (no token — exempt from the viewer gate):
+- `GET /api/now-playing` — title-only feed for external displays (e.g. a living-room hub). Returns `{"title": "...", "playing": bool}` with the currently-playing title prettified from the raw filename (scene-release cruft trimmed — `Hokum 2026 REPACK 1080p ...mkv` → `Hokum 2026`); `title` is `""` and `playing` is `false` when idle. Deliberately tokenless and minimal (no paths, viewers, or positions leak). 2 s `Cache-Control`. Point a display at it with e.g. `JETSTREAM_TITLE_URL=https://live.thelunadog.com/api/now-playing`.
+
 Viewer (token-gated unless `viewer_public=true`):
 - `GET /` — viewer page. Shows a "🎛 Controls" link when the token can control (`can_control` in `/api/status`).
 - `GET /api/status` — current source, position, viewer count, `server_unix` for client clock-sync, plus `can_control` + `level` for the calling token
