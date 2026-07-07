@@ -4738,20 +4738,32 @@ def _display_title(name: str) -> str:
 
 @app.route("/api/now-playing")
 def api_now_playing():
-    """Unauthenticated, title-only feed for external displays (e.g. the
-    living-room hub / dashboard). Returns the currently-playing,
-    filename-derived title so a dumb client can show "The Matrix" instead of
-    a generic "Jetstream livestream" label. Deliberately tokenless and
-    minimal — no paths, viewers, positions, or tokens leak, just the title
-    that every viewer already sees in the up-next panel. `title` is "" and
-    `playing` is false when nothing is loaded, so the client can fall back to
-    its own default. Same title source as /api/status."""
+    """Unauthenticated feed for external displays (e.g. the living-room hub /
+    dashboard). Returns the currently-playing, filename-derived title so a
+    dumb client can show "The Matrix" instead of a generic "Jetstream
+    livestream" label, plus playback position/duration and a server timestamp
+    so a display can render "0:42 / 1:38" and detect a stale/cached reply.
+    Deliberately tokenless — no paths, viewers, or tokens leak, just the title
+    every viewer already sees plus non-sensitive timing. `title` is "",
+    `playing` is false, and the timing fields are null when nothing is loaded,
+    so the client can fall back to its own default. Same title + position
+    source as /api/status."""
     with state_lock:
         src = current_source
         playing = src is not None
         raw = (src or {}).get("title") or ""
         stype = (src or {}).get("type")
         ref = (src or {}).get("ref", "")
+        duration = (src or {}).get("duration")
+        is_live = (src or {}).get("is_live", False)
+        # Position: live encoder → computed elapsed; paused → frozen offset;
+        # otherwise unknown. Mirrors /api/status exactly.
+        if current_proc is not None and current_proc.poll() is None:
+            position = _current_position(running=True)
+        elif current_paused:
+            position = paused_position
+        else:
+            position = None
     if src is None:
         title = ""
     elif stype == "file" or not raw:
@@ -4761,7 +4773,16 @@ def api_now_playing():
         title = _display_title(raw or os.path.basename(ref))
     else:
         title = raw
-    resp = jsonify({"title": title, "playing": playing})
+    resp = jsonify({
+        "title": title,
+        "playing": playing,
+        "is_live": is_live,
+        "position_seconds": position,
+        "duration_seconds": duration,
+        # When this reply was generated — lets a polling display spot a stale
+        # (cached/proxied) response despite the 2 s Cache-Control below.
+        "server_unix": time.time(),
+    })
     # Short cache so a polling display doesn't hammer Flask, but still tracks
     # source changes within a couple seconds.
     resp.headers["Cache-Control"] = "public, max-age=2"
