@@ -10,4 +10,5 @@ state/
 *.local
 .env
 .codex
+.claude/
 .ui-shots/
