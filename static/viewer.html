@@ -1048,6 +1048,10 @@
   <div id="player-wrap">
     <video id="video" autoplay playsinline muted
            controlslist="nodownload noremoteplayback noplaybackrate"></video>
+    <!-- Now-playing label: surfaces the current title on the player itself
+         (not just the header + up-next panel). Reveals for a few seconds on
+         each source change and otherwise fades with the player chrome. -->
+    <div id="now-playing" aria-live="polite"><span id="now-playing-title"></span></div>
     <div id="vol-controls">
       <button id="mute-btn" title="Mute / unmute">🔊</button>
       <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="1" title="Volume">
@@ -1177,6 +1181,29 @@ function updateNowThumb(s) {
 }
 const viewersEl = document.getElementById("viewers");
 const playerWrap = document.getElementById("player-wrap");
+// Now-playing label on the player. Reveals for a few seconds whenever the
+// title changes (a new item starts), then fades with the chrome so it never
+// obstructs. Late joiners / tab-returners can also surface it by interacting.
+const nowPlayingEl = document.getElementById("now-playing");
+const nowPlayingTitle = document.getElementById("now-playing-title");
+let nowPlayingLabel = null;
+let nowPlayingRevealTimer = null;
+function updateNowPlaying(label) {
+  if (!label) {
+    nowPlayingLabel = null;
+    nowPlayingEl.classList.remove("has-title");
+    playerWrap.classList.remove("np-reveal");
+    return;
+  }
+  if (label === nowPlayingLabel) return;
+  nowPlayingLabel = label;
+  nowPlayingTitle.textContent = label;
+  nowPlayingEl.classList.add("has-title");
+  // Pin visible briefly on change, regardless of the idle-chrome timer.
+  playerWrap.classList.add("np-reveal");
+  clearTimeout(nowPlayingRevealTimer);
+  nowPlayingRevealTimer = setTimeout(() => playerWrap.classList.remove("np-reveal"), 5000);
+}
 const positionEl = document.getElementById("position");
 const unmuteOverlay = document.getElementById("unmute-overlay");
 const muteBtn = document.getElementById("mute-btn");
@@ -1479,8 +1506,12 @@ video.addEventListener("volumechange", syncMuteUI);
 syncMuteUI();
 
 let playerChromeTimer = null;
+// Hide the controls + cursor whenever the video is actively playing — muted
+// included (autoplay starts muted, and gating on unmute meant controls never
+// auto-hid for anyone watching muted). Paused / server-paused keeps them up so
+// the state stays visible; the "tap to unmute" overlay is separate and stays.
 function shouldHidePlayerChrome() {
-  return !video.paused && !video.muted && !serverPaused && unmuteOverlay.classList.contains("hidden");
+  return !video.paused && !serverPaused;
 }
 function showPlayerChrome() {
   playerWrap.classList.remove("controls-idle");
@@ -1492,7 +1523,7 @@ function showPlayerChrome() {
         playerWrap.classList.remove("controls-active");
         playerWrap.classList.add("controls-idle");
       }
-    }, 1800);
+    }, 2500);
   }
 }
 function keepPlayerChromeVisible() {
@@ -1503,10 +1534,13 @@ function keepPlayerChromeVisible() {
 ["pointermove", "mousemove", "touchstart", "keydown", "focusin"].forEach((eventName) => {
   playerWrap.addEventListener(eventName, showPlayerChrome, { passive: true });
 });
-["play", "playing", "volumechange"].forEach((eventName) => {
-  video.addEventListener(eventName, showPlayerChrome);
-});
-["pause", "waiting", "ended"].forEach((eventName) => {
+// Only a real (re)start arms the idle countdown. Crucially NOT `playing` /
+// `waiting` / `volumechange` — at the live edge those fire on every micro-stall
+// and kept resetting the timer, so controls never hid on a jittery connection.
+video.addEventListener("play", showPlayerChrome);
+// Keep chrome up only while genuinely stopped — transient buffering (`waiting`)
+// is no longer treated as a reason to show.
+["pause", "ended"].forEach((eventName) => {
   video.addEventListener(eventName, keepPlayerChromeVisible);
 });
 showPlayerChrome();
@@ -1629,6 +1663,7 @@ async function pollStatus() {
       statusEl.innerHTML = `${liveLabel}${escapeHtml(label)}`;
       document.title = label + " · jetstream";
       updateNowThumb(s);
+      updateNowPlaying(label);
       serverPaused = !!s.paused;
       if (s.ready && !lastReady) setupPlayer();
       lastReady = s.ready;
@@ -1655,6 +1690,7 @@ async function pollStatus() {
       lastReady = false;
       positionEl.textContent = "";
       updateNowThumb(null);
+      updateNowPlaying(null);
     }
     const v = s.viewers || 0;
     viewersEl.textContent = v ? `${v} viewer${v === 1 ? "" : "s"}` : "";

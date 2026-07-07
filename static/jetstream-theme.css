@@ -280,12 +280,18 @@ video {
   transform: translateY(6px);
 }
 
+/* :hover / :focus-within fallbacks are scoped with :not(.controls-idle) —
+   they tie the .controls-idle rules above on specificity but sit later in
+   the file, so an unscoped :hover would win the cascade and pin the controls
+   visible whenever the cursor merely RESTS over the player (i.e. always,
+   while watching). The idle timer must be able to hide chrome under a
+   stationary cursor; any actual mouse movement re-shows it via JS. */
 #player-wrap.controls-active #vol-controls,
 #player-wrap.controls-active #reaction-bar,
-#player-wrap:focus-within #vol-controls,
-#player-wrap:focus-within #reaction-bar,
-#player-wrap:hover #vol-controls,
-#player-wrap:hover #reaction-bar {
+#player-wrap:not(.controls-idle):focus-within #vol-controls,
+#player-wrap:not(.controls-idle):focus-within #reaction-bar,
+#player-wrap:not(.controls-idle):hover #vol-controls,
+#player-wrap:not(.controls-idle):hover #reaction-bar {
   opacity: 0.92 !important;
   pointer-events: auto;
   transform: none;
@@ -296,6 +302,64 @@ video {
   background: transparent !important;
   border: 0 !important;
   box-shadow: none !important;
+}
+
+/* ── Now-playing label ─────────────────────────────────────────────
+   Sits top-left of the player. Fades with the chrome (same idle rules
+   as #vol-controls) and JS pins it visible via .np-reveal on a source
+   change so late joiners / tab-returners can see what's on. */
+#player-wrap #now-playing {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 7;
+  max-width: min(70%, 34rem);
+  padding: 0.3rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(13, 18, 25, 0.86);
+  border: 1px solid rgba(226, 232, 240, 0.14);
+  color: #e6edf5;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.92;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+#player-wrap #now-playing::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: var(--js-accent);
+  vertical-align: middle;
+}
+
+/* Hidden until there's a title (JS toggles .has-title). */
+#player-wrap #now-playing:not(.has-title) {
+  opacity: 0 !important;
+  transform: translateY(-6px);
+}
+
+/* Fade away with the rest of the chrome when idle… */
+#player-wrap.controls-idle #now-playing {
+  opacity: 0 !important;
+  transform: translateY(-6px);
+}
+
+/* …unless a source just changed (.np-reveal) or the viewer is interacting. */
+#player-wrap.np-reveal #now-playing.has-title,
+#player-wrap.controls-active #now-playing.has-title,
+#player-wrap:not(.controls-idle):focus-within #now-playing.has-title,
+#player-wrap:not(.controls-idle):hover #now-playing.has-title {
+  opacity: 0.92 !important;
+  transform: none;
 }
 
 #unmute-overlay {
