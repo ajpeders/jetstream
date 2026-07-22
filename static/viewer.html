@@ -1244,7 +1244,11 @@ let serverPaused = false;
 let lastStatus = null;  // most recent /api/status payload, for the report modal
 
 const PLAYBACK_MODE_KEY = "jetstream_playback_mode";
-let playbackMode = localStorage.getItem(PLAYBACK_MODE_KEY) === "stable" ? "stable" : "live";
+// Default is STABLE: most viewers watch over Wi-Fi/remote links where the
+// tight live-edge buffer (1 segment ≈ 1s) can't absorb jitter and playback
+// stutters. Viewers who want low latency opt into Live via the header button;
+// an explicit choice (either way) is remembered per device.
+let playbackMode = localStorage.getItem(PLAYBACK_MODE_KEY) === "live" ? "live" : "stable";
 
 function isStablePlayback() {
   return playbackMode === "stable";
