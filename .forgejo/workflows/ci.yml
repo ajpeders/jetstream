@@ -1,0 +1,21 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Backend: byte-compile every python file — catches syntax errors and
+      # obvious breakage without needing the full ffmpeg/nvidia runtime.
+      - name: python compile check
+        run: python3 -m compileall -q app.py
+      # Frontend: the Svelte/Vite bundle must build; static/build is what the
+      # container serves, so a broken build = broken admin/chat UI.
+      - name: npm build
+        run: |
+          npm ci
+          npm run build
