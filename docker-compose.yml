@@ -98,7 +98,7 @@ services:
   # before, just enforced on the nginx side so we don't pay Python overhead
   # for every segment fetch.
   nginx-jetstream:
-    container_name: nginx-jetstream
+    container_name: livestream
     image: nginx:1.31-alpine
     restart: unless-stopped
     depends_on:
