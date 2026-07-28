@@ -2166,6 +2166,7 @@ def _build_ffmpeg_cmd(
     audio_idx: int | None = None,
     subtitle_idx: int | None = None,
     audio_input: str | None = None,
+    mode: str = "live",
 ) -> list[str]:
     """Build the ffmpeg HLS command. Output goes into `run_dir/`:
     `init.mp4` (fmp4 init segment), `seg_NNNNN.m4s` (media segments), and
@@ -2182,8 +2183,19 @@ def _build_ffmpeg_cmd(
     `audio_input` (a separate URL, only set on the YouTube DASH path) feeds
     audio from a 2nd `-i` input. Without this, YouTube's "best muxed" tops
     out at 360p — we ask yt-dlp for separate video+audio formats so we can
-    get real 1080p, then merge here at encode time."""
+    get real 1080p, then merge here at encode time.
+
+    `mode` ("live" | "vod"): "live" is the original behavior, unchanged.
+    "vod" (v2 per-user sessions) drops -re for -readrate pacing, drops the
+    zerolatency tune on libx264, honors VOD_FORCE_CPU, and uses the deep
+    VOD_HLS_LIST_SIZE playlist window. `run_dir` is the VOD session dir."""
     input_str = str(input_path)
+    # v2: local encoder flags so VOD_FORCE_CPU can demote a VOD encode to
+    # libx264 without touching the live stream's globals. In live mode these
+    # equal the globals exactly.
+    force_cpu = mode == "vod" and VOD_FORCE_CPU
+    use_nvenc = USE_NVENC and not force_cpu
+    use_vaapi = USE_VAAPI and not force_cpu
     # Single ffprobe pass — codec for HW-decode eligibility, height for output
     # cap, transfer/primaries for HDR detection.
     info = _probe_video_info(input_str) or {}
@@ -2203,7 +2215,7 @@ def _build_ffmpeg_cmd(
     # tonemap on this iGPU (no VPP), and the zscale tonemap chain only works
     # on CPU-side frames.
     hw_decode = (
-        USE_VAAPI and USE_VAAPI_DECODE
+        use_vaapi and USE_VAAPI_DECODE
         and src_codec in HWACCEL_DECODE_CODECS
         and not is_hdr
     )
@@ -2214,16 +2226,16 @@ def _build_ffmpeg_cmd(
     # produces no output, so DV sources fall back to CPU decode (still NVENC
     # encoded). The is_hdr branch below handles the nv_decode=False case.
     nv_decode = (
-        USE_NVENC and src_codec in NVDEC_DECODE_CODECS
+        use_nvenc and src_codec in NVDEC_DECODE_CODECS
         and not info.get("is_dovi")
     )
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin"]
-    if USE_NVENC:
+    if use_nvenc:
         # Frames are kept in `cuda` hw frames format when NVDEC is used so the
         # whole pipeline (decode → optional scale_cuda → nvenc) stays on-GPU.
         if nv_decode:
             cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
-    elif USE_VAAPI:
+    elif use_vaapi:
         # Bind a named device "va" to our renderD128 and pin the filter chain
         # to it explicitly. Without -filter_hw_device, scale_vaapi/hwupload
         # picks the default vaapi device, which may be a second iGPU/driver
@@ -2237,7 +2249,15 @@ def _build_ffmpeg_cmd(
                     "-hwaccel_device", "va"]
     if start_seconds > 0:
         cmd += ["-ss", f"{start_seconds:.3f}"]
-    cmd += ["-re", "-i", input_str]
+    if mode == "vod":
+        # VOD isn't paced for a shared live edge — read at VOD_READRATE×
+        # realtime so the buffer runs ahead of the viewer without flat-out
+        # transcoding the whole file ("0" = unpaced, full speed).
+        if VOD_READRATE != "0":
+            cmd += ["-readrate", VOD_READRATE]
+        cmd += ["-i", input_str]
+    else:
+        cmd += ["-re", "-i", input_str]
     # YouTube DASH path: separate audio URL feeds a 2nd input. -ss is repeated
     # so both inputs seek to the same position, keeping audio in sync after
     # admin scrubbing. -re paces both at native rate.
@@ -2278,7 +2298,7 @@ def _build_ffmpeg_cmd(
                 f"({Path(input_str).name} #{subtitle_idx})",
                 file=sys.stderr,
             )
-    if USE_NVENC:
+    if use_nvenc:
         # NVENC encode + (when codec is supported) NVDEC decode. Filter chain:
         #   - SDR fast path (NVDEC + no subs): scale_cuda only, frames never
         #     leave the GPU.
@@ -2365,7 +2385,7 @@ def _build_ffmpeg_cmd(
             # untouched and works in both browsers.
             "-bsf:v", "h264_metadata=aud=insert",
         ]
-    elif USE_VAAPI:
+    elif use_vaapi:
         # When hw_decode is on, frames are already in vaapi format on the GPU,
         # so scale_vaapi runs entirely on the GPU. Otherwise hwupload moves
         # CPU-decoded frames onto the GPU before encode.
@@ -2460,7 +2480,12 @@ def _build_ffmpeg_cmd(
             "-vf", vf,
             "-c:v", "libx264",
             "-preset", "veryfast",
-            "-tune", "zerolatency",
+        ]
+        # zerolatency exists for the live stream's lag budget; VOD has no
+        # shared live edge, so keep b-frames/lookahead for better quality.
+        if mode != "vod":
+            cmd += ["-tune", "zerolatency"]
+        cmd += [
             "-b:v", video_bitrate,
             "-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_TIME})",
             "-color_range", "tv",
@@ -2474,7 +2499,9 @@ def _build_ffmpeg_cmd(
         "-ac", "2",
         "-f", "hls",
         "-hls_time", HLS_SEG_TIME,
-        "-hls_list_size", HLS_LIST_SIZE,
+        # VOD keeps a much deeper playlist window (seek-back headroom within a
+        # session); delete_segments still bounds disk to that window.
+        "-hls_list_size", VOD_HLS_LIST_SIZE if mode == "vod" else HLS_LIST_SIZE,
         # +program_date_time tags every segment with the server's wall clock.
         # Clients use that as a universal reference to converge on the same
         # playhead (vs. each holding their own per-buffer "live edge").
@@ -5249,6 +5276,295 @@ def poster():
     # cache for an hour so re-rendering a grid doesn't re-hit Flask.
     resp.headers["Cache-Control"] = "public, max-age=3600"
     return resp
+
+
+# ==== v2: vod engine =======================================================
+# Per-user on-demand transcode sessions. Each session is one ffmpeg (built by
+# _build_ffmpeg_cmd with mode="vod") writing an fmp4 HLS ladder-of-one into
+# /hls/vod/<sid>/, served by nginx behind /api/_authcheck_vod (which also
+# bumps last_access per segment fetch — the reaper's idle signal). Seeks are
+# kill+restart into the same sid with a bumped `generation` so the client can
+# cache-bust the playlist URL. No playlist splicing, ever.
+
+VOD_PLAYLIST_NAME = "idx.m3u8"  # what _build_ffmpeg_cmd names its playlist
+
+
+def _vod_playlist_url(sid: str, generation: int) -> str:
+    url = f"/hls/vod/{sid}/{VOD_PLAYLIST_NAME}"
+    return f"{url}?g={generation}" if generation else url
+
+
+def _vod_build_cmd(sess_dir: Path, rel_path: str, start: float,
+                   audio_idx: int | None, subtitle_idx: int | None) -> list[str]:
+    full = _safe_resolve(rel_path, must_be_file=True)
+    return _build_ffmpeg_cmd(
+        full, sess_dir, start, audio_idx, subtitle_idx, mode="vod")
+
+
+def _vod_start(user_id: str, rel_path: str, start: float = 0.0,
+               subtitle_idx: int | None = None) -> dict | tuple:
+    """Start a VOD session. Returns the registry record (plus "session_id")
+    on success, or an ("error-code",) tuple: ("not_found",) for a bad path,
+    ("capacity",) when all VOD_MAX_SESSIONS slots are taken by OTHER users
+    (starting a new film replaces your own session first — one per user)."""
+    rel = (rel_path or "").strip("/")
+    if not _viewer_file_allowed(rel):
+        return ("not_found",)
+    try:
+        full = _safe_resolve(rel, must_be_file=True)
+    except Exception:
+        return ("not_found",)
+    # Probes (ffprobe subprocesses) run before taking vod_lock so a slow disk
+    # can't stall the per-segment _authcheck_vod heartbeat.
+    duration = _probe_duration(full)
+    start = max(0.0, float(start or 0.0))
+    if duration is not None and start >= duration:
+        start = max(0.0, duration - 1.0)
+    audio_idx = _probe_english_audio(str(full))
+    sid = secrets.token_urlsafe(16)
+    sess_dir = _vod_session_dir(sid)
+    cmd = _build_ffmpeg_cmd(
+        full, sess_dir, start, audio_idx, subtitle_idx, mode="vod")
+    with vod_lock:
+        for old in [s for s, rec in vod_sessions.items()
+                    if rec.get("user_id") == user_id]:
+            _vod_kill_session_locked(old)
+        if len(vod_sessions) >= VOD_MAX_SESSIONS:
+            return ("capacity",)
+        sess_dir.mkdir(parents=True, exist_ok=True)
+        proc = _spawn_ffmpeg(cmd, sess_dir / "ffmpeg.log")
+        now = time.time()
+        rec = {
+            "user_id": user_id, "rel_path": rel, "title": full.name,
+            "proc": proc, "start_offset": start, "started_at": now,
+            "last_access": now, "duration": duration, "status": "running",
+            "generation": 0,
+            # kept so _vod_seek rebuilds the exact same track selection
+            "audio_idx": audio_idx, "subtitle_idx": subtitle_idx,
+        }
+        vod_sessions[sid] = rec
+        return {**rec, "session_id": sid}
+
+
+def _vod_seek(sid: str, position: float) -> dict | None:
+    """Restart a session's ffmpeg at `position` — same sid, wiped dir,
+    generation+1 (the playlist URL carries ?g=<gen> as a cache-buster).
+    Returns the updated record, or None for an unknown sid."""
+    with vod_lock:
+        sess = vod_sessions.get(sid)
+        if not sess:
+            return None
+        proc = sess.get("proc")
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        sess_dir = _vod_session_dir(sid)
+        shutil.rmtree(sess_dir, ignore_errors=True)
+        sess_dir.mkdir(parents=True, exist_ok=True)
+        position = max(0.0, float(position or 0.0))
+        duration = sess.get("duration")
+        if duration is not None and position >= duration:
+            position = max(0.0, duration - 1.0)
+        try:
+            cmd = _vod_build_cmd(sess_dir, sess["rel_path"], position,
+                                 sess.get("audio_idx"), sess.get("subtitle_idx"))
+        except Exception:
+            # Source vanished mid-session (e.g. library cleanup) — drop it.
+            _vod_kill_session_locked(sid)
+            return None
+        sess["proc"] = _spawn_ffmpeg(cmd, sess_dir / "ffmpeg.log")
+        sess["start_offset"] = position
+        sess["generation"] = int(sess.get("generation") or 0) + 1
+        sess["last_access"] = time.time()
+        sess["status"] = "running"
+        return dict(sess)
+
+
+def _vod_stop(sid: str) -> bool:
+    with vod_lock:
+        if sid not in vod_sessions:
+            return False
+        _vod_kill_session_locked(sid)
+        return True
+
+
+def _vod_reaper():
+    """Reap idle and dead VOD sessions every 5s. Idle = no segment fetch
+    (last_access via _authcheck_vod) for VOD_IDLE_TIMEOUT_S. Dead ffmpeg is
+    only reaped once last_access is >30s old — grace so a just-started proc
+    that crashed instantly still leaves its ffmpeg.log inspectable and a
+    session isn't reaped between /api/vod/start and the first fetch."""
+    while True:
+        time.sleep(5)
+        try:
+            now = time.time()
+            with vod_lock:
+                for sid, sess in list(vod_sessions.items()):
+                    idle = now - float(sess.get("last_access") or 0)
+                    proc = sess.get("proc")
+                    dead = proc is not None and proc.poll() is not None
+                    if idle > VOD_IDLE_TIMEOUT_S or (dead and idle > 30):
+                        print(f"vod: reaping session {sid} "
+                              f"({'dead ffmpeg' if dead else 'idle'}, "
+                              f"idle {idle:.0f}s)", file=sys.stderr)
+                        _vod_kill_session_locked(sid)
+        except Exception as e:
+            print(f"vod reaper error: {e}", file=sys.stderr)
+
+
+threading.Thread(target=_vod_reaper, daemon=True, name="vod-reaper").start()
+
+
+@app.route("/library")
+def library_page():
+    # Gate redirects logged-out browsers to /login before this runs.
+    return send_from_directory("static", "library.html")
+
+
+@app.route("/api/user/library/browse")
+def api_user_library_browse():
+    """User-tier twin of /api/library/browse — same helper, same payload.
+    Gated to logged-in users by _gate_viewer_routes (/api/user/ prefix)."""
+    return jsonify(_viewer_list_dir(request.args.get("path", "")))
+
+
+@app.route("/api/user/library/search")
+def api_user_library_search():
+    items, truncated = _search_viewer_library(request.args.get("q", "").strip())
+    return jsonify({"results": items, "truncated": truncated})
+
+
+def _vod_owned_session(sid: str) -> dict | None:
+    """Registry record for `sid` IF the calling user owns it, else None.
+    Not-owned and non-existent are deliberately the same answer (404) so
+    session ids can't be probed."""
+    u = _session_user()
+    if not u or not sid:
+        return None
+    with vod_lock:
+        sess = vod_sessions.get(sid)
+        if not sess or sess.get("user_id") != u["id"]:
+            return None
+        return dict(sess)
+
+
+@app.route("/api/vod/start", methods=["POST"])
+def api_vod_start():
+    u = _session_user()
+    data = request.get_json(silent=True) or {}
+    try:
+        start = float(data.get("start") or 0.0)
+    except (TypeError, ValueError):
+        start = 0.0
+    sub_raw = data.get("subtitle_idx")
+    try:
+        subtitle_idx = int(sub_raw) if sub_raw is not None else None
+    except (TypeError, ValueError):
+        subtitle_idx = None
+    res = _vod_start(u["id"], str(data.get("path") or ""), start, subtitle_idx)
+    if isinstance(res, tuple):
+        if res[0] == "capacity":
+            return jsonify({
+                "error": "vod_capacity",
+                "message": f"All {VOD_MAX_SESSIONS} streams in use — "
+                           "try again later",
+            }), 409
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({
+        "session_id": res["session_id"],
+        "playlist_url": _vod_playlist_url(res["session_id"], 0),
+        "duration": res["duration"],
+        "start_offset": res["start_offset"],
+    })
+
+
+@app.route("/api/vod/seek", methods=["POST"])
+def api_vod_seek():
+    data = request.get_json(silent=True) or {}
+    sid = str(data.get("session_id") or "")
+    if not _vod_owned_session(sid):
+        return jsonify({"error": "not_found"}), 404
+    try:
+        position = float(data.get("position") or 0.0)
+    except (TypeError, ValueError):
+        position = 0.0
+    sess = _vod_seek(sid, position)
+    if not sess:
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({
+        "playlist_url": _vod_playlist_url(sid, sess["generation"]),
+        "start_offset": sess["start_offset"],
+    })
+
+
+@app.route("/api/vod/stop", methods=["POST"])
+def api_vod_stop():
+    data = request.get_json(silent=True) or {}
+    sid = str(data.get("session_id") or "")
+    if not _vod_owned_session(sid):
+        return jsonify({"error": "not_found"}), 404
+    _vod_stop(sid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/vod/status")
+def api_vod_status():
+    sid = request.args.get("session_id", "")
+    sess = _vod_owned_session(sid)
+    if not sess:
+        return jsonify({"error": "not_found"}), 404
+    # Buffer depth: segments on disk × segment duration. Approximate (the
+    # delete_segments window trims old ones eventually) but monotone enough
+    # for a "buffering ahead" readout.
+    try:
+        n_segs = sum(1 for p in _vod_session_dir(sid).glob("seg_*.m4s"))
+        transcoded_ahead_s = n_segs * float(HLS_SEG_TIME)
+    except Exception:
+        transcoded_ahead_s = None
+    status = sess.get("status", "running")
+    proc = sess.get("proc")
+    if proc is not None and proc.poll() is not None:
+        # Distinguish "transcode finished/died" from "running" without a
+        # watcher thread: poll() at read time is fresh enough.
+        status = "ended"
+    return jsonify({
+        "status": status,
+        "start_offset": sess["start_offset"],
+        "duration": sess["duration"],
+        "transcoded_ahead_s": transcoded_ahead_s,
+    })
+
+
+@app.route("/admin/api/vod/sessions")
+def api_admin_vod_sessions():
+    with vod_lock:
+        snap = [(sid, dict(sess)) for sid, sess in vod_sessions.items()]
+    with users_lock:
+        names = {u["id"]: u["username"] for u in users}
+    return jsonify({
+        "sessions": [{
+            "session_id": sid,
+            "username": names.get(sess.get("user_id"), "?"),
+            "title": sess.get("title"),
+            "start_offset": sess.get("start_offset"),
+            "started_at": sess.get("started_at"),
+            "last_access": sess.get("last_access"),
+        } for sid, sess in snap],
+        "cap": VOD_MAX_SESSIONS,
+    })
+
+
+@app.route("/admin/api/vod/sessions/<sid>", methods=["DELETE"])
+def api_admin_vod_session_delete(sid):
+    if not _vod_stop(sid):
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
