@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jetstream — sign in</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230b0f14"/><path d="M18 44V18l26 13-26 13z" fill="%2338bdf8"/></svg>'>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0a0a0a;
+    color: #e8e8e8;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+  .card {
+    width: 100%;
+    max-width: 22rem;
+    background: var(--js-surface, #111820);
+    border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    border-radius: 12px;
+    padding: 1.6rem 1.5rem 1.5rem;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+  }
+  h1 {
+    margin: 0 0 0.2rem;
+    font-size: 1.05rem;
+    font-weight: 760;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  h1::before {
+    content: "";
+    display: inline-block;
+    width: 0.58rem;
+    height: 0.58rem;
+    border-radius: 999px;
+    background: var(--js-accent, #38bdf8);
+    box-shadow: 0 0 0 5px rgba(56, 189, 248, 0.12), 0 0 22px rgba(56, 189, 248, 0.7);
+  }
+  .sub {
+    margin: 0 0 1.1rem;
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.82rem;
+    line-height: 1.4;
+  }
+  label {
+    display: block;
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0.8rem 0 0.3rem;
+  }
+  input {
+    width: 100%;
+    min-height: 42px;
+    background: var(--js-surface-2, #151d27);
+    color: var(--js-text, #e7edf5);
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.95rem;
+    font-family: inherit;
+  }
+  input:focus {
+    outline: none;
+    border-color: rgba(56, 189, 248, 0.72);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+  }
+  button {
+    width: 100%;
+    min-height: 44px;
+    margin-top: 1.2rem;
+    background: rgba(56, 189, 248, 0.16);
+    color: var(--js-accent-text, #7dd3fc);
+    border: 1px solid rgba(56, 189, 248, 0.34);
+    border-radius: 999px;
+    font-size: 0.92rem;
+    font-weight: 750;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.12s ease, transform 0.12s ease;
+  }
+  button:hover { background: rgba(56, 189, 248, 0.24); transform: translateY(-1px); }
+  button:disabled { opacity: 0.5; cursor: default; transform: none; }
+  #error {
+    display: none;
+    margin: 0.9rem 0 0;
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.83rem;
+    line-height: 1.4;
+  }
+  #error.show { display: block; }
+</style>
+<link rel="stylesheet" href="/jetstream-theme.css">
+</head>
+<body>
+<div class="card">
+  <h1>jetstream</h1>
+  <p class="sub">Sign in to browse the library and watch on demand.</p>
+  <form id="login-form">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username"
+           autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <p id="error" role="alert"></p>
+    <button id="submit-btn" type="submit">Sign in</button>
+  </form>
+</div>
+<script>
+const form = document.getElementById("login-form");
+const errorEl = document.getElementById("error");
+const submitBtn = document.getElementById("submit-btn");
+
+// Only same-origin relative paths — a "next" like "https://evil" or "//evil"
+// (protocol-relative) must never become a post-login redirect target.
+function safeNext() {
+  const next = new URLSearchParams(location.search).get("next") || "";
+  if (next.startsWith("/") && !next.startsWith("//")) return next;
+  return "/library";
+}
+
+function showError(msg) {
+  errorEl.textContent = msg;
+  errorEl.classList.add("show");
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  errorEl.classList.remove("show");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Signing in…";
+  try {
+    const r = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value,
+      }),
+    });
+    if (r.ok) {
+      location.href = safeNext();
+      return;
+    }
+    if (r.status === 401) showError("Wrong username or password.");
+    else if (r.status === 429) showError("Too many attempts — wait a minute.");
+    else showError("Sign-in failed — try again.");
+  } catch {
+    showError("Network error — try again.");
+  }
+  submitBtn.disabled = false;
+  submitBtn.textContent = "Sign in";
+});
+</script>
+</body>
+</html>

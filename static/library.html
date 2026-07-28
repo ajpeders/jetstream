@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jetstream — library</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230b0f14"/><path d="M18 44V18l26 13-26 13z" fill="%2338bdf8"/></svg>'>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0a0a0a;
+    color: #e8e8e8;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 0.7rem clamp(0.8rem, 2vw, 1.25rem);
+    background: #0d1219;
+    border-bottom: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 1rem; font-weight: 500; white-space: nowrap; }
+  #search {
+    flex: 1;
+    min-width: 8rem;
+    min-height: 40px;
+    background: var(--js-surface-2, #151d27);
+    color: var(--js-text, #e7edf5);
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 8px;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.9rem;
+    font-family: inherit;
+  }
+  #search:focus {
+    outline: none;
+    border-color: rgba(56, 189, 248, 0.72);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+  }
+  #live-link {
+    color: var(--js-accent-text, #7dd3fc);
+    background: rgba(56, 189, 248, 0.13);
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 999px;
+    text-decoration: none;
+    font-size: 0.82rem;
+    font-weight: 700;
+    padding: 0.42rem 0.8rem;
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+  }
+  #who { color: var(--js-muted, #9aa6b5); font-size: 0.85rem; white-space: nowrap; }
+  #logout-btn {
+    background: var(--js-surface-2, #151d27);
+    color: var(--js-muted, #9aa6b5);
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 999px;
+    padding: 0.42rem 0.8rem;
+    min-height: 40px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  #logout-btn:hover { color: var(--js-text, #e7edf5); }
+
+  /* ---- Library browser ------------------------------------------------ */
+  #library-view { flex: 1; }
+  #library-nav {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.7rem clamp(0.8rem, 2vw, 1.25rem) 0.2rem;
+    color: var(--js-muted, #9aa6b5); font-size: 0.8rem;
+  }
+  #library-back {
+    background: #202833; color: #d7dee8;
+    border: 1px solid #303a48; border-radius: 8px;
+    cursor: pointer; flex-shrink: 0; font-family: inherit;
+    font-size: 0.8rem; min-height: 40px; padding: 0.3rem 0.75rem;
+  }
+  #library-back:disabled { opacity: 0.45; cursor: default; }
+  #library-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #results {
+    list-style: none; margin: 0;
+    display: grid;
+    gap: 0.85rem;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    padding: 0.75rem clamp(0.8rem, 2vw, 1.25rem) 1.25rem;
+  }
+  #results li {
+    background: var(--js-surface, #111820);
+    border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    border-radius: 8px;
+    cursor: pointer;
+    display: grid;
+    gap: 0.5rem;
+    grid-template-rows: auto minmax(3.4rem, 1fr);
+    overflow: hidden;
+    padding: 0.55rem;
+    font-size: 0.85rem;
+    color: #ccc;
+  }
+  #results li:hover {
+    background: #151e29;
+    border-color: var(--js-line-strong, rgba(148, 163, 184, 0.28));
+  }
+  #results .rthumb {
+    aspect-ratio: 2 / 3;
+    background: #0d131b;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 6px;
+    overflow: hidden;
+    width: 100%;
+  }
+  #results .rthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
+  #results .rthumb img.loaded { opacity: 1; }
+  #results .rthumb.folder {
+    align-items: center; color: #9ec7e8; display: inline-flex;
+    background: linear-gradient(180deg, #172131, #101821);
+    font-size: 0.9rem; font-weight: 850; justify-content: center;
+    line-height: 1.15; padding: 0.7rem; text-align: center; text-transform: uppercase;
+  }
+  #results .rtitle { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; overflow: hidden; }
+  #results .rtitle .rt-name {
+    display: -webkit-box;
+    font-size: 0.83rem; font-weight: 750; line-height: 1.25;
+    min-height: 2.05rem; overflow: hidden; text-overflow: ellipsis;
+    white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    color: var(--js-text, #e7edf5);
+  }
+  #results .rtitle .rt-parent {
+    color: var(--js-faint, #667386); font-size: 0.68rem; line-height: 1.2;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #results .empty {
+    grid-column: 1 / -1; min-height: 4rem; cursor: default;
+    background: transparent !important; border: none !important;
+    color: var(--js-faint, #667386); display: flex; align-items: center;
+  }
+
+  /* ---- Player --------------------------------------------------------- */
+  #player-view { flex: 1; display: flex; flex-direction: column; }
+  #player-view[hidden] { display: none; }
+  #player-title-row {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.55rem clamp(0.8rem, 2vw, 1.25rem);
+  }
+  #player-close {
+    background: #202833; color: #d7dee8;
+    border: 1px solid #303a48; border-radius: 999px;
+    cursor: pointer; flex-shrink: 0; font-family: inherit;
+    font-size: 0.8rem; font-weight: 700; min-height: 40px; padding: 0.3rem 0.85rem;
+  }
+  #player-title {
+    color: var(--js-text, #e7edf5); font-size: 0.9rem; font-weight: 700;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #player-wrap {
+    position: relative;
+    flex: 1;
+    display: flex; align-items: center; justify-content: center;
+    background: black;
+    min-height: 0;
+  }
+  video {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    max-height: calc(100vh - 200px);
+    background: black;
+    object-fit: contain;
+  }
+  #player-wrap:fullscreen,
+  #player-wrap:-webkit-full-screen { width: 100vw; height: 100vh; }
+  #player-wrap:fullscreen video,
+  #player-wrap:-webkit-full-screen video,
+  video:fullscreen,
+  video:-webkit-full-screen {
+    width: 100%; height: 100%; max-height: none; aspect-ratio: auto;
+  }
+  #play-overlay {
+    position: absolute; inset: 0; z-index: 1;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: white;
+    background: radial-gradient(circle, rgba(8, 13, 20, 0.26), rgba(0, 0, 0, 0.64));
+    font-weight: 700; text-transform: uppercase; font-size: 0.78rem; letter-spacing: 0.12em;
+  }
+  #play-overlay.hidden { display: none; }
+  #vod-controls {
+    display: flex; align-items: center; gap: 0.45rem;
+    padding: 0.5rem clamp(0.8rem, 2vw, 1.25rem) 0.8rem;
+    background: #0d1219;
+    border-top: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+  }
+  #vod-controls button {
+    background: transparent; border: none; color: white; cursor: pointer;
+    font-size: 1rem;
+    min-width: 44px; min-height: 44px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 999px; padding: 0.1rem 0.3rem; flex-shrink: 0;
+  }
+  #vod-controls button:hover { background: rgba(255, 255, 255, 0.1); }
+  #time-label {
+    color: var(--js-muted, #9aa6b5); font-size: 0.78rem;
+    font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0;
+  }
+  #seek-bar {
+    flex: 1;
+    min-width: 4rem;
+    height: 6px;
+    appearance: none;
+    -webkit-appearance: none;
+    background: #1b2530;
+    border-radius: 999px;
+    cursor: pointer;
+    outline: none;
+    margin: 0 0.2rem;
+  }
+  #seek-bar:disabled { opacity: 0.4; cursor: default; }
+  #seek-bar::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--js-accent, #38bdf8); border: none;
+  }
+  #seek-bar::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--js-accent, #38bdf8); border: none;
+  }
+  #vol-slider { width: 80px; accent-color: var(--js-accent, #38bdf8); flex-shrink: 0; }
+
+  /* ---- Toast ---------------------------------------------------------- */
+  #toast {
+    position: fixed;
+    left: 50%; bottom: 1.4rem;
+    transform: translateX(-50%) translateY(8px);
+    background: #111827;
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 8px;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+    color: var(--js-text, #e7edf5);
+    font-size: 0.85rem;
+    max-width: min(92vw, 26rem);
+    padding: 0.6rem 0.9rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    z-index: 60;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 700px) {
+    header { gap: 0.45rem 0.5rem; }
+    header h1 { flex: 1; }
+    #who { display: none; }
+    #search { order: 5; flex-basis: 100%; }
+    #results {
+      grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+      gap: 0.5rem; padding: 0.6rem 0.85rem 0.85rem;
+    }
+    #vol-slider { display: none; }
+    #vod-controls { gap: 0.15rem; }
+    video { max-height: calc(100vh - 190px); }
+  }
+</style>
+<link rel="stylesheet" href="/jetstream-theme.css">
+</head>
+<body>
+<header>
+  <h1>jetstream <span>library</span></h1>
+  <input id="search" type="search" placeholder="Search movies and shows…" autocomplete="off">
+  <a id="live-link" href="/">← Live stream</a>
+  <span id="who"></span>
+  <button id="logout-btn" type="button">Log out</button>
+</header>
+
+<section id="library-view">
+  <div id="library-nav">
+    <button id="library-back" type="button" disabled>Back</button>
+    <span id="library-path">Library</span>
+  </div>
+  <ul id="results"></ul>
+</section>
+
+<section id="player-view" hidden>
+  <div id="player-title-row">
+    <button id="player-close" type="button">← Library</button>
+    <span id="player-title"></span>
+  </div>
+  <div id="player-wrap">
+    <video id="video" playsinline
+           controlslist="nodownload noremoteplayback noplaybackrate"></video>
+    <div id="play-overlay" class="hidden">tap to play</div>
+  </div>
+  <div id="vod-controls">
+    <button id="play-btn" title="Play / pause">▶</button>
+    <span id="time-label">0:00 / 0:00</span>
+    <input id="seek-bar" type="range" min="0" max="100" step="0.1" value="0" disabled>
+    <button id="mute-btn" title="Mute / unmute">🔊</button>
+    <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="1" title="Volume">
+    <button id="fs-btn" title="Fullscreen" style="display:none">⛶</button>
+  </div>
+</section>
+
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.10/dist/hls.min.js"></script>
+<script>
+const video = document.getElementById("video");
+const playerWrap = document.getElementById("player-wrap");
+const playerView = document.getElementById("player-view");
+const libraryView = document.getElementById("library-view");
+const playerTitle = document.getElementById("player-title");
+const playOverlay = document.getElementById("play-overlay");
+const playBtn = document.getElementById("play-btn");
+const timeLabel = document.getElementById("time-label");
+const seekBar = document.getElementById("seek-bar");
+const muteBtn = document.getElementById("mute-btn");
+const volSlider = document.getElementById("vol-slider");
+const fsBtn = document.getElementById("fs-btn");
+const toastEl = document.getElementById("toast");
+
+function basename(p) { return (p || "").split("/").pop(); }
+function formatTime(sec) {
+  if (!sec || !isFinite(sec) || sec < 0) return "0:00";
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const pad = n => String(n).padStart(2, "0");
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+let toastTimer = null;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 3500);
+}
+
+// ---- Who am I / logout -------------------------------------------------
+const whoEl = document.getElementById("who");
+(async () => {
+  try {
+    const r = await fetch("/api/auth/me");
+    if (r.status === 401) { location.href = "/login?next=%2Flibrary"; return; }
+    if (r.ok) {
+      const j = await r.json();
+      whoEl.textContent = j.username || "";
+    }
+  } catch {}
+})();
+document.getElementById("logout-btn").addEventListener("click", async () => {
+  await stopVod();
+  try { await fetch("/api/auth/logout", { method: "POST" }); } catch {}
+  location.href = "/login";
+});
+
+// ---- Library browser ---------------------------------------------------
+// Same navigation model + display prettifying as viewer.html's request panel
+// (Back button + path label, TV-show season grouping labels, poster tiles).
+const searchInput = document.getElementById("search");
+const results = document.getElementById("results");
+const libraryBack = document.getElementById("library-back");
+const libraryPath = document.getElementById("library-path");
+let browseSeq = 0;
+let libPathCurrent = "";
+
+function libraryLabel(path) {
+  if (!path) return "Library";
+  const parts = path.split("/").filter(Boolean);
+  const labels = [];
+  for (let idx = 0; idx < parts.length; idx++) {
+    const part = parts[idx];
+    const low = part.toLowerCase();
+    if (low === "__season__") {
+      const season = Number(parts[idx + 1]);
+      labels.push(season === 0 ? "Specials" : `Season ${Number.isFinite(season) ? season : parts[idx + 1]}`);
+      idx++;
+      continue;
+    }
+    if (idx === 0 && low === "tv") labels.push("TV Shows");
+    else if (idx === 0 && (low === "movie" || low === "movies")) labels.push("Movies");
+    else labels.push(part);
+  }
+  return labels.join(" / ");
+}
+
+function parentLibraryPath(path) {
+  const parts = (path || "").split("/").filter(Boolean);
+  if (parts.length >= 2 && parts[parts.length - 2].toLowerCase() === "__season__") {
+    parts.splice(parts.length - 2, 2);
+  } else {
+    parts.pop();
+  }
+  return parts.join("/");
+}
+
+function requestParent(path) {
+  return path && path.includes("/") ? path.substring(0, path.lastIndexOf("/")) : "";
+}
+
+function pathParts(item) {
+  return (item.path || item.name || "").toLowerCase().split("/").filter(Boolean);
+}
+function isMovieDirectory(item) {
+  const parts = pathParts(item);
+  return (parts[0] === "movies" || parts[0] === "movie") && parts.length >= 2;
+}
+function isTvShowDirectory(item) {
+  const parts = pathParts(item);
+  return parts[0] === "tv" && parts.length === 2;
+}
+function friendlyDirectoryName(item) {
+  if (item.viewer_root) return item.name || basename(item.path);
+  const low = (item.path || item.name || "").toLowerCase();
+  if (low === "tv" || low.endsWith("/tv")) return "TV Shows";
+  if (low === "movie" || low === "movies" || low.endsWith("/movie") || low.endsWith("/movies")) return "Movies";
+  return item.name || basename(item.path);
+}
+function directoryIcon(item) {
+  const parts = pathParts(item);
+  const path = parts.join("/");
+  if (path === "movies" || path === "movie") return "Movies";
+  if (path === "tv") return "TV";
+  if (isMovieDirectory(item)) return "Movie";
+  if (parts[0] === "tv" && parts.length === 2) return "Show";
+  if (parts[0] === "tv" && parts.length >= 3) return "Season";
+  return "Folder";
+}
+
+// DOM-built cards (no innerHTML — everything here is user/library data).
+function makeCard() {
+  const li = document.createElement("li");
+  const thumb = document.createElement("span");
+  thumb.className = "rthumb";
+  const title = document.createElement("span");
+  title.className = "rtitle";
+  const name = document.createElement("span");
+  name.className = "rt-name";
+  const parent = document.createElement("span");
+  parent.className = "rt-parent";
+  title.appendChild(name);
+  title.appendChild(parent);
+  li.appendChild(thumb);
+  li.appendChild(title);
+  return { li, thumb, name, parent };
+}
+
+function emptyRow(msg) {
+  const li = document.createElement("li");
+  li.className = "empty";
+  li.textContent = msg;
+  return li;
+}
+
+function setResults(...nodes) {
+  results.replaceChildren(...nodes);
+}
+
+function renderFileResult(item, subtitle = "") {
+  const { li, thumb, name, parent } = makeCard();
+  name.textContent = item.name || basename(item.path) || "(untitled)";
+  parent.textContent = subtitle;
+  if (item.path) {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = "";
+    img.addEventListener("load", () => img.classList.add("loaded"));
+    img.src = `/poster?path=${encodeURIComponent(item.path)}`;
+    thumb.appendChild(img);
+  }
+  li.addEventListener("click", () => startVod(item));
+  return li;
+}
+
+function renderDirectoryResult(item) {
+  const { li, thumb, name, parent } = makeCard();
+  thumb.classList.add("folder");
+  thumb.textContent = directoryIcon(item);
+  if ((isMovieDirectory(item) || isTvShowDirectory(item)) && item.path) {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = "";
+    img.addEventListener("load", () => {
+      // Clearing the placeholder label via textContent="" would also strip the
+      // <img> child, so drop the folder placeholder styling and re-attach the
+      // poster instead — leaving a clean cover image filling the tile.
+      thumb.textContent = "";
+      thumb.classList.remove("folder");
+      thumb.appendChild(img);
+      img.classList.add("loaded");
+    });
+    img.src = `/poster?path=${encodeURIComponent(item.path)}`;
+    thumb.appendChild(img);
+  }
+  name.textContent = friendlyDirectoryName(item);
+  parent.textContent = item.path ? libraryLabel(item.path) : "";
+  li.addEventListener("click", () => browseLibrary(item.path || ""));
+  return li;
+}
+
+function renderBrowseItems(items) {
+  libraryPath.textContent = libraryLabel(libPathCurrent);
+  libraryBack.disabled = !libPathCurrent;
+  const dirs = items.filter(it => it.type === "directory");
+  const files = items.filter(it => it.type === "file");
+  const rows = [...dirs, ...files];
+  if (!rows.length) {
+    setResults(emptyRow("Nothing here."));
+    return;
+  }
+  setResults(...rows.map(it =>
+    it.type === "directory" ? renderDirectoryResult(it) : renderFileResult(it, requestParent(it.path))));
+}
+
+async function browseLibrary(path) {
+  const seq = ++browseSeq;
+  libPathCurrent = path || "";
+  searchInput.value = "";
+  libraryPath.textContent = libraryLabel(libPathCurrent);
+  libraryBack.disabled = !libPathCurrent;
+  setResults(emptyRow("Loading library…"));
+  try {
+    const url = "/api/user/library/browse" + (libPathCurrent ? "?path=" + encodeURIComponent(libPathCurrent) : "");
+    const r = await fetch(url);
+    if (r.status === 401) { location.href = "/login?next=%2Flibrary"; return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const items = await r.json();
+    if (seq !== browseSeq) return;
+    renderBrowseItems(Array.isArray(items) ? items : []);
+  } catch {
+    if (seq === browseSeq) setResults(emptyRow("Library failed to load."));
+  }
+}
+
+async function doSearch(q) {
+  const seq = ++browseSeq;
+  libraryPath.textContent = "Search";
+  libraryBack.disabled = !libPathCurrent;
+  setResults(emptyRow("Searching…"));
+  try {
+    const r = await fetch("/api/user/library/search?q=" + encodeURIComponent(q));
+    if (r.status === 401) { location.href = "/login?next=%2Flibrary"; return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (seq !== browseSeq) return;  // a newer keystroke superseded this
+    const list = j.results || [];
+    if (!list.length) {
+      setResults(emptyRow(`No matches for “${q}”`));
+      return;
+    }
+    setResults(...list.map(it => {
+      const parent = it.path && it.path.includes("/") ? "↳ " + requestParent(it.path) : "";
+      return renderFileResult(it, parent);
+    }));
+  } catch {
+    if (seq === browseSeq) setResults(emptyRow("Search failed."));
+  }
+}
+
+let searchDebounce = null;
+searchInput.addEventListener("input", () => {
+  const q = searchInput.value.trim();
+  clearTimeout(searchDebounce);
+  if (!q) {
+    browseLibrary(libPathCurrent);
+    return;
+  }
+  searchDebounce = setTimeout(() => doSearch(q), 300);
+});
+
+libraryBack.addEventListener("click", () => {
+  if (!libPathCurrent) return;
+  browseLibrary(parentLibraryPath(libPathCurrent));
+});
+
+browseLibrary("");
+
+// ---- VOD player --------------------------------------------------------
+// sess is the single source of truth for the active VOD session.
+//   id            — server session_id
+//   url           — current playlist URL (changes on out-of-window seek)
+//   startOffset   — media time (seconds) where the current playlist begins
+//   duration      — full media duration (null for files ffprobe can't size)
+//   ahead         — transcoded_ahead_s from /api/vod/status: how many seconds
+//                   past startOffset are already on disk (the in-window range)
+// Displayed position = startOffset + video.currentTime.
+let sess = null;
+let sessGen = 0;   // invalidates stale retries/polls after stop or re-start
+let hls = null;
+let statusTimer = null;
+let scrubbing = false;
+let seeking = false;  // an out-of-window /api/vod/seek round-trip in flight
+let beaconDone = false;
+
+const savedVol = parseFloat(localStorage.getItem("jetstream_volume"));
+if (isFinite(savedVol) && savedVol >= 0 && savedVol <= 1) {
+  video.volume = savedVol;
+  volSlider.value = String(savedVol);
+}
+
+// iOS Safari: fullscreen goes through the webkit-prefixed video API.
+const fsSupported = !!(video.webkitEnterFullscreen || playerWrap.requestFullscreen || video.requestFullscreen);
+if (fsSupported) fsBtn.style.display = "";
+
+function playWithFallback() {
+  const p = video.play();
+  if (p && typeof p.catch === "function") p.catch(() => {});
+}
+
+function hardTeardown() {
+  if (hls) { hls.destroy(); hls = null; }
+}
+
+// Same engine-selection order as viewer.html: prefer native HLS where
+// canPlayType says so (iOS Safari), else Hls.js, with fatal-error →
+// destroy + re-create retry. No live-edge/sync logic — this is VOD.
+function attachPlayer(url) {
+  const gen = sessGen;
+  hardTeardown();
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = url;
+    video.load();
+  } else if (window.Hls && Hls.isSupported()) {
+    hls = new Hls();
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => playWithFallback());
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      if (data.fatal) {
+        hardTeardown();
+        setTimeout(() => {
+          if (sess && sessGen === gen) attachPlayer(sess.url);
+        }, 800);
+      }
+    });
+  } else {
+    toast("HLS is not supported in this browser.");
+    return;
+  }
+  playWithFallback();
+  syncPlayUI();
+}
+
+function detachPlayer() {
+  hardTeardown();
+  video.removeAttribute("src");
+  video.load();
+}
+
+// Politely end the current session server-side and reset local state.
+async function stopVod() {
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+  const old = sess;
+  sess = null;
+  sessGen++;
+  detachPlayer();
+  if (old) {
+    try {
+      await fetch("/api/vod/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: old.id }),
+      });
+    } catch {}
+  }
+}
+
+function showPlayerView(title) {
+  playerTitle.textContent = title;
+  document.title = title + " · jetstream";
+  libraryView.hidden = true;
+  playerView.hidden = false;
+}
+
+function showLibraryView() {
+  playerView.hidden = true;
+  libraryView.hidden = false;
+  document.title = "jetstream — library";
+}
+
+async function startVod(item) {
+  const title = item.name || basename(item.path) || "(untitled)";
+  // One session per user server-side — stop the old one first anyway.
+  await stopVod();
+  const gen = sessGen;
+  showPlayerView(title);
+  timeLabel.textContent = "Starting…";
+  seekBar.disabled = true;
+  seekBar.value = "0";
+  try {
+    const r = await fetch("/api/vod/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: item.path }),
+    });
+    if (gen !== sessGen) return;  // user already navigated away
+    if (r.status === 409) {
+      toast("All streams are busy — try again in a bit.");
+      showLibraryView();
+      return;
+    }
+    if (r.status === 404) {
+      toast("That file isn't available any more.");
+      showLibraryView();
+      return;
+    }
+    if (r.status === 401) { location.href = "/login?next=%2Flibrary"; return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (gen !== sessGen) {
+      // Session became orphaned mid-start — tell the server to reap it.
+      try {
+        navigator.sendBeacon("/api/vod/stop",
+          new Blob([JSON.stringify({ session_id: j.session_id })], { type: "application/json" }));
+      } catch {}
+      return;
+    }
+    sess = {
+      id: j.session_id,
+      url: j.playlist_url,
+      startOffset: j.start_offset || 0,
+      duration: (typeof j.duration === "number" && isFinite(j.duration)) ? j.duration : null,
+      ahead: null,
+    };
+    beaconDone = false;
+    if (sess.duration) {
+      seekBar.max = String(sess.duration);
+      seekBar.disabled = false;
+    } else {
+      seekBar.disabled = true;
+    }
+    attachPlayer(sess.url);
+    updateTimeUI();
+    pollVodStatus();
+    statusTimer = setInterval(pollVodStatus, 5000);
+  } catch {
+    if (gen === sessGen) {
+      toast("Couldn't start playback — try again.");
+      showLibraryView();
+    }
+  }
+}
+
+document.getElementById("player-close").addEventListener("click", async () => {
+  await stopVod();
+  showLibraryView();
+});
+
+// ---- Status polling: grows the seekable window, detects ended/error ----
+async function pollVodStatus() {
+  if (!sess) return;
+  const gen = sessGen;
+  try {
+    const r = await fetch("/api/vod/status?session_id=" + encodeURIComponent(sess.id));
+    if (!r.ok || gen !== sessGen || !sess) return;
+    const j = await r.json();
+    if (gen !== sessGen || !sess) return;
+    if (typeof j.transcoded_ahead_s === "number") sess.ahead = j.transcoded_ahead_s;
+    if (typeof j.duration === "number" && isFinite(j.duration) && !sess.duration) {
+      sess.duration = j.duration;
+      seekBar.max = String(sess.duration);
+      seekBar.disabled = false;
+    }
+    if (typeof j.start_offset === "number") sess.startOffset = j.start_offset;
+    if (j.status === "ended") {
+      // Transcode finished — the whole remainder is on disk. Playback keeps
+      // going from the buffer; no more polling needed.
+      if (sess.duration) sess.ahead = Math.max(0, sess.duration - sess.startOffset);
+      if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+    } else if (j.status === "error") {
+      toast("Playback error — try starting it again.");
+      await stopVod();
+      showLibraryView();
+      return;
+    }
+    updateTimeUI();
+  } catch {}
+}
+
+// ---- Seek bar ----------------------------------------------------------
+function displayedPosition() {
+  return (sess ? sess.startOffset : 0) + (video.currentTime || 0);
+}
+
+function transcodedWindow() {
+  // Seconds past startOffset that are safe to seek directly. Prefer the
+  // server-reported transcode progress; fall back to what the element has
+  // actually buffered before the first status poll lands.
+  if (sess && typeof sess.ahead === "number") return sess.ahead;
+  if (video.buffered.length) return video.buffered.end(video.buffered.length - 1);
+  return 0;
+}
+
+function paintSeekBar(pos) {
+  if (!sess || !sess.duration) return;
+  const d = sess.duration;
+  const played = Math.min(100, Math.max(0, (pos / d) * 100));
+  const avail = Math.min(100, Math.max(played, ((sess.startOffset + transcodedWindow()) / d) * 100));
+  seekBar.style.background =
+    `linear-gradient(to right, var(--js-accent, #38bdf8) 0%, var(--js-accent, #38bdf8) ${played}%, ` +
+    `rgba(56, 189, 248, 0.28) ${played}%, rgba(56, 189, 248, 0.28) ${avail}%, ` +
+    `#1b2530 ${avail}%, #1b2530 100%)`;
+}
+
+function updateTimeUI() {
+  if (!sess) return;
+  const pos = scrubbing ? parseFloat(seekBar.value) : displayedPosition();
+  timeLabel.textContent = sess.duration
+    ? `${formatTime(pos)} / ${formatTime(sess.duration)}`
+    : formatTime(pos);
+  if (!scrubbing && sess.duration) seekBar.value = String(pos);
+  paintSeekBar(pos);
+}
+
+video.addEventListener("timeupdate", updateTimeUI);
+
+seekBar.addEventListener("input", () => {
+  scrubbing = true;
+  updateTimeUI();
+});
+
+seekBar.addEventListener("change", async () => {
+  scrubbing = false;
+  if (!sess || seeking) return;
+  const target = parseFloat(seekBar.value);
+  if (!isFinite(target)) return;
+  const rel = target - sess.startOffset;
+  // Within the already-transcoded range → plain element seek. Keep a small
+  // safety margin off the transcode edge so we don't land on a half-written
+  // segment.
+  if (rel >= 0 && rel <= Math.max(0, transcodedWindow() - 2)) {
+    video.currentTime = rel;
+    playWithFallback();
+    return;
+  }
+  // Outside → ask the server to restart ffmpeg at the target; the returned
+  // playlist_url carries a ?g= cache-buster, so tear down and attach fresh.
+  seeking = true;
+  const gen = sessGen;
+  timeLabel.textContent = "Seeking…";
+  try {
+    const r = await fetch("/api/vod/seek", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sess.id, position: target }),
+    });
+    if (gen !== sessGen || !sess) return;
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (gen !== sessGen || !sess) return;
+    sess.url = j.playlist_url;
+    sess.startOffset = (typeof j.start_offset === "number") ? j.start_offset : target;
+    sess.ahead = null;  // fresh transcode — window regrows from the next poll
+    attachPlayer(sess.url);
+    updateTimeUI();
+    pollVodStatus();
+  } catch {
+    if (gen === sessGen) toast("Seek failed — try again.");
+  } finally {
+    seeking = false;
+  }
+});
+
+// ---- Play / pause / volume / fullscreen --------------------------------
+function syncPlayUI() {
+  playBtn.textContent = video.paused ? "▶" : "⏸";
+  playOverlay.classList.toggle("hidden", !video.paused || !sess);
+  muteBtn.textContent = video.muted || video.volume === 0 ? "🔇" : "🔊";
+  const shown = video.muted ? 0 : video.volume;
+  if (parseFloat(volSlider.value) !== shown) volSlider.value = String(shown);
+}
+
+playBtn.addEventListener("click", () => {
+  if (video.paused) playWithFallback();
+  else video.pause();
+});
+playOverlay.addEventListener("click", () => {
+  // A tap on the overlay is a real gesture — safe to unmute and play() here
+  // (covers autoplay-policy rejections from the non-gesture start path).
+  video.muted = false;
+  if (video.volume === 0) video.volume = 1;
+  video.play().catch(() => {});
+  syncPlayUI();
+});
+video.addEventListener("click", () => {
+  if (video.paused) playWithFallback();
+  else video.pause();
+});
+muteBtn.addEventListener("click", () => {
+  video.muted = !video.muted;
+  if (!video.muted && video.volume === 0) video.volume = 1;
+  syncPlayUI();
+});
+volSlider.addEventListener("input", () => {
+  const v = parseFloat(volSlider.value);
+  video.volume = v;
+  if (v > 0 && video.muted) video.muted = false;
+  localStorage.setItem("jetstream_volume", String(v));
+  syncPlayUI();
+});
+["play", "playing", "pause", "ended", "volumechange"].forEach(ev =>
+  video.addEventListener(ev, syncPlayUI));
+syncPlayUI();
+
+fsBtn.addEventListener("click", () => {
+  // webkit-first, mirroring viewer.html: iOS Safari 16.4+ ships a partial
+  // div-level requestFullscreen that silently rejects on a video-bearing
+  // <div>, so prefer webkitEnterFullscreen whenever it exists.
+  if (typeof video.webkitEnterFullscreen === "function") {
+    if (!video.webkitDisplayingFullscreen) video.webkitEnterFullscreen();
+    return;
+  }
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+    return;
+  }
+  const target = playerWrap.requestFullscreen ? playerWrap : video;
+  const req = target.requestFullscreen;
+  const p = req && req.call(target);
+  if (p && typeof p.catch === "function") {
+    p.catch(() => {
+      if (target === playerWrap && typeof video.requestFullscreen === "function") {
+        video.requestFullscreen().catch(() => {});
+      }
+    });
+  }
+});
+
+// ---- Leave hygiene -----------------------------------------------------
+// Best-effort stop so the server can reap the ffmpeg promptly instead of
+// waiting for the idle reaper. sendBeacon survives page teardown; guard so
+// pagehide + beforeunload firing back-to-back only sends once.
+function beaconStop() {
+  if (!sess || beaconDone) return;
+  beaconDone = true;
+  try {
+    navigator.sendBeacon("/api/vod/stop",
+      new Blob([JSON.stringify({ session_id: sess.id })], { type: "application/json" }));
+  } catch {}
+}
+window.addEventListener("pagehide", beaconStop);
+window.addEventListener("beforeunload", beaconStop);
+</script>
+</body>
+</html>
