@@ -1,10 +1,23 @@
 # jetstream roadmap
 
-v1 + a viewer-interaction pass shipped. All tracked cleanup items closed.
+v1 + a viewer-interaction pass shipped. All tracked cleanup items closed. v2 (accounts + private VOD) in progress on branch `v2`.
+
+## v2 (in progress, branch `v2`)
+
+v1's invite-token live stream is unchanged — v2 layers on top.
+
+| What | Status | Notes |
+|---|---|---|
+| User accounts | in progress | Admin-created only (no self-registration). Username + password, scrypt-hashed (stdlib), `/data/users.json`; server-side sessions in `/data/sessions.json`, `js_user` cookie (30 d, distinct from `lt`), revoked on password reset / disable / delete. `/login` rate-limited 5/60 s per IP. Admin API: `GET/POST /admin/api/users`, `DELETE /admin/api/users/<id>`, `POST …/password`, `POST …/disabled`. Admin UI: Users panel (host-only, hidden on `/controls`). Logged-in users can also watch live. |
+| Private VOD (Netflix-style) | in progress | `/library` grid + search (`/api/user/library/{browse,search}`) → private HLS under `/hls/vod/<sid>/`, ownership-checked via nginx `auth_request` → `/api/_authcheck_vod` (`X-Original-URI`; no LAN bypass, unlike `/hls/`). One session per user, global cap `VOD_MAX_SESSIONS` (2, `409 vod_capacity`). Seek = kill + restart with `-ss` (fresh playlist gen, `?g=` cache-buster). Idle reaper: `VOD_IDLE_TIMEOUT_S` (120 s) no-fetch → ffmpeg killed, dir removed. ffmpeg: `-readrate VOD_READRATE=2.0` (no `-re`), no zerolatency, rolling `VOD_HLS_LIST_SIZE=900` window (tmpfs), `VOD_FORCE_CPU=1` to spare NVENC. Routes: `POST /api/vod/{start,seek,stop}`, `GET /api/vod/status`; admin `GET/DELETE /admin/api/vod/sessions[/<sid>]` + Active VOD panel. |
+
+New env: `USERS_FILE`, `USER_SESSIONS_FILE`, `VOD_MAX_SESSIONS`, `VOD_IDLE_TIMEOUT_S`, `VOD_READRATE`, `VOD_FORCE_CPU`, `VOD_HLS_LIST_SIZE`. New locks: `users_lock`, `user_sessions_lock`, `login_rate_lock`, `vod_lock`. New pages: `static/login.html`, `static/library.html`. `_cleanup_hls` now skips `/hls/vod/`; nginx grows `location /hls/vod/` + `/__authcheck_vod`.
 
 ## Open
 
 - **Jetstream watcher agent (automation)** — the report queue (#34) already persists agent-readable JSON at `/data/reports.json`, exposes `GET /admin/api/reports`, and now accepts triage write-back at `POST /admin/api/reports/<id>/triage` (sets the reserved `triage` field under `reports_lock` — a direct file edit would be clobbered by Flask's in-memory rewrite). The admin reports panel renders the verdict when present. Still to build: the watcher loop itself — polls the queue, gathers nearby app/ffmpeg/browser context, triages likely causes, writes back, and either adds a roadmap note or drafts a fix for admin review. Design + failure-taxonomy playbook captured in `apps/watcher/DESIGN.md`; only the agent runner is outstanding.
+
+- **`app.py` past ~5300 lines** — consider an `auth.py` / `vod.py` blueprint split. Future item; don't refactor mid-v2.
 
 ## Closed (works in practice / won't-do)
 
