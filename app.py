@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -41,6 +43,18 @@ TOKEN_LEVELS = ("viewer", "friend")
 # Levels permitted to hit /api/control/* and load /controls.
 CONTROL_LEVELS = frozenset({"friend", "admin"})
 TOKEN_LAST_SEEN_SAVE_INTERVAL = 60
+# ---- v2: user accounts (admin-created, username+password) ----
+# Users are a tier alongside invite tokens, not a replacement: the `js_user`
+# session cookie is deliberately distinct from the `lt` invite cookie so one
+# person can hold both. Sessions are server-side records (not signed cookies)
+# so password reset / account delete can revoke them instantly.
+USERS_FILE = Path(os.environ.get("USERS_FILE", "/data/users.json"))
+USER_SESSIONS_FILE = Path(os.environ.get("USER_SESSIONS_FILE", "/data/sessions.json"))
+USER_SESSION_COOKIE = "js_user"
+USER_SESSION_TTL = 60 * 60 * 24 * 30  # 30 days
+USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
+LOGIN_RATE_WINDOW = 60   # seconds
+LOGIN_RATE_MAX = 5       # per-IP login attempts per window
 PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
 RECENT_FILE = Path(os.environ.get("RECENT_FILE", "/data/recent.json"))
 RECENT_LIMIT = int(os.environ.get("RECENT_LIMIT", "50"))
@@ -102,6 +116,23 @@ TARGET_HEIGHT = int(os.environ.get("TARGET_HEIGHT", "1080"))
 HLS_SEG_TIME = os.environ.get("HLS_SEG_TIME", "1")
 # 24 segments × 1s = 24s lookback, matching the low-latency player tuning.
 HLS_LIST_SIZE = os.environ.get("HLS_LIST_SIZE", "24")
+
+# ---- v2: private per-user VOD sessions ----
+# Each logged-in user can run one on-demand transcode into /hls/vod/<sid>/.
+# Sessions are capped (each is a full ffmpeg encode competing with the live
+# stream for NVENC slots) and reaped when segment fetches stop arriving.
+VOD_DIR_BASE = HLS_DIR / "vod"
+VOD_MAX_SESSIONS = int(os.environ.get("VOD_MAX_SESSIONS", "2"))
+VOD_IDLE_TIMEOUT_S = int(os.environ.get("VOD_IDLE_TIMEOUT_S", "120"))
+# VOD drops -re; -readrate caps transcode speed (2.0 = 2x realtime) so a film
+# doesn't peg the encoder. 0 = unlimited.
+VOD_READRATE = os.environ.get("VOD_READRATE", "2.0")
+# Force VOD encodes onto libx264, reserving NVENC sessions for live + preroll.
+VOD_FORCE_CPU = os.environ.get("VOD_FORCE_CPU", "0") == "1"
+# Rolling window, not a full EVENT playlist: /hls is a ~1.5 GiB tmpfs and a
+# whole film won't fit. ~15 min @1s segments; back-seek past the window falls
+# through to a server-side -ss restart (same client path as any far seek).
+VOD_HLS_LIST_SIZE = os.environ.get("VOD_HLS_LIST_SIZE", "900")
 
 STREAM_QUALITY_PRESETS = {
     "default": {
@@ -439,6 +470,190 @@ def _caller_can_control() -> bool:
     return _token_level(request.cookies.get(TOKEN_COOKIE)) in CONTROL_LEVELS
 
 
+# ==== v2: users & sessions =================================================
+# Admin-created accounts (no self-registration). Follows the tokens idiom:
+# module list + lock + load/save to /data. Passwords are scrypt-hashed
+# (stdlib only — no new deps); sessions are server-side so they can be
+# revoked on password reset / delete / disable.
+
+users_lock = threading.Lock()
+users: list[dict] = []
+# {"id","username","scrypt":{"salt","hash","n","r","p"},"created",
+#  "last_login","disabled"}
+
+user_sessions_lock = threading.Lock()
+user_sessions: dict[str, dict] = {}
+# sid -> {"user_id","created","expires"}
+
+# IP -> [timestamps within LOGIN_RATE_WINDOW]. Pruned lazily per attempt.
+login_rate_lock = threading.Lock()
+login_rate: dict[str, list[float]] = {}
+
+
+def _atomic_write_json(path: Path, obj) -> None:
+    """Write-then-rename so a crash mid-write can't leave a truncated JSON
+    file. The pre-v2 stores write in place (a corrupt tokens.json at least
+    fails loudly via _warn_state_load_failed); the credential stores get the
+    stronger guarantee from day one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2))
+    os.replace(tmp, path)
+
+
+def _load_users():
+    global users
+    if USERS_FILE.exists():
+        try:
+            users = json.loads(USERS_FILE.read_text())
+            return
+        except Exception as e:
+            _warn_state_load_failed("users", USERS_FILE, e)
+    users = []
+
+
+def _save_users():
+    _atomic_write_json(USERS_FILE, users)
+
+
+def _load_user_sessions():
+    global user_sessions
+    if USER_SESSIONS_FILE.exists():
+        try:
+            user_sessions = json.loads(USER_SESSIONS_FILE.read_text())
+            return
+        except Exception as e:
+            _warn_state_load_failed("user sessions", USER_SESSIONS_FILE, e)
+    user_sessions = {}
+
+
+def _save_user_sessions():
+    """Persist sessions, pruning expired ones so the file can't grow
+    unbounded. Caller holds user_sessions_lock."""
+    now = time.time()
+    stale = [sid for sid, rec in user_sessions.items()
+             if float(rec.get("expires") or 0) < now]
+    for sid in stale:
+        del user_sessions[sid]
+    _atomic_write_json(USER_SESSIONS_FILE, user_sessions)
+
+
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
+
+
+def _hash_password(pw: str) -> dict:
+    salt = secrets.token_bytes(16)
+    h = hashlib.scrypt(pw.encode(), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R,
+                       p=_SCRYPT_P, dklen=32)
+    return {"salt": salt.hex(), "hash": h.hex(),
+            "n": _SCRYPT_N, "r": _SCRYPT_R, "p": _SCRYPT_P}
+
+
+def _verify_password(pw: str, rec: dict) -> bool:
+    try:
+        h = hashlib.scrypt(
+            pw.encode(), salt=bytes.fromhex(rec["salt"]),
+            n=int(rec["n"]), r=int(rec["r"]), p=int(rec["p"]), dklen=32)
+        return hmac.compare_digest(h.hex(), rec["hash"])
+    except Exception:
+        return False
+
+
+def _session_user() -> dict | None:
+    """The user record behind the request's `js_user` cookie, or None.
+    Mirrors _token_level as the capability chokepoint for the user tier:
+    unknown/expired session or disabled user both read as logged-out."""
+    sid = request.cookies.get(USER_SESSION_COOKIE)
+    if not sid:
+        return None
+    now = time.time()
+    with user_sessions_lock:
+        rec = user_sessions.get(sid)
+        if not rec or float(rec.get("expires") or 0) < now:
+            return None
+        uid = rec["user_id"]
+    with users_lock:
+        for u in users:
+            if u["id"] == uid and not u.get("disabled"):
+                return u
+    return None
+
+
+def _create_user_session(user_id: str) -> str:
+    sid = secrets.token_urlsafe(32)
+    now = time.time()
+    with user_sessions_lock:
+        user_sessions[sid] = {
+            "user_id": user_id, "created": now, "expires": now + USER_SESSION_TTL,
+        }
+        _save_user_sessions()
+    return sid
+
+
+def _revoke_user_sessions(user_id: str) -> None:
+    """Drop every session for a user — password reset, disable, delete."""
+    with user_sessions_lock:
+        dead = [sid for sid, rec in user_sessions.items()
+                if rec.get("user_id") == user_id]
+        for sid in dead:
+            del user_sessions[sid]
+        _save_user_sessions()
+
+
+def _ip_rate_check(bucket: dict[str, list[float]], lock: threading.Lock,
+                   ip: str, window: float, max_n: int) -> bool:
+    """Generic per-IP rolling-window rate check (the shape _chat_rate_check
+    and friends each hand-roll). Records the attempt timestamp on success;
+    prunes fully-stale IPs so scanners don't leave permanent empty rows."""
+    now = time.time()
+    cutoff = now - window
+    with lock:
+        timestamps = [t for t in bucket.get(ip, []) if t > cutoff]
+        if len(timestamps) >= max_n:
+            bucket[ip] = timestamps
+            return False
+        timestamps.append(now)
+        bucket[ip] = timestamps
+        return True
+
+
+# ==== v2: vod session registry (engine lands in WP-2A) =====================
+# sid -> {"user_id","rel_path","title","proc","start_offset","started_at",
+#         "last_access","duration","status","generation"}
+vod_lock = threading.Lock()
+vod_sessions: dict[str, dict] = {}
+
+
+def _vod_session_dir(sid: str) -> Path:
+    return VOD_DIR_BASE / sid
+
+
+def _vod_kill_session_locked(sid: str) -> None:
+    """Terminate a VOD session's ffmpeg and remove its dir + registry entry.
+    Caller holds vod_lock."""
+    sess = vod_sessions.pop(sid, None)
+    if not sess:
+        return
+    proc = sess.get("proc")
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    shutil.rmtree(_vod_session_dir(sid), ignore_errors=True)
+
+
+def _vod_kill_sessions_for_user(user_id: str) -> None:
+    with vod_lock:
+        for sid in [s for s, rec in vod_sessions.items()
+                    if rec.get("user_id") == user_id]:
+            _vod_kill_session_locked(sid)
+
+
 def _load_playlist():
     global playlist
     if PLAYLIST_FILE.exists():
@@ -719,6 +934,8 @@ def _load_state() -> dict | None:
 
 
 _load_tokens()
+_load_users()
+_load_user_sessions()
 _load_playlist()
 _load_recent()
 _load_requests()
@@ -1145,6 +1362,11 @@ def _cleanup_hls():
     _composer_state_lock; lock order matches the composer's tick path so
     they can't deadlock.)"""
     for entry in HLS_DIR.iterdir():
+        # The VOD tree is not ours: private per-user sessions live under
+        # /hls/vod/ with their own reaper. A live-stream stop/idle must not
+        # nuke someone's in-flight film.
+        if entry == VOD_DIR_BASE:
+            continue
         try:
             if entry.is_dir():
                 shutil.rmtree(entry)
@@ -1153,6 +1375,7 @@ def _cleanup_hls():
         except FileNotFoundError:
             pass
     RUN_DIR_BASE.mkdir(parents=True, exist_ok=True)
+    VOD_DIR_BASE.mkdir(parents=True, exist_ok=True)
     # Reset run state and composer counters — without /hls/ on disk there's
     # nothing for those numbers to refer to. Lock order: state_lock first,
     # _composer_state_lock second (same as composer cleanup path).
@@ -3134,6 +3357,23 @@ def _gate_viewer_routes():
         return None  # nginx subrequest endpoint — has its own logic below
     if p == "/api/now-playing":
         return None  # title-only external display feed — deliberately tokenless
+    # v2 login surface — reachable logged-out by definition. The theme CSS and
+    # built JS bundles are exempt too so the login page renders without a
+    # token; they're public assets, not sensitive.
+    if p in ("/login", "/api/auth/login", "/jetstream-theme.css") or p.startswith("/build/"):
+        return None
+    if p == "/api/_authcheck_vod":
+        return None  # nginx subrequest endpoint — has its own logic below
+    # v2 user area: the library browser + VOD control APIs require a logged-in
+    # user session (never an invite token — invite links stay watch/control
+    # only). Pages redirect to login; APIs get JSON 401s.
+    if (p == "/library" or p.startswith("/api/user/") or p.startswith("/api/vod/")
+            or p in ("/api/auth/logout", "/api/auth/me")):
+        if _session_user():
+            return None
+        if p == "/library":
+            return redirect("/login?next=" + urllib.parse.quote(p))
+        return jsonify({"error": "auth_required"}), 401
     # Control surface (the /controls page + /api/control/* endpoints) requires
     # a friend-or-admin token regardless of public mode — viewers and the
     # anonymous public can watch but never drive playback. Check this before
@@ -3160,6 +3400,10 @@ def _gate_viewer_routes():
     cookie_t = request.cookies.get(TOKEN_COOKIE)
     if _valid_token(cookie_t):
         _mark_token_seen(cookie_t)
+        return None
+    # A logged-in user is at least a viewer: accounts can watch the live
+    # stream without also needing an invite token.
+    if _session_user():
         return None
     qs_t = request.args.get("t")
     if _valid_token(qs_t):
@@ -3193,7 +3437,8 @@ def api_authcheck():
     Without _track_viewer here the active viewers list and history go silent."""
     with settings_lock:
         public = settings.get("viewer_public")
-    if not public and not _valid_token(request.cookies.get(TOKEN_COOKIE)):
+    if (not public and not _valid_token(request.cookies.get(TOKEN_COOKIE))
+            and not _session_user()):
         return ("", 401)
     # Continuous-watch cap: a session past the limit gets its segments cut off.
     # Checked before _track_viewer so an expired session stops refreshing its
@@ -3204,6 +3449,165 @@ def api_authcheck():
     # for known IPs and only emits a connect-log on the very first sighting.
     _track_viewer()
     return ("", 204)
+
+
+# ==== v2: auth routes + VOD authcheck ======================================
+
+@app.route("/api/_authcheck_vod")
+def api_authcheck_vod():
+    """nginx auth_request target for /hls/vod/*. Unlike the live stream, a
+    VOD session belongs to exactly one user: 204 only when the caller's
+    `js_user` session owns the <sid> embedded in the original URI (forwarded
+    by nginx as X-Original-URI). Doubles as the idle-reaper heartbeat — each
+    segment fetch bumps last_access, the same trick _authcheck plays with
+    _track_viewer."""
+    u = _session_user()
+    if not u:
+        return ("", 401)
+    m = re.match(r"^/hls/vod/([A-Za-z0-9_-]+)/", request.headers.get("X-Original-URI", ""))
+    if not m:
+        return ("", 403)
+    with vod_lock:
+        sess = vod_sessions.get(m.group(1))
+        if not sess or sess.get("user_id") != u["id"]:
+            return ("", 403)
+        sess["last_access"] = time.time()
+    return ("", 204)
+
+
+@app.route("/login")
+def login_page():
+    return send_from_directory("static", "login.html")
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    if not _ip_rate_check(login_rate, login_rate_lock, _client_ip(),
+                          LOGIN_RATE_WINDOW, LOGIN_RATE_MAX):
+        return jsonify({"error": "rate_limited"}), 429
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username") or "").strip().lower()
+    password = str(data.get("password") or "")
+    with users_lock:
+        user = next((u for u in users if u["username"] == username), None)
+        # Verify even on unknown username? No — scrypt is deliberately slow
+        # and the username set is admin-curated, not enumerable-sensitive.
+        if (not user or user.get("disabled")
+                or not _verify_password(password, user.get("scrypt") or {})):
+            return jsonify({"error": "bad_credentials"}), 401
+        user["last_login"] = time.time()
+        _save_users()
+        uid = user["id"]
+    sid = _create_user_session(uid)
+    resp = jsonify({"ok": True})
+    resp.set_cookie(
+        USER_SESSION_COOKIE, sid,
+        max_age=USER_SESSION_TTL,
+        httponly=True, secure=True, samesite="Lax",
+    )
+    return resp
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    sid = request.cookies.get(USER_SESSION_COOKIE)
+    if sid:
+        with user_sessions_lock:
+            if sid in user_sessions:
+                del user_sessions[sid]
+                _save_user_sessions()
+    resp = jsonify({"ok": True})
+    resp.delete_cookie(USER_SESSION_COOKIE)
+    return resp
+
+
+@app.route("/api/auth/me")
+def api_auth_me():
+    u = _session_user()  # gate guarantees a session, but stay defensive
+    if not u:
+        return jsonify({"error": "auth_required"}), 401
+    return jsonify({"id": u["id"], "username": u["username"]})
+
+
+@app.route("/admin/api/users", methods=["GET", "POST"])
+def api_admin_users():
+    if request.method == "GET":
+        with vod_lock:
+            active_vod_uids = {s.get("user_id") for s in vod_sessions.values()}
+        with users_lock:
+            return jsonify({"users": [
+                {
+                    "id": u["id"], "username": u["username"],
+                    "created": u.get("created"), "last_login": u.get("last_login"),
+                    "disabled": bool(u.get("disabled")),
+                    "active_vod": u["id"] in active_vod_uids,
+                } for u in users
+            ]})
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username") or "").strip().lower()
+    password = str(data.get("password") or "")
+    if not USERNAME_RE.match(username):
+        return jsonify({"error": "bad_username",
+                        "message": "3-32 chars, a-z 0-9 _ . -"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "bad_password", "message": "min 8 chars"}), 400
+    with users_lock:
+        if any(u["username"] == username for u in users):
+            return jsonify({"error": "duplicate"}), 409
+        rec = {
+            "id": secrets.token_urlsafe(12),
+            "username": username,
+            "scrypt": _hash_password(password),
+            "created": time.time(),
+            "last_login": None,
+            "disabled": False,
+        }
+        users.append(rec)
+        _save_users()
+    return jsonify({"id": rec["id"]})
+
+
+@app.route("/admin/api/users/<uid>", methods=["DELETE"])
+def api_admin_user_delete(uid):
+    with users_lock:
+        before = len(users)
+        users[:] = [u for u in users if u["id"] != uid]
+        if len(users) == before:
+            return jsonify({"error": "not_found"}), 404
+        _save_users()
+    _revoke_user_sessions(uid)
+    _vod_kill_sessions_for_user(uid)
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/api/users/<uid>/password", methods=["POST"])
+def api_admin_user_password(uid):
+    password = str((request.get_json(silent=True) or {}).get("password") or "")
+    if len(password) < 8:
+        return jsonify({"error": "bad_password", "message": "min 8 chars"}), 400
+    with users_lock:
+        user = next((u for u in users if u["id"] == uid), None)
+        if not user:
+            return jsonify({"error": "not_found"}), 404
+        user["scrypt"] = _hash_password(password)
+        _save_users()
+    _revoke_user_sessions(uid)  # a reset means "lock out whoever had it"
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/api/users/<uid>/disabled", methods=["POST"])
+def api_admin_user_disabled(uid):
+    disabled = bool((request.get_json(silent=True) or {}).get("disabled"))
+    with users_lock:
+        user = next((u for u in users if u["id"] == uid), None)
+        if not user:
+            return jsonify({"error": "not_found"}), 404
+        user["disabled"] = disabled
+        _save_users()
+    if disabled:
+        _revoke_user_sessions(uid)
+        _vod_kill_sessions_for_user(uid)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/session/continue", methods=["POST"])

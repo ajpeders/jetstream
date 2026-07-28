@@ -25,6 +25,38 @@ server {
   real_ip_header X-Forwarded-For;
   real_ip_recursive on;
 
+  # /hls/vod/* — per-user private VOD sessions (v2). Longest-prefix match
+  # wins, so this beats the /hls/ block below. Deliberately NO LAN bypass:
+  # a VOD stream belongs to exactly one logged-in user, and the Apple-TV
+  # AirPlay rationale doesn't apply. Ownership (session id in the path vs
+  # the js_user cookie) is checked by Flask via X-Original-URI.
+  location /hls/vod/ {
+    auth_request /__authcheck_vod;
+
+    alias /hls/vod/;
+
+    add_header Cache-Control "no-store" always;
+    add_header Access-Control-Allow-Origin "*" always;
+    sendfile on;
+    tcp_nopush on;
+  }
+
+  location = /__authcheck_vod {
+    internal;
+    proxy_pass http://jetstream_backend/api/_authcheck_vod;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Cookie $http_cookie;
+    # The original path carries the VOD session id — Flask needs it for the
+    # per-user ownership check (auth_request rewrites the URI otherwise).
+    proxy_set_header X-Original-URI $request_uri;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header User-Agent $http_user_agent;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+  }
+
   # /hls/* — static manifests and segments. Auth via subrequest to Flask;
   # if the viewer's token cookie is invalid (and we're not in public mode),
   # nginx rejects with 401 here without ever reading the file.
