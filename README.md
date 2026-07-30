@@ -142,7 +142,6 @@ Not supported:
 | `VOD_IDLE_TIMEOUT_S` | `120` | No segment fetches for this long → VOD ffmpeg killed, session dir removed. |
 | `VOD_READRATE` | `2.0` | VOD input pacing (`-readrate`; VOD doesn't use `-re`). |
 | `VOD_FORCE_CPU` | `0` | Push VOD encodes to libx264 — reserves NVENC sessions for live + preroll. |
-| `VOD_HLS_LIST_SIZE` | `900` | VOD rolling playlist depth (~15 min @ 1 s segments). |
 
 WSGI: gunicorn 23.0 (`-w 1 -k gthread --threads 16 --timeout 120`). One worker shares the in-process state (watcher, composer, viewers dict); 16 threads handle concurrent `/api/_authcheck` + admin requests.
 

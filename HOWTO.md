@@ -96,7 +96,6 @@ All set in the compose `.env`; apply with `docker compose up -d` (no rebuild).
 | `VOD_IDLE_TIMEOUT_S` | `120` | Reaper patience. Lower = abandoned sessions free up faster; too low and a long pause in playback (buffer still draining) can get reaped. |
 | `VOD_READRATE` | `2.0` | Input pacing (VOD uses `-readrate`, not `-re`). Higher builds buffer ahead faster but burns more CPU/GPU per session; `1.0` ≈ realtime. |
 | `VOD_FORCE_CPU` | `0` | **Set `1` when NVENC sessions run out.** Consumer GPUs cap concurrent NVENC encodes, and live + preroll already use up to two — VOD sessions on top can hit the cap and fail encoder init. `1` pushes all VOD to libx264, reserving NVENC for the live pipeline. Watch CPU: each libx264 VOD encode is heavy. |
-| `VOD_HLS_LIST_SIZE` | `900` | Rolling back-buffer (~15 min @ 1 s segments). `/hls` is a ~1.5 GiB tmpfs shared with live — raising this eats tmpfs across all sessions. Rewinds past the window are seeks anyway (kill + `-ss` restart), so bigger rarely helps. |
 
 Related: `USERS_FILE` (`/data/users.json`) and `USER_SESSIONS_FILE` (`/data/sessions.json`) relocate the account/session stores — normally leave alone.
 

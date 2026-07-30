@@ -69,6 +69,12 @@ services:
       - ${JETSTREAM_MEDIA_PATH:-/home/ween/share/media}:/media:ro
       - ../../state/jetstream:/data
       - jetstream-hls:/hls
+      # Disk-backed volume nested over the tmpfs at /hls/vod: VOD sessions
+      # keep their FULL segment set (no rolling window — a window would slide
+      # past the viewer's playhead once the paced encoder runs ahead), and a
+      # 2h film's segments don't fit in the 1.5g tmpfs. Mounted in both
+      # containers so nginx serves segments Flask's ffmpeg wrote.
+      - jetstream-vod:/hls/vod
       # Read-only mounts so jetstream can pull Sonarr/Radarr API keys at
       # startup for the cover-art proxy (no env-var key duplication).
       # Best-effort: arr might not be installed on every homelab host, so
@@ -108,6 +114,7 @@ services:
     volumes:
       - ./nginx-default.conf.template:/etc/nginx/templates/default.conf.template:ro
       - jetstream-hls:/hls:ro
+      - jetstream-vod:/hls/vod:ro
     labels:
       - traefik.enable=true
       - traefik.docker.network=web
@@ -149,3 +156,8 @@ volumes:
       type: tmpfs
       device: tmpfs
       o: "size=1500m,mode=1777"
+  # Plain disk-backed volume for VOD session dirs (see the /hls/vod mounts
+  # above). Bounded by VOD_MAX_SESSIONS × one transcoded film + the startup
+  # orphan sweep + the idle reaper, not by a size cap.
+  jetstream-vod:
+    driver: local

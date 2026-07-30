@@ -129,10 +129,12 @@ VOD_IDLE_TIMEOUT_S = int(os.environ.get("VOD_IDLE_TIMEOUT_S", "120"))
 VOD_READRATE = os.environ.get("VOD_READRATE", "2.0")
 # Force VOD encodes onto libx264, reserving NVENC sessions for live + preroll.
 VOD_FORCE_CPU = os.environ.get("VOD_FORCE_CPU", "0") == "1"
-# Rolling window, not a full EVENT playlist: /hls is a ~1.5 GiB tmpfs and a
-# whole film won't fit. ~15 min @1s segments; back-seek past the window falls
-# through to a server-side -ss restart (same client path as any far seek).
-VOD_HLS_LIST_SIZE = os.environ.get("VOD_HLS_LIST_SIZE", "900")
+# VOD keeps the FULL playlist (-hls_list_size 0, no delete_segments): with
+# the -readrate paced encoder running ahead of the 1x viewer, ANY rolling
+# window eventually slides past the playhead and deletes the segment the
+# player needs next (review finding — deterministic stall ~15 min in). Only
+# affordable because /hls/vod is a disk-backed volume (docker-compose.yml),
+# NOT part of the ~1.5 GiB /hls tmpfs.
 
 STREAM_QUALITY_PRESETS = {
     "default": {
@@ -604,10 +606,14 @@ def _ip_rate_check(bucket: dict[str, list[float]], lock: threading.Lock,
                    ip: str, window: float, max_n: int) -> bool:
     """Generic per-IP rolling-window rate check (the shape _chat_rate_check
     and friends each hand-roll). Records the attempt timestamp on success;
-    prunes fully-stale IPs so scanners don't leave permanent empty rows."""
+    sweeps fully-stale rows each call so scanner IPs that never return
+    don't leave permanent entries."""
     now = time.time()
     cutoff = now - window
     with lock:
+        for stale in [k for k, v in bucket.items()
+                      if k != ip and (not v or v[-1] <= cutoff)]:
+            del bucket[stale]
         timestamps = [t for t in bucket.get(ip, []) if t > cutoff]
         if len(timestamps) >= max_n:
             bucket[ip] = timestamps
@@ -615,6 +621,17 @@ def _ip_rate_check(bucket: dict[str, list[float]], lock: threading.Lock,
         timestamps.append(now)
         bucket[ip] = timestamps
         return True
+
+
+def _trusted_client_ip() -> str:
+    """Client IP for SECURITY decisions (rate limiting). _client_ip trusts
+    the leftmost X-Forwarded-For entry, which the CLIENT controls — fine for
+    viewer-tracking labels, useless against an attacker rotating forged XFF
+    values to dodge a limiter. X-Real-IP is set by our own nginx from its
+    realip-resolved $remote_addr (Traefik appends the true peer last, nginx
+    walks it recursively), so it can't be forged from outside; fall back to
+    the socket peer when nginx isn't in front (dev/test client)."""
+    return request.headers.get("X-Real-IP") or request.remote_addr or "unknown"
 
 
 # ==== v2: vod session registry (engine lands in WP-2A) =====================
@@ -628,10 +645,19 @@ def _vod_session_dir(sid: str) -> Path:
     return VOD_DIR_BASE / sid
 
 
-def _vod_kill_session_locked(sid: str) -> None:
-    """Terminate a VOD session's ffmpeg and remove its dir + registry entry.
-    Caller holds vod_lock."""
-    sess = vod_sessions.pop(sid, None)
+def _vod_detach_locked(sid: str) -> dict | None:
+    """Pop a session out of the registry and return it for disposal. Caller
+    holds vod_lock. Deliberately does NOT touch the process or the dir — the
+    per-segment _authcheck_vod heartbeat contends on vod_lock, so anything
+    slow (proc.wait, rmtree) must happen in _vod_dispose AFTER the lock is
+    released (review finding: a 5 s proc.wait under this lock stalled every
+    viewer's segment auth)."""
+    return vod_sessions.pop(sid, None)
+
+
+def _vod_dispose(sid: str, sess: dict | None) -> None:
+    """Terminate a detached session's ffmpeg and remove its dir. Caller must
+    NOT hold vod_lock."""
     if not sess:
         return
     proc = sess.get("proc")
@@ -647,11 +673,23 @@ def _vod_kill_session_locked(sid: str) -> None:
     shutil.rmtree(_vod_session_dir(sid), ignore_errors=True)
 
 
+def _vod_kill_session(sid: str) -> bool:
+    """Detach + dispose in one call. Returns False for an unknown sid."""
+    with vod_lock:
+        sess = _vod_detach_locked(sid)
+    if sess is None:
+        return False
+    _vod_dispose(sid, sess)
+    return True
+
+
 def _vod_kill_sessions_for_user(user_id: str) -> None:
     with vod_lock:
-        for sid in [s for s, rec in vod_sessions.items()
-                    if rec.get("user_id") == user_id]:
-            _vod_kill_session_locked(sid)
+        dead = [(sid, _vod_detach_locked(sid))
+                for sid in [s for s, rec in vod_sessions.items()
+                            if rec.get("user_id") == user_id]]
+    for sid, sess in dead:
+        _vod_dispose(sid, sess)
 
 
 def _load_playlist():
@@ -2187,8 +2225,9 @@ def _build_ffmpeg_cmd(
 
     `mode` ("live" | "vod"): "live" is the original behavior, unchanged.
     "vod" (v2 per-user sessions) drops -re for -readrate pacing, drops the
-    zerolatency tune on libx264, honors VOD_FORCE_CPU, and uses the deep
-    VOD_HLS_LIST_SIZE playlist window. `run_dir` is the VOD session dir."""
+    zerolatency tune on libx264, honors VOD_FORCE_CPU, and writes a full
+    never-deleting playlist with a final ENDLIST (disk-backed session dir).
+    `run_dir` is the VOD session dir."""
     input_str = str(input_path)
     # v2: local encoder flags so VOD_FORCE_CPU can demote a VOD encode to
     # libx264 without touching the live stream's globals. In live mode these
@@ -2499,13 +2538,26 @@ def _build_ffmpeg_cmd(
         "-ac", "2",
         "-f", "hls",
         "-hls_time", HLS_SEG_TIME,
-        # VOD keeps a much deeper playlist window (seek-back headroom within a
-        # session); delete_segments still bounds disk to that window.
-        "-hls_list_size", VOD_HLS_LIST_SIZE if mode == "vod" else HLS_LIST_SIZE,
-        # +program_date_time tags every segment with the server's wall clock.
-        # Clients use that as a universal reference to converge on the same
-        # playhead (vs. each holding their own per-buffer "live edge").
-        "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments+program_date_time",
+    ]
+    if mode == "vod":
+        cmd += [
+            # Full playlist, nothing deleted: segments live on the disk-backed
+            # /hls/vod volume, so back-seek within the transcoded range is free
+            # and client-side. No omit_endlist — when the transcode completes,
+            # ffmpeg writes #EXT-X-ENDLIST and the player fires a real `ended`
+            # instead of hanging at the last segment waiting for a live edge.
+            "-hls_list_size", "0",
+            "-hls_flags", "independent_segments",
+        ]
+    else:
+        cmd += [
+            "-hls_list_size", HLS_LIST_SIZE,
+            # +program_date_time tags every segment with the server's wall clock.
+            # Clients use that as a universal reference to converge on the same
+            # playhead (vs. each holding their own per-buffer "live edge").
+            "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments+program_date_time",
+        ]
+    cmd += [
         # fmp4 segments (.m4s) instead of mpegts (.ts). Firefox's MSE doesn't
         # accept raw mpegts, so with .ts segments Hls.js transmuxes each one
         # to fmp4 in JavaScript before appending — a known FF stutter source
@@ -3384,10 +3436,11 @@ def _gate_viewer_routes():
         return None  # nginx subrequest endpoint — has its own logic below
     if p == "/api/now-playing":
         return None  # title-only external display feed — deliberately tokenless
-    # v2 login surface — reachable logged-out by definition. The theme CSS and
-    # built JS bundles are exempt too so the login page renders without a
-    # token; they're public assets, not sensitive.
-    if p in ("/login", "/api/auth/login", "/jetstream-theme.css") or p.startswith("/build/"):
+    # v2 login surface — reachable logged-out by definition. The theme CSS is
+    # exempt too (login.html links it); nothing else static is opened up —
+    # the /build/ bundles stay token-gated so a private instance doesn't hand
+    # its full client-side route map to anonymous scanners.
+    if p in ("/login", "/api/auth/login", "/jetstream-theme.css"):
         return None
     if p == "/api/_authcheck_vod":
         return None  # nginx subrequest endpoint — has its own logic below
@@ -3509,7 +3562,9 @@ def login_page():
 
 @app.route("/api/auth/login", methods=["POST"])
 def api_auth_login():
-    if not _ip_rate_check(login_rate, login_rate_lock, _client_ip(),
+    # Rate-limit on the TRUSTED ip: keying on _client_ip (leftmost XFF) lets
+    # an attacker rotate forged XFF headers and never trip the limiter.
+    if not _ip_rate_check(login_rate, login_rate_lock, _trusted_client_ip(),
                           LOGIN_RATE_WINDOW, LOGIN_RATE_MAX):
         return jsonify({"error": "rate_limited"}), 429
     data = request.get_json(silent=True) or {}
@@ -3517,10 +3572,17 @@ def api_auth_login():
     password = str(data.get("password") or "")
     with users_lock:
         user = next((u for u in users if u["username"] == username), None)
-        # Verify even on unknown username? No — scrypt is deliberately slow
-        # and the username set is admin-curated, not enumerable-sensitive.
-        if (not user or user.get("disabled")
-                or not _verify_password(password, user.get("scrypt") or {})):
+        scrypt_rec = dict(user.get("scrypt") or {}) if user else None
+        disabled = bool(user.get("disabled")) if user else True
+    # scrypt is deliberately slow (~16 MiB / tens of ms) — verify OUTSIDE
+    # users_lock so a login burst can't serialize every other user-store
+    # reader behind the KDF. (No dummy-verify on unknown usernames: the
+    # username set is admin-curated, not enumerable-sensitive.)
+    if disabled or not scrypt_rec or not _verify_password(password, scrypt_rec):
+        return jsonify({"error": "bad_credentials"}), 401
+    with users_lock:
+        user = next((u for u in users if u["username"] == username), None)
+        if not user or user.get("disabled"):
             return jsonify({"error": "bad_credentials"}), 401
         user["last_login"] = time.time()
         _save_users()
@@ -5323,75 +5385,107 @@ def _vod_start(user_id: str, rel_path: str, start: float = 0.0,
     audio_idx = _probe_english_audio(str(full))
     sid = secrets.token_urlsafe(16)
     sess_dir = _vod_session_dir(sid)
-    cmd = _build_ffmpeg_cmd(
-        full, sess_dir, start, audio_idx, subtitle_idx, mode="vod")
+    now = time.time()
+    # Placeholder-first: reserve the registry slot BEFORE the slow command
+    # build (it ffprobes the source) and the spawn. This closes two races a
+    # probe-then-lock shape had: (a) capacity TOCTOU — two starts could both
+    # pass the cap check they measured pre-lock; (b) rapid same-user
+    # double-click — the later start detaches this placeholder, and we notice
+    # at install time instead of leaving the registry pointing at film A
+    # while the client plays film B.
+    rec = {
+        "user_id": user_id, "rel_path": rel, "title": full.name,
+        "proc": None, "start_offset": start, "started_at": now,
+        "last_access": now, "duration": duration, "status": "starting",
+        "generation": 0,
+        # kept so _vod_seek rebuilds the exact same track selection
+        "audio_idx": audio_idx, "subtitle_idx": subtitle_idx,
+    }
     with vod_lock:
-        for old in [s for s, rec in vod_sessions.items()
-                    if rec.get("user_id") == user_id]:
-            _vod_kill_session_locked(old)
-        if len(vod_sessions) >= VOD_MAX_SESSIONS:
-            return ("capacity",)
+        old = [(s, _vod_detach_locked(s))
+               for s in [s for s, r in vod_sessions.items()
+                         if r.get("user_id") == user_id]]
+        over_cap = len(vod_sessions) >= VOD_MAX_SESSIONS
+        if not over_cap:
+            vod_sessions[sid] = rec
+    for old_sid, old_sess in old:  # one-per-user: replaced session dies
+        _vod_dispose(old_sid, old_sess)
+    if over_cap:
+        return ("capacity",)
+    try:
+        cmd = _build_ffmpeg_cmd(
+            full, sess_dir, start, audio_idx, subtitle_idx, mode="vod")
         sess_dir.mkdir(parents=True, exist_ok=True)
         proc = _spawn_ffmpeg(cmd, sess_dir / "ffmpeg.log")
-        now = time.time()
-        rec = {
-            "user_id": user_id, "rel_path": rel, "title": full.name,
-            "proc": proc, "start_offset": start, "started_at": now,
-            "last_access": now, "duration": duration, "status": "running",
-            "generation": 0,
-            # kept so _vod_seek rebuilds the exact same track selection
-            "audio_idx": audio_idx, "subtitle_idx": subtitle_idx,
-        }
-        vod_sessions[sid] = rec
-        return {**rec, "session_id": sid}
+    except Exception:
+        with vod_lock:
+            _vod_detach_locked(sid)
+        shutil.rmtree(sess_dir, ignore_errors=True)
+        return ("not_found",)
+    with vod_lock:
+        if vod_sessions.get(sid) is rec:
+            rec["proc"] = proc
+            rec["status"] = "running"
+            rec["last_access"] = time.time()
+            return {**rec, "session_id": sid}
+    # Superseded while we were spawning (a newer start by the same user, or
+    # an admin kill) — dispose our encoder rather than leaking it.
+    _vod_dispose(sid, {"proc": proc})
+    return ("conflict",)
 
 
 def _vod_seek(sid: str, position: float) -> dict | None:
     """Restart a session's ffmpeg at `position` — same sid, wiped dir,
     generation+1 (the playlist URL carries ?g=<gen> as a cache-buster).
-    Returns the updated record, or None for an unknown sid."""
-    with vod_lock:
+    Returns the updated record, or None for an unknown sid.
+
+    Three phases so vod_lock is never held across slow work (proc.wait,
+    rmtree, the ffprobe inside the command builder) — the per-segment
+    _authcheck_vod heartbeat contends on this lock, so a seek that held it
+    for 5+ s would stall every VOD viewer's segment fetches."""
+    with vod_lock:  # phase 1: take exclusive hold of the proc handle
         sess = vod_sessions.get(sid)
-        if not sess:
-            return None
-        proc = sess.get("proc")
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-        sess_dir = _vod_session_dir(sid)
-        shutil.rmtree(sess_dir, ignore_errors=True)
-        sess_dir.mkdir(parents=True, exist_ok=True)
-        position = max(0.0, float(position or 0.0))
+        if not sess or sess.get("status") == "seeking":
+            return None  # unknown, or a concurrent seek already in flight
+        old_proc = sess.get("proc")
+        sess["proc"] = None
+        sess["status"] = "seeking"
+        sess["last_access"] = time.time()  # don't get idle-reaped mid-seek
+        rel_path = sess["rel_path"]
+        audio_idx = sess.get("audio_idx")
+        subtitle_idx = sess.get("subtitle_idx")
         duration = sess.get("duration")
-        if duration is not None and position >= duration:
-            position = max(0.0, duration - 1.0)
-        try:
-            cmd = _vod_build_cmd(sess_dir, sess["rel_path"], position,
-                                 sess.get("audio_idx"), sess.get("subtitle_idx"))
-        except Exception:
-            # Source vanished mid-session (e.g. library cleanup) — drop it.
-            _vod_kill_session_locked(sid)
-            return None
-        sess["proc"] = _spawn_ffmpeg(cmd, sess_dir / "ffmpeg.log")
-        sess["start_offset"] = position
-        sess["generation"] = int(sess.get("generation") or 0) + 1
-        sess["last_access"] = time.time()
-        sess["status"] = "running"
-        return dict(sess)
+    # phase 2 (unlocked): all the slow work
+    _vod_dispose(sid, {"proc": old_proc})  # terminate + wait + rmtree
+    sess_dir = _vod_session_dir(sid)
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    position = max(0.0, float(position or 0.0))
+    if duration is not None and position >= duration:
+        position = max(0.0, duration - 1.0)
+    try:
+        cmd = _vod_build_cmd(sess_dir, rel_path, position,
+                             audio_idx, subtitle_idx)
+    except Exception:
+        # Source vanished mid-session (e.g. library cleanup) — drop it.
+        _vod_kill_session(sid)
+        return None
+    proc = _spawn_ffmpeg(cmd, sess_dir / "ffmpeg.log")
+    with vod_lock:  # phase 3: reinstall, unless killed while we worked
+        if vod_sessions.get(sid) is sess:
+            sess["proc"] = proc
+            sess["start_offset"] = position
+            sess["generation"] = int(sess.get("generation") or 0) + 1
+            sess["last_access"] = time.time()
+            sess["status"] = "running"
+            return dict(sess)
+    # Session was killed (admin/stop/reaper) during phase 2 — don't leak the
+    # freshly spawned encoder.
+    _vod_dispose(sid, {"proc": proc})
+    return None
 
 
 def _vod_stop(sid: str) -> bool:
-    with vod_lock:
-        if sid not in vod_sessions:
-            return False
-        _vod_kill_session_locked(sid)
-        return True
+    return _vod_kill_session(sid)
 
 
 def _vod_reaper():
@@ -5399,24 +5493,37 @@ def _vod_reaper():
     (last_access via _authcheck_vod) for VOD_IDLE_TIMEOUT_S. Dead ffmpeg is
     only reaped once last_access is >30s old — grace so a just-started proc
     that crashed instantly still leaves its ffmpeg.log inspectable and a
-    session isn't reaped between /api/vod/start and the first fetch."""
+    session isn't reaped between /api/vod/start and the first fetch.
+    Detach under the lock, dispose (proc.wait/rmtree) outside it."""
     while True:
         time.sleep(5)
         try:
             now = time.time()
+            doomed = []
             with vod_lock:
                 for sid, sess in list(vod_sessions.items()):
                     idle = now - float(sess.get("last_access") or 0)
                     proc = sess.get("proc")
                     dead = proc is not None and proc.poll() is not None
                     if idle > VOD_IDLE_TIMEOUT_S or (dead and idle > 30):
-                        print(f"vod: reaping session {sid} "
-                              f"({'dead ffmpeg' if dead else 'idle'}, "
-                              f"idle {idle:.0f}s)", file=sys.stderr)
-                        _vod_kill_session_locked(sid)
+                        doomed.append((sid, _vod_detach_locked(sid), dead, idle))
+            for sid, sess, dead, idle in doomed:
+                print(f"vod: reaping session {sid} "
+                      f"({'dead ffmpeg' if dead else 'idle'}, "
+                      f"idle {idle:.0f}s)", file=sys.stderr)
+                _vod_dispose(sid, sess)
         except Exception as e:
             print(f"vod reaper error: {e}", file=sys.stderr)
 
+
+# Orphan sweep before the reaper starts: vod_sessions is memory-only, so any
+# dirs left by a previous process (crash / deploy restart) have no registry
+# entry and would otherwise sit on the VOD volume forever (_cleanup_hls
+# deliberately skips this tree). Single gunicorn worker (-w 1), so there's no
+# sibling process whose live sessions this could wipe.
+if VOD_DIR_BASE.exists():
+    for _orphan in VOD_DIR_BASE.iterdir():
+        shutil.rmtree(_orphan, ignore_errors=True)
 
 threading.Thread(target=_vod_reaper, daemon=True, name="vod-reaper").start()
 
@@ -5475,6 +5582,9 @@ def api_vod_start():
                 "message": f"All {VOD_MAX_SESSIONS} streams in use — "
                            "try again later",
             }), 409
+        if res[0] == "conflict":
+            # A newer start by the same user superseded this one mid-spawn.
+            return jsonify({"error": "vod_conflict"}), 409
         return jsonify({"error": "not_found"}), 404
     return jsonify({
         "session_id": res["session_id"],
@@ -5519,9 +5629,8 @@ def api_vod_status():
     sess = _vod_owned_session(sid)
     if not sess:
         return jsonify({"error": "not_found"}), 404
-    # Buffer depth: segments on disk × segment duration. Approximate (the
-    # delete_segments window trims old ones eventually) but monotone enough
-    # for a "buffering ahead" readout.
+    # Buffer depth: segments on disk × segment duration (nothing is deleted
+    # for VOD, so this is the full transcoded range from start_offset).
     try:
         n_segs = sum(1 for p in _vod_session_dir(sid).glob("seg_*.m4s"))
         transcoded_ahead_s = n_segs * float(HLS_SEG_TIME)
@@ -5530,9 +5639,11 @@ def api_vod_status():
     status = sess.get("status", "running")
     proc = sess.get("proc")
     if proc is not None and proc.poll() is not None:
-        # Distinguish "transcode finished/died" from "running" without a
-        # watcher thread: poll() at read time is fresh enough.
-        status = "ended"
+        # poll() at read time is fresh enough — but a clean exit (rc 0,
+        # transcode complete) and a mid-file crash are different answers:
+        # the client treats "ended" as "the whole remainder is on disk" and
+        # stops polling, which would leave a crash looking fully buffered.
+        status = "ended" if proc.returncode == 0 else "error"
     return jsonify({
         "status": status,
         "start_offset": sess["start_offset"],

@@ -161,7 +161,7 @@ Private Netflix-style on-demand playback for logged-in users, layered next to (n
 VOD ffmpeg differs from live on purpose:
 - **No `-re`** — input paced by `-readrate` (`VOD_READRATE=2.0`), so the encoder builds buffer ahead of the viewer at 2× instead of crawling at realtime. Seeks and startup feel snappy without racing the disk.
 - **No `-tune zerolatency`** — there's no live edge to chase.
-- **Rolling window, not EVENT playlist**: `VOD_HLS_LIST_SIZE=900` segments (~15 min @ 1 s). `/hls` is a ~1.5 GiB tmpfs shared with the live stream — a full-movie EVENT playlist would exhaust it. 15 min of back-buffer covers realistic rewinds; anything further is a seek (below).
+- **Full playlist, nothing deleted** (`-hls_list_size 0`, no `delete_segments`, no `omit_endlist`): with the paced encoder running ahead of the 1× viewer, *any* rolling window eventually slides past the playhead and deletes the segment the player needs next — a deterministic mid-film stall. Instead the whole transcoded range stays on disk (back-seek within it is free and client-side) and ffmpeg writes `#EXT-X-ENDLIST` at completion so the player gets a real `ended`. Affordable because `/hls/vod` is a **disk-backed volume** (`jetstream-vod` in compose, nested over the `/hls` tmpfs and mounted in both containers) — bounded by `VOD_MAX_SESSIONS` × one film, the startup orphan sweep, and the idle reaper.
 - `VOD_FORCE_CPU=1` optionally pins VOD to libx264, reserving the GPU's limited NVENC sessions for live + preroll.
 
 ### Seek model
