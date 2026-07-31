@@ -52,14 +52,19 @@ Don't rely on `docker cp` for `app.py` on prod — it survives until the next `d
 
 ## Endpoints
 
-Four access tiers. **Viewer** and **friend** are both invite tokens (the `lt` cookie, minted from the admin page, no password); **user** is an admin-created account (username + password at `/login`, `js_user` session cookie — distinct from `lt`); **admin** is Traefik basicauth. A token's tier is its `level` field in `tokens.json` (`viewer` | `friend`; tokens predating the field default to `viewer`). The admin token (`_admin_`) is the implicit top tier.
+Four access tiers. **Viewer** and **friend** are both invite tokens (the `lt` cookie, minted from the admin page, no password); **user** is an account (username + password at `/login`, `js_user` session cookie — distinct from `lt`); **admin** is Traefik basicauth. A token's tier is its `level` field in `tokens.json` (`viewer` | `friend`; tokens predating the field default to `viewer`). The admin token (`_admin_`) is the implicit top tier.
+
+Accounts are created two ways: by the host (admin Users panel) or by **invite-gated self-registration** — a holder of a `friend`-level code can create their own account from the home screen. There is no open registration; viewer-level codes stay watch-only. Codes are reusable (one link covers a household); a leaked link is remedied by deleting the token and the accounts it minted (`invited_by` / `invite_token` on each user record records the provenance).
 
 Public (no token — exempt from the viewer gate):
+- `GET /` (unauthenticated) — the **home screen** (`static/home.html`): enter a friend code, or sign in. A friend-level code additionally offers "create an account".
+- `POST /api/invite/redeem` `{code}` — type-in twin of the `?t=` invite link; sets the `lt` cookie. Returns `{ok, level, can_register}`. Rate-limited 10/60 s per IP.
+- `POST /api/auth/register` `{code, username, password}` — invite-gated signup; requires a `friend`-level code (re-validated server-side, never trusted from the redeem step). Auto-logs-in on success. Rate-limited 5 created accounts/hour per IP (validation errors don't consume budget).
 - `GET /api/now-playing` — feed for external displays (e.g. a living-room hub). Returns `{"title", "playing", "is_live", "position_seconds", "duration_seconds", "server_unix"}` with the currently-playing title prettified from the raw filename (scene-release cruft trimmed — `Hokum 2026 REPACK 1080p ...mkv` → `Hokum 2026`). `title` is `""`, `playing` is `false`, and the timing fields are `null` when idle; `server_unix` lets a poller detect a stale/cached reply. Deliberately tokenless and non-sensitive (no paths, viewers, or tokens leak). 2 s `Cache-Control`. Point a display at it with e.g. `JETSTREAM_TITLE_URL=https://live.thelunadog.com/api/now-playing`.
 
 Viewer (token-gated unless `viewer_public=true`):
-- `GET /` — viewer page. Shows a "🎛 Controls" link when the token can control (`can_control` in `/api/status`).
-- `GET /api/status` — current source, position, viewer count, `server_unix` for client clock-sync, plus `can_control` + `level` for the calling token
+- `GET /` — viewer page. Shows a "🎛 Controls" link when the token can control (`can_control` in `/api/status`), and either "🎬 My library" or "Sign in" depending on `user`.
+- `GET /api/status` — current source, position, viewer count, `server_unix` for client clock-sync, plus `can_control` + `level` for the calling token and `user` (username, or `null` when not signed in)
 - `GET /hls/stream.m3u8`, `/hls/run/<id>/init_av.mp4`, `/hls/run/<id>/seg_av_NNNNN.m4s` — HLS manifest + segments (served by nginx, auth-gated via subrequest to Flask)
 - `GET /api/_authcheck` — internal nginx `auth_request` target. Also fires `_track_viewer` so the active-viewers list keeps working with `/hls/*` no longer hitting Flask.
 
@@ -70,8 +75,9 @@ Friend (a `friend`-level invite token; never needs the admin password):
 - `GET /api/control/browse?path=…`
 - These are the same view functions as the matching `/admin/api/*` routes (a second route alias), gated to `friend`+`admin` tokens by the request gate. Host-only surface (settings, tokens, viewers, perf) is **not** aliased.
 
-User (`js_user` session — admin-created accounts, no self-registration):
-- `GET /login` — username + password. Rate-limited 5 attempts / 60 s per IP. Sets `js_user` (30 d). Passwords are scrypt-hashed (stdlib); sessions are server-side (`/data/sessions.json`) and revoked on password reset / disable / delete.
+User (`js_user` session — host-created, or self-registered with a `friend` code):
+- `GET /login` — username + password. Rate-limited 5 attempts / 60 s per IP. Sets `js_user` (30 d). Passwords are scrypt-hashed (stdlib); sessions are server-side (`/data/sessions.json`) and revoked on password reset / disable / delete. Post-login lands on `/home`.
+- `GET /home` — the hub: pick **live stream** or **my library**.
 - `GET /library` — private VOD library: grid + search, backed by `/api/user/library/{browse,search}`.
 - `POST /api/vod/start` `{path}` — spins up a private on-demand HLS stream under `/hls/vod/<session_id>/` that only that user's session can fetch. One session per user; global cap `VOD_MAX_SESSIONS` (default 2) → `409 vod_capacity` beyond.
 - `POST /api/vod/seek` `{to_seconds}` — kill ffmpeg + restart with `-ss` (fresh playlist generation; `?g=` cache-buster).

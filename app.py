@@ -55,6 +55,15 @@ USER_SESSION_TTL = 60 * 60 * 24 * 30  # 30 days
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
 LOGIN_RATE_WINDOW = 60   # seconds
 LOGIN_RATE_MAX = 5       # per-IP login attempts per window
+# Invite-gated self-registration: possessing a FRIEND-level code lets its
+# holder create an account (viewer-level invites stay watch-only). There is
+# no open registration. Codes are reusable — one friend link can cover a
+# household; a leaked link is remedied by deleting the token + accounts.
+REGISTER_LEVELS = frozenset({"friend"})
+INVITE_RATE_WINDOW = 60   # seconds
+INVITE_RATE_MAX = 10      # per-IP code-redeem attempts (guards code guessing)
+REGISTER_RATE_WINDOW = 3600  # seconds
+REGISTER_RATE_MAX = 5        # per-IP signups per hour
 PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
 RECENT_FILE = Path(os.environ.get("RECENT_FILE", "/data/recent.json"))
 RECENT_LIMIT = int(os.environ.get("RECENT_LIMIT", "50"))
@@ -491,6 +500,13 @@ user_sessions: dict[str, dict] = {}
 login_rate_lock = threading.Lock()
 login_rate: dict[str, list[float]] = {}
 
+# Same shape for the two pre-auth home-screen endpoints. Separate buckets so
+# a burst of bad code guesses can't lock out a legitimate signup.
+invite_rate_lock = threading.Lock()
+invite_rate: dict[str, list[float]] = {}
+register_rate_lock = threading.Lock()
+register_rate: dict[str, list[float]] = {}
+
 
 def _atomic_write_json(path: Path, obj) -> None:
     """Write-then-rename so a crash mid-write can't leave a truncated JSON
@@ -603,11 +619,17 @@ def _revoke_user_sessions(user_id: str) -> None:
 
 
 def _ip_rate_check(bucket: dict[str, list[float]], lock: threading.Lock,
-                   ip: str, window: float, max_n: int) -> bool:
+                   ip: str, window: float, max_n: int,
+                   record: bool = True) -> bool:
     """Generic per-IP rolling-window rate check (the shape _chat_rate_check
     and friends each hand-roll). Records the attempt timestamp on success;
     sweeps fully-stale rows each call so scanner IPs that never return
-    don't leave permanent entries."""
+    don't leave permanent entries.
+
+    `record=False` peeks without consuming budget — for endpoints that should
+    only charge on the outcome worth limiting (e.g. registration charges a
+    created account, not a mistyped password; otherwise two typos lock a
+    household out for an hour)."""
     now = time.time()
     cutoff = now - window
     with lock:
@@ -618,7 +640,8 @@ def _ip_rate_check(bucket: dict[str, list[float]], lock: threading.Lock,
         if len(timestamps) >= max_n:
             bucket[ip] = timestamps
             return False
-        timestamps.append(now)
+        if record:
+            timestamps.append(now)
         bucket[ip] = timestamps
         return True
 
@@ -982,31 +1005,9 @@ _load_custom_reactions()
 _load_settings()
 
 
-NO_TOKEN_PAGE = """<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>jetstream — invite required</title>
-<style>
-  body { background: #0a0a0a; color: #888; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-         display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-  .card { text-align: center; max-width: 30rem; padding: 2rem; }
-  h1 { color: #c00; font-size: 1.4rem; margin: 0 0 1rem; letter-spacing: 0.05em; }
-  p { line-height: 1.5; margin: 0.6rem 0; }
-  .small { color: #555; font-size: 0.85rem; margin-top: 1.5rem; }
-  .signin { display: inline-block; margin-top: 1.4rem; padding: 0.5rem 1.1rem;
-            color: #38bdf8; text-decoration: none; border: 1px solid #1d4c66;
-            background: #12303f; border-radius: 999px; font-size: 0.9rem; }
-</style>
-</head><body>
-<div class="card">
-  <h1>JETSTREAM</h1>
-  <p>You need an invite link to watch.</p>
-  <p class="small">Ask the host for one — it'll look like<br><code>live.thelunadog.com/?t=…</code></p>
-  <!-- Account holders reach the site through here, not through an invite:
-       without this link a user with credentials but no `lt` cookie has no
-       reachable door at all (this page IS the bare-URL response). -->
-  <a class="signin" href="/login">Have an account? Sign in</a>
-</div></body></html>"""
+# (The old inline NO_TOKEN_PAGE lived here. It was a dead end — no way to
+# type a code, no way in for an account holder — and is now static/home.html,
+# served by the gate for unauthenticated `/` and `/controls`.)
 
 
 def _client_ip() -> str:
@@ -3447,18 +3448,22 @@ def _gate_viewer_routes():
     # exempt too (login.html links it); nothing else static is opened up —
     # the /build/ bundles stay token-gated so a private instance doesn't hand
     # its full client-side route map to anonymous scanners.
-    if p in ("/login", "/api/auth/login", "/jetstream-theme.css"):
+    if p in ("/login", "/api/auth/login", "/jetstream-theme.css",
+             # The home screen's two doors, both necessarily pre-auth:
+             # redeem a friend code, or register with one.
+             "/api/invite/redeem", "/api/auth/register"):
         return None
     if p == "/api/_authcheck_vod":
         return None  # nginx subrequest endpoint — has its own logic below
     # v2 user area: the library browser + VOD control APIs require a logged-in
     # user session (never an invite token — invite links stay watch/control
     # only). Pages redirect to login; APIs get JSON 401s.
-    if (p == "/library" or p.startswith("/api/user/") or p.startswith("/api/vod/")
+    if (p in ("/library", "/home") or p.startswith("/api/user/")
+            or p.startswith("/api/vod/")
             or p in ("/api/auth/logout", "/api/auth/me")):
         if _session_user():
             return None
-        if p == "/library":
+        if p in ("/library", "/home"):
             return redirect("/login?next=" + urllib.parse.quote(p))
         return jsonify({"error": "auth_required"}), 401
     # Control surface (the /controls page + /api/control/* endpoints) requires
@@ -3482,7 +3487,7 @@ def _gate_viewer_routes():
             _mark_token_seen(request.cookies.get(TOKEN_COOKIE))
             return None
         if p == "/controls":
-            return NO_TOKEN_PAGE, 401
+            return send_from_directory("static", "home.html"), 401
         return ("", 403)
     cookie_t = request.cookies.get(TOKEN_COOKIE)
     if _valid_token(cookie_t):
@@ -3506,7 +3511,11 @@ def _gate_viewer_routes():
         if settings.get("viewer_public"):
             return None  # public mode — anyone can watch
     if p == "/":
-        return NO_TOKEN_PAGE, 401
+        # The front door: redeem a friend code, or sign in. Replaces the old
+        # dead-end "you need an invite link" page — that page had no way in
+        # for someone holding credentials, and no way to TYPE a code at all
+        # (codes only ever arrived as a ?t= URL).
+        return send_from_directory("static", "home.html"), 401
     return ("", 401)
 
 
@@ -3602,6 +3611,118 @@ def api_auth_login():
         httponly=True, secure=True, samesite="Lax",
     )
     return resp
+
+
+@app.route("/api/invite/redeem", methods=["POST"])
+def api_invite_redeem():
+    """Type-in twin of the ?t=<code> invite link, for the home screen.
+    Validates a code and sets the same `lt` cookie the link flow sets.
+    Reports whether the code also unlocks registration so the page can offer
+    the account upgrade."""
+    if not _ip_rate_check(invite_rate, invite_rate_lock, _trusted_client_ip(),
+                          INVITE_RATE_WINDOW, INVITE_RATE_MAX):
+        return jsonify({"error": "rate_limited"}), 429
+    code = str((request.get_json(silent=True) or {}).get("code") or "").strip()
+    level = _token_level(code)
+    # The admin pseudo-token is not a redeemable invite — it's minted behind
+    # Traefik basicauth and must never be enterable as a code.
+    if not level or code == ADMIN_TOKEN_ID:
+        return jsonify({"error": "bad_code"}), 401
+    _mark_token_seen(code)
+    resp = jsonify({
+        "ok": True,
+        "level": level,
+        "can_register": level in REGISTER_LEVELS,
+    })
+    resp.set_cookie(
+        TOKEN_COOKIE, code,
+        max_age=TOKEN_COOKIE_MAX_AGE,
+        httponly=True, secure=True, samesite="Lax",
+    )
+    return resp
+
+
+@app.route("/api/auth/register", methods=["POST"])
+def api_auth_register():
+    """Invite-gated self-registration: a FRIEND-level code (REGISTER_LEVELS)
+    lets its holder create an account. There is no open registration — the
+    code is re-validated here rather than trusted from the redeem step, so a
+    client can't skip straight to this endpoint.
+
+    Codes are reusable by design (one friend link, several housemates). If a
+    link leaks, the remedy is deleting the token and the accounts from
+    /admin, not a per-code counter."""
+    ip = _trusted_client_ip()
+    # Peek, don't charge: budget is spent on accounts actually CREATED (see
+    # the record=True call below), not on a mistyped password — otherwise two
+    # typos lock a whole household (one NAT IP) out for the hour.
+    if not _ip_rate_check(register_rate, register_rate_lock, ip,
+                          REGISTER_RATE_WINDOW, REGISTER_RATE_MAX,
+                          record=False):
+        return jsonify({"error": "rate_limited"}), 429
+    data = request.get_json(silent=True) or {}
+    code = str(data.get("code") or "").strip()
+    level = _token_level(code)
+    if not level or code == ADMIN_TOKEN_ID:
+        # A bad code here is code-guessing, the same attack /api/invite/redeem
+        # faces — charge it to the shared invite budget so guessing stays
+        # bounded even though validation errors are free.
+        _ip_rate_check(invite_rate, invite_rate_lock, ip,
+                       INVITE_RATE_WINDOW, INVITE_RATE_MAX)
+        return jsonify({"error": "bad_code"}), 401
+    if level not in REGISTER_LEVELS:
+        return jsonify({"error": "code_not_friend"}), 403
+    username = str(data.get("username") or "").strip().lower()
+    password = str(data.get("password") or "")
+    if not USERNAME_RE.match(username):
+        return jsonify({"error": "bad_username",
+                        "message": "3-32 chars, a-z 0-9 _ . -"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "bad_password", "message": "min 8 chars"}), 400
+    scrypt_rec = _hash_password(password)  # slow KDF — do it outside the lock
+    with users_lock:
+        if any(u["username"] == username for u in users):
+            return jsonify({"error": "duplicate"}), 409
+        rec = {
+            "id": secrets.token_urlsafe(12),
+            "username": username,
+            "scrypt": scrypt_rec,
+            "created": time.time(),
+            "last_login": time.time(),
+            "disabled": False,
+            # Provenance: which invite minted this account. Lets the host see
+            # who vouched for whom, and find every account from a leaked code.
+            "invited_by": _token_label(code),
+            "invite_token": code,
+        }
+        users.append(rec)
+        _save_users()
+    # Charge the budget now that an account actually exists.
+    _ip_rate_check(register_rate, register_rate_lock, ip,
+                   REGISTER_RATE_WINDOW, REGISTER_RATE_MAX)
+    print(f"[users] register {username!r} via invite "
+          f"{_token_label(code)!r}", file=sys.stderr, flush=True)
+    sid = _create_user_session(rec["id"])
+    resp = jsonify({"ok": True, "username": username})
+    # Log them straight in, and keep the invite cookie so the live stream
+    # keeps working in the same session.
+    resp.set_cookie(
+        USER_SESSION_COOKIE, sid,
+        max_age=USER_SESSION_TTL,
+        httponly=True, secure=True, samesite="Lax",
+    )
+    resp.set_cookie(
+        TOKEN_COOKIE, code,
+        max_age=TOKEN_COOKIE_MAX_AGE,
+        httponly=True, secure=True, samesite="Lax",
+    )
+    return resp
+
+
+@app.route("/home")
+def hub_page():
+    # Gate redirects logged-out browsers to /login before this runs.
+    return send_from_directory("static", "hub.html")
 
 
 @app.route("/api/auth/logout", methods=["POST"])

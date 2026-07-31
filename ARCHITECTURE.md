@@ -147,6 +147,10 @@ Server restart wipes the chat — intentional, no persistence.
 
 Per-friend invite tokens live in `tokens.json`. Admin mints with a label, viewer hits `?t=<token>`, server sets `lt` cookie (90d). All non-admin paths gated by `_gate_viewer_routes()` unless `settings.viewer_public=true`. Admin paths gated externally by Traefik basicauth on prod (no auth on dev — localhost-only).
 
+**Two ways an account is born** (v2.1): the host creates one from the admin Users panel, or a holder of a **`friend`-level** invite code self-registers from the home screen (`POST /api/auth/register`). There is no open registration — the code is re-validated server-side on every signup rather than trusted from the preceding `/api/invite/redeem` call, so a client can't skip straight to registration. Codes are deliberately reusable (one link per household); each user record keeps `invited_by`/`invite_token` so a leaked link's accounts can all be found and removed. Signup budget is charged on accounts *created*, not on attempts — otherwise two mistyped passwords would lock a whole NAT'd household out for the hour; bad-code attempts are charged to the invite-guessing bucket instead.
+
+**The front door** is `static/home.html`, served by the gate for unauthenticated `/` and `/controls` (it replaced an inline dead-end page that offered neither a code field nor a login link). Signed-in users land on `static/hub.html` at `/home` and choose live stream vs on-demand.
+
 ## VOD engine
 
 Private Netflix-style on-demand playback for logged-in users, layered next to (not into) the live pipeline. The live stream is untouched.

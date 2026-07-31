@@ -137,7 +137,9 @@ const submitBtn = document.getElementById("submit-btn");
 function safeNext() {
   const next = new URLSearchParams(location.search).get("next") || "";
   if (next.startsWith("/") && !next.startsWith("//")) return next;
-  return "/library";
+  // Default to the hub, not straight to the library — signing in should let
+  // you pick live stream vs on-demand.
+  return "/home";
 }
 
 function showError(msg) {

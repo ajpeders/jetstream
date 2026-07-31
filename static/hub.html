@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jetstream — home</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230b0f14"/><path d="M18 44V18l26 13-26 13z" fill="%2338bdf8"/></svg>'>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0a0a0a;
+    color: #e8e8e8;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+  header {
+    padding: 0.7rem clamp(0.8rem, 2vw, 1.25rem);
+    background: #0d1219;
+    border-bottom: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    display: flex;
+    align-items: center;
+    gap: 0.6rem 0.75rem;
+    flex-wrap: wrap;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 760;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    white-space: nowrap;
+  }
+  header h1::before {
+    content: "";
+    display: inline-block;
+    width: 0.58rem;
+    height: 0.58rem;
+    border-radius: 999px;
+    background: var(--js-accent, #38bdf8);
+    box-shadow: 0 0 0 5px rgba(56, 189, 248, 0.12), 0 0 22px rgba(56, 189, 248, 0.7);
+    flex: 0 0 auto;
+  }
+  #who {
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.82rem;
+    margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #logout-btn {
+    background: var(--js-surface-2, #151d27);
+    color: var(--js-muted, #9aa6b5);
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 999px;
+    padding: 0.42rem 0.9rem;
+    min-height: 40px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  #logout-btn:hover { color: var(--js-text, #e7edf5); }
+
+  main {
+    flex: 1;
+    display: grid;
+    align-content: center;
+    gap: 1rem;
+    padding: clamp(1rem, 4vw, 2.5rem) clamp(0.8rem, 2vw, 1.25rem);
+    width: min(100%, 56rem);
+    margin: 0 auto;
+  }
+  .lead {
+    margin: 0;
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  .choices {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .choice {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 11rem;
+    padding: 1.25rem;
+    background: var(--js-surface, #111820);
+    border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    border-radius: var(--js-radius, 12px);
+    box-shadow: var(--js-shadow, 0 18px 60px rgba(0, 0, 0, 0.34));
+    color: inherit;
+    text-decoration: none;
+    transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+  }
+  .choice:hover {
+    background: var(--js-surface-2, #151d27);
+    border-color: rgba(56, 189, 248, 0.4);
+    transform: translateY(-2px);
+  }
+  .choice:focus-visible {
+    outline: none;
+    border-color: rgba(56, 189, 248, 0.72);
+    box-shadow: var(--js-focus-ring, 0 0 0 3px rgba(56, 189, 248, 0.16));
+  }
+  .choice .kicker {
+    color: var(--js-accent-text, #7dd3fc);
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .choice h2 {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 780;
+    color: var(--js-text, #e7edf5);
+  }
+  .choice p {
+    margin: 0;
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.86rem;
+    line-height: 1.45;
+  }
+  .choice .now {
+    margin-top: auto;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    color: var(--js-faint, #667386);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .choice .now strong {
+    color: var(--js-text, #e7edf5);
+    font-weight: 700;
+  }
+  .choice .go {
+    margin-top: auto;
+    color: var(--js-accent-text, #7dd3fc);
+    font-size: 0.84rem;
+    font-weight: 750;
+  }
+  .choice .now + .go { margin-top: 0.35rem; }
+
+  @media (max-width: 640px) {
+    .choices { grid-template-columns: minmax(0, 1fr); }
+    .choice { min-height: 0; padding: 1.1rem; }
+    #who { order: 5; margin-left: 0; flex-basis: 100%; }
+  }
+</style>
+<link rel="stylesheet" href="/jetstream-theme.css">
+</head>
+<body>
+<header>
+  <h1>jetstream</h1>
+  <span id="who"></span>
+  <button id="logout-btn" type="button">Sign out</button>
+</header>
+
+<main>
+  <p class="lead">Two ways to watch.</p>
+  <div class="choices">
+    <a class="choice" href="/">
+      <span class="kicker">Live</span>
+      <h2>Live stream</h2>
+      <p>Watch what everyone's watching, together.</p>
+      <span class="now" id="now-playing">&nbsp;</span>
+      <span class="go">Join the stream →</span>
+    </a>
+    <a class="choice" href="/library">
+      <span class="kicker">On demand</span>
+      <h2>My library</h2>
+      <p>Browse everything and watch on demand, privately.</p>
+      <span class="go">Open the library →</span>
+    </a>
+  </div>
+</main>
+
+<script>
+const whoEl = document.getElementById("who");
+const nowEl = document.getElementById("now-playing");
+
+// Session check — /home requires a session, so a 401 mid-visit (expired
+// cookie, signed out in another tab) means bounce to the login page.
+(async () => {
+  try {
+    const r = await fetch("/api/auth/me");
+    if (r.status === 401) { location.href = "/login?next=%2Fhome"; return; }
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && j.username) whoEl.textContent = "Signed in as " + j.username;
+  } catch {}
+})();
+
+// /api/now-playing is deliberately public/tokenless. It's a nicety, so any
+// failure just leaves the placeholder line alone.
+(async () => {
+  try {
+    const r = await fetch("/api/now-playing");
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && j.playing && j.title) {
+      nowEl.textContent = "";
+      nowEl.appendChild(document.createTextNode("Now playing: "));
+      const strong = document.createElement("strong");
+      strong.textContent = j.title;
+      nowEl.appendChild(strong);
+    } else {
+      nowEl.textContent = "Nothing playing right now.";
+    }
+  } catch {}
+})();
+
+document.getElementById("logout-btn").addEventListener("click", async () => {
+  try { await fetch("/api/auth/logout", { method: "POST" }); } catch {}
+  location.href = "/";
+});
+</script>
+</body>
+</html>

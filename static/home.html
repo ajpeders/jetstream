@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jetstream</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230b0f14"/><path d="M18 44V18l26 13-26 13z" fill="%2338bdf8"/></svg>'>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0a0a0a;
+    color: #e8e8e8;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    overflow-x: hidden;
+  }
+  .card {
+    width: 100%;
+    max-width: 22rem;
+    background: var(--js-surface, #111820);
+    border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    border-radius: var(--js-radius, 12px);
+    padding: 1.6rem 1.5rem 1.5rem;
+    box-shadow: var(--js-shadow, 0 18px 60px rgba(0, 0, 0, 0.34));
+  }
+  h1 {
+    margin: 0 0 0.2rem;
+    font-size: 1.05rem;
+    font-weight: 760;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  h1::before {
+    content: "";
+    display: inline-block;
+    width: 0.58rem;
+    height: 0.58rem;
+    border-radius: 999px;
+    background: var(--js-accent, #38bdf8);
+    box-shadow: 0 0 0 5px rgba(56, 189, 248, 0.12), 0 0 22px rgba(56, 189, 248, 0.7);
+    flex: 0 0 auto;
+  }
+  .sub {
+    margin: 0 0 1.1rem;
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.82rem;
+    line-height: 1.4;
+  }
+  label {
+    display: block;
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0.8rem 0 0.3rem;
+  }
+  input {
+    width: 100%;
+    min-height: 42px;
+    background: var(--js-surface-2, #151d27);
+    color: var(--js-text, #e7edf5);
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.95rem;
+    font-family: inherit;
+  }
+  input:focus {
+    outline: none;
+    border-color: rgba(56, 189, 248, 0.72);
+    box-shadow: var(--js-focus-ring, 0 0 0 3px rgba(56, 189, 248, 0.14));
+  }
+  .hint {
+    margin: 0.35rem 0 0;
+    color: var(--js-faint, #667386);
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+  button {
+    width: 100%;
+    min-height: 44px;
+    margin-top: 1.2rem;
+    background: rgba(56, 189, 248, 0.16);
+    color: var(--js-accent-text, #7dd3fc);
+    border: 1px solid rgba(56, 189, 248, 0.34);
+    border-radius: 999px;
+    font-size: 0.92rem;
+    font-weight: 750;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.12s ease, transform 0.12s ease;
+  }
+  button:hover { background: rgba(56, 189, 248, 0.24); transform: translateY(-1px); }
+  button:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+  /* Quiet variant — used for the optional "create an account" path so the
+     primary action on each state stays visually singular. */
+  button.quiet {
+    background: var(--js-surface-2, #151d27);
+    color: var(--js-text, #e7edf5);
+    border-color: var(--js-line-strong, rgba(148, 163, 184, 0.28));
+  }
+  button.quiet:hover { background: var(--js-surface-3, #1b2530); }
+
+  /* Big primary link that has to look and click like the submit button. */
+  a.action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 44px;
+    margin-top: 1.2rem;
+    padding: 0.5rem 0.8rem;
+    background: rgba(56, 189, 248, 0.16);
+    color: var(--js-accent-text, #7dd3fc);
+    border: 1px solid rgba(56, 189, 248, 0.34);
+    border-radius: 999px;
+    font-size: 0.92rem;
+    font-weight: 750;
+    text-align: center;
+    text-decoration: none;
+  }
+  a.action:hover { background: rgba(56, 189, 248, 0.24); }
+
+  .error {
+    display: none;
+    margin: 0.9rem 0 0;
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.83rem;
+    line-height: 1.4;
+  }
+  .error.show { display: block; }
+  .ok {
+    margin: 0 0 0.4rem;
+    color: var(--js-accent-text, #7dd3fc);
+    font-size: 0.9rem;
+    font-weight: 750;
+  }
+  .divider {
+    margin: 1.2rem 0 0;
+    padding-top: 1rem;
+    border-top: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.8rem;
+    text-align: center;
+    line-height: 1.5;
+  }
+  .divider a {
+    color: var(--js-accent-text, #7dd3fc);
+    font-weight: 750;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    padding: 0 0.35rem;
+  }
+  .divider a:hover { text-decoration: underline; }
+  .back {
+    margin: 1.1rem 0 0;
+    font-size: 0.8rem;
+    text-align: center;
+  }
+  .back button {
+    width: auto;
+    margin: 0;
+    min-height: 40px;
+    padding: 0 0.9rem;
+    background: transparent;
+    border-color: transparent;
+    color: var(--js-muted, #9aa6b5);
+    font-weight: 650;
+  }
+  .back button:hover {
+    background: transparent;
+    color: var(--js-accent, #38bdf8);
+    transform: none;
+  }
+  [hidden] { display: none !important; }
+</style>
+<link rel="stylesheet" href="/jetstream-theme.css">
+</head>
+<body>
+<div class="card">
+  <h1>jetstream</h1>
+
+  <!-- ── State A: the front door ─────────────────────────────────────── -->
+  <section id="state-code">
+    <p class="sub">A private stream for friends. Enter the code you were sent to start watching.</p>
+    <form id="code-form">
+      <label for="code">Friend code</label>
+      <input id="code" name="code" type="text" autocomplete="one-time-code"
+             autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+      <p id="code-error" class="error" role="alert"></p>
+      <button id="code-btn" type="submit">Watch</button>
+    </form>
+    <p class="divider">Already have an account? <a href="/login">Sign in</a></p>
+  </section>
+
+  <!-- ── State B: code accepted, account is optional ──────────────────── -->
+  <section id="state-choice" hidden>
+    <p class="ok">Code accepted.</p>
+    <p class="sub">You're in. Head straight to the stream, or make an account first — it's optional, and you can always do it later.</p>
+    <a class="action" id="go-watch" href="/">Watch the live stream →</a>
+    <button class="quiet" id="go-register" type="button">Create an account — unlocks the on-demand library</button>
+  </section>
+
+  <!-- ── State C: invite-gated registration ───────────────────────────── -->
+  <section id="state-register" hidden>
+    <p class="sub">Create an account to browse the library and watch anything on demand, privately.</p>
+    <form id="register-form">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username"
+             autocapitalize="none" autocorrect="off" spellcheck="false" required>
+      <p class="hint">3–32 characters: lowercase letters, numbers, and <code>_ . -</code></p>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="new-password" required>
+      <p class="hint">At least 8 characters.</p>
+      <label for="password2">Confirm password</label>
+      <input id="password2" name="password2" type="password" autocomplete="new-password" required>
+      <p id="register-error" class="error" role="alert"></p>
+      <button id="register-btn" type="submit">Create account</button>
+    </form>
+    <p class="back"><button id="register-back" type="button">← Back</button></p>
+  </section>
+</div>
+
+<script>
+// ── View-state machine ────────────────────────────────────────────────
+// A (enter friend code) → B (accepted; watch or register) → C (register form)
+// B is only reached when the redeemed code carries can_register; a viewer-tier
+// code goes straight to "/" because the redeem response already cookied them.
+const views = {
+  code: document.getElementById("state-code"),
+  choice: document.getElementById("state-choice"),
+  register: document.getElementById("state-register"),
+};
+
+function show(name) {
+  for (const key of Object.keys(views)) views[key].hidden = key !== name;
+  const focusTarget = views[name].querySelector("input, a.action");
+  if (focusTarget) focusTarget.focus();
+}
+
+function setError(el, msg) {
+  el.textContent = msg;
+  el.classList.add("show");
+}
+function clearError(el) {
+  el.textContent = "";
+  el.classList.remove("show");
+}
+
+// The redeemed code is replayed on register — the server re-validates it, so
+// this is a convenience, not a trust boundary.
+let acceptedCode = "";
+
+// ── State A: redeem ───────────────────────────────────────────────────
+const codeInput = document.getElementById("code");
+const codeForm = document.getElementById("code-form");
+const codeError = document.getElementById("code-error");
+const codeBtn = document.getElementById("code-btn");
+
+// Convenience only: the real ?t= invite flow is handled server-side before
+// this page ever renders, so prefill and let the visitor press Watch.
+const deepCode = new URLSearchParams(location.search).get("t");
+if (deepCode) codeInput.value = deepCode;
+
+codeForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  clearError(codeError);
+  const code = codeInput.value.trim();
+  if (!code) {
+    setError(codeError, "Enter your friend code.");
+    return;
+  }
+  codeBtn.disabled = true;
+  codeBtn.textContent = "Checking…";
+  try {
+    const r = await fetch("/api/invite/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    if (r.ok) {
+      const j = await r.json().catch(() => ({}));
+      acceptedCode = code;
+      if (j && j.can_register) {
+        show("choice");
+      } else {
+        location.href = "/";
+        return;
+      }
+    } else if (r.status === 401) {
+      setError(codeError, "That code isn't valid.");
+    } else if (r.status === 429) {
+      setError(codeError, "Too many tries — wait a minute.");
+    } else {
+      setError(codeError, "Something went wrong — try again.");
+    }
+  } catch {
+    setError(codeError, "Network error — try again.");
+  }
+  codeBtn.disabled = false;
+  codeBtn.textContent = "Watch";
+});
+
+// ── State B: watch now, or upgrade to an account ──────────────────────
+document.getElementById("go-register").addEventListener("click", () => {
+  clearError(registerError);
+  show("register");
+});
+
+// ── State C: register ─────────────────────────────────────────────────
+const registerForm = document.getElementById("register-form");
+const registerError = document.getElementById("register-error");
+const registerBtn = document.getElementById("register-btn");
+const usernameInput = document.getElementById("username");
+const passwordInput = document.getElementById("password");
+const password2Input = document.getElementById("password2");
+
+document.getElementById("register-back").addEventListener("click", () => {
+  clearError(registerError);
+  show("choice");
+});
+
+// Mirrors the server's rules so mistakes surface without a round trip; the
+// server remains the authority.
+const USERNAME_RE = /^[a-z0-9_.-]{3,32}$/;
+
+registerForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  clearError(registerError);
+  const username = usernameInput.value.trim().toLowerCase();
+  const password = passwordInput.value;
+  if (!USERNAME_RE.test(username)) {
+    setError(registerError, "Username must be 3–32 characters, using letters, numbers, _ . or - only.");
+    return;
+  }
+  if (password.length < 8) {
+    setError(registerError, "Password must be at least 8 characters.");
+    return;
+  }
+  if (password !== password2Input.value) {
+    setError(registerError, "Passwords don't match.");
+    return;
+  }
+  registerBtn.disabled = true;
+  registerBtn.textContent = "Creating…";
+  try {
+    const r = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: acceptedCode, username, password }),
+    });
+    if (r.ok) {
+      location.href = "/home";
+      return;
+    }
+    const j = await r.json().catch(() => ({}));
+    const err = (j && j.error) || "";
+    if (r.status === 400 && (err === "bad_username" || err === "bad_password")) {
+      setError(registerError, (j && j.message) || "That won't work — try something else.");
+    } else if (r.status === 409) {
+      setError(registerError, "That username is taken.");
+    } else if (r.status === 403) {
+      setError(registerError, "That code can't create accounts.");
+    } else if (r.status === 401) {
+      setError(registerError, "That code isn't valid.");
+    } else if (r.status === 429) {
+      setError(registerError, "Too many tries — wait a minute.");
+    } else {
+      setError(registerError, "Couldn't create the account — try again.");
+    }
+  } catch {
+    setError(registerError, "Network error — try again.");
+  }
+  registerBtn.disabled = false;
+  registerBtn.textContent = "Create account";
+});
+</script>
+</body>
+</html>

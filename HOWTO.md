@@ -29,9 +29,18 @@ curl -u admin -X POST https://live.thelunadog.com/admin/api/tokens \
 - Send the friend `https://live.thelunadog.com/?t=<token>` — first visit sets the `lt` cookie (90 d), after which the bare URL works.
 - Revoke: delete the token in the Invites panel (or `DELETE /admin/api/tokens`). The cookie stops validating immediately.
 
-## Create a user account
+## Let friends make their own accounts
 
-Accounts are admin-created only — there is no self-registration. Admin UI → Users panel → username + password → Create. Or:
+Send a **`friend`-level** invite link. On the home screen they enter the code, and jetstream offers "create an account" alongside "watch now" — the account is optional and unlocks `/library` (on-demand VOD). Viewer-level codes stay watch-only and never see the offer.
+
+- There is no open registration: the code is required and re-validated server-side on every signup.
+- Codes are **reusable** — one link covers a household. Signups are capped at 5 accounts/hour per IP.
+- Each account records who invited it (`invited_by` + `invite_token` in `/data/users.json`), so if a link leaks you can find every account it minted: delete the token, then delete those users.
+- Watch the signups: `docker logs jetstream | grep '\[users\] register'`.
+
+## Create a user account (host-side)
+
+Admin UI → Users panel → username + password → Create. Or:
 
 ```sh
 curl -u admin -X POST https://live.thelunadog.com/admin/api/users \
