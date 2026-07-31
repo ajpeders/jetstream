@@ -103,6 +103,9 @@
     line-height: 1.4;
   }
   #error.show { display: block; }
+  .back { margin: 1.2rem 0 0; font-size: 0.8rem; text-align: center; }
+  .back a { color: var(--js-muted, #9aa6b5); text-decoration: none; }
+  .back a:hover { color: var(--js-accent, #38bdf8); }
 </style>
 <link rel="stylesheet" href="/jetstream-theme.css">
 </head>
@@ -119,6 +122,10 @@
     <p id="error" role="alert"></p>
     <button id="submit-btn" type="submit">Sign in</button>
   </form>
+  <!-- Reciprocal of the viewer header's Sign-in link: someone who landed here
+       by accident, or who holds only an invite and no account, needs a way
+       back to the shared stream. -->
+  <p class="back"><a href="/">← Back to the live stream</a></p>
 </div>
 <script>
 const form = document.getElementById("login-form");

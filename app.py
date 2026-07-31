@@ -993,12 +993,19 @@ NO_TOKEN_PAGE = """<!DOCTYPE html>
   h1 { color: #c00; font-size: 1.4rem; margin: 0 0 1rem; letter-spacing: 0.05em; }
   p { line-height: 1.5; margin: 0.6rem 0; }
   .small { color: #555; font-size: 0.85rem; margin-top: 1.5rem; }
+  .signin { display: inline-block; margin-top: 1.4rem; padding: 0.5rem 1.1rem;
+            color: #38bdf8; text-decoration: none; border: 1px solid #1d4c66;
+            background: #12303f; border-radius: 999px; font-size: 0.9rem; }
 </style>
 </head><body>
 <div class="card">
   <h1>JETSTREAM</h1>
   <p>You need an invite link to watch.</p>
   <p class="small">Ask the host for one — it'll look like<br><code>live.thelunadog.com/?t=…</code></p>
+  <!-- Account holders reach the site through here, not through an invite:
+       without this link a user with credentials but no `lt` cookie has no
+       reachable door at all (this page IS the bare-URL response). -->
+  <a class="signin" href="/login">Have an account? Sign in</a>
 </div></body></html>"""
 
 
@@ -5162,6 +5169,7 @@ def api_status():
         # field).
         viewer_count = _viewer_count()
         caller_level = _token_level(request.cookies.get(TOKEN_COOKIE))
+        caller_user = _session_user()
         return jsonify({
             "playing": active,
             "paused": current_paused,
@@ -5182,6 +5190,11 @@ def api_status():
             # host (full control surface) from a friend.
             "can_control": caller_level in CONTROL_LEVELS,
             "level": caller_level,
+            # v2 account tier: username when a js_user session is present,
+            # else None. Drives the header's Library / Sign-in link — without
+            # it an account holder watching via an invite link has no way to
+            # discover /library.
+            "user": (caller_user or {}).get("username"),
             # Vote-to-skip tally for the current item (viewer-facing button).
             "skip_votes": len(skip_votes),
             "skip_needed": _skip_threshold(viewer_count),
