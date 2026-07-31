@@ -340,6 +340,14 @@
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
     background: #7dcc99; box-shadow: 0 0 4px #7dcc99;
   }
+  /* Self-registered accounts carry the invite label that minted them, so a
+     leaked friend code can be traced to every account it created. Secondary
+     to the username: quieter colour, chip weight of the DISABLED badge. */
+  #users-panel .uvia {
+    flex-shrink: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 0.65rem; padding: 0.08rem 0.4rem; border-radius: 3px;
+    background: #18202c; color: #7f97b5; border: 1px solid #26364a;
+  }
   #users-panel .umeta { flex: 1; color: #555; font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #users-panel button { padding: 0.25rem 0.6rem; font-size: 0.75rem; }
   /* Active VOD panel — per-user private streams currently running. Host-only
@@ -639,6 +647,67 @@
     width: 12em;
     font-family: inherit;
   }
+  /* Subtitles picker — lives in the playback cluster (it IS a playback
+     control, not a host panel, so it ships on /controls too). Burn-in is
+     global: picking a track restarts ffmpeg for every viewer, hence the
+     notice line rather than a silent toggle. */
+  #subs-control { position: relative; display: none; }
+  #subs-btn {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.8rem;
+    min-height: 40px;
+    white-space: nowrap;
+  }
+  #subs-btn[aria-expanded="true"] { background: #333; border-color: #444; }
+  #subs-menu {
+    position: absolute;
+    bottom: calc(100% + 0.35rem);
+    left: 0;
+    min-width: 13rem;
+    max-width: min(22rem, 80vw);
+    max-height: 15rem;
+    overflow-y: auto;
+    background: #161616;
+    border: 1px solid #333;
+    border-radius: 4px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+    padding: 0.25rem;
+    z-index: 90;
+  }
+  #subs-menu[hidden] { display: none; }
+  #subs-menu button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-height: 40px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    padding: 0.4rem 0.55rem;
+    font-size: 0.82rem;
+    color: #ddd;
+  }
+  #subs-menu button:hover, #subs-menu button:focus { background: #262626; outline: none; }
+  #subs-menu button:focus-visible { box-shadow: inset 0 0 0 1px #6c6; }
+  #subs-menu button[aria-checked="true"] { color: #9c9; }
+  #subs-menu .tick { flex: 0 0 1em; color: #6c6; }
+  #subs-menu .subs-note {
+    padding: 0.4rem 0.55rem 0.3rem;
+    font-size: 0.7rem;
+    line-height: 1.35;
+    color: #888;
+    border-top: 1px solid #262626;
+    margin-top: 0.25rem;
+  }
+  #subs-notice {
+    flex-basis: 100%;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: #c9a;
+  }
+  #subs-notice:empty { display: none; }
   /* Anonymous chat panel — same shape as the viewer's, just scoped to admin
      styling. Sits at the bottom of the page, collapsible. */
   #chat-panel {
@@ -851,8 +920,14 @@
     <button data-delta="60">+1m</button>
     <button data-delta="600">+10m</button>
     <span class="spacer"></span>
+    <div id="subs-control">
+      <button type="button" id="subs-btn" aria-haspopup="true" aria-expanded="false" aria-controls="subs-menu"
+              title="Burned-in subtitles — affects everyone watching">Subtitles: Off</button>
+      <div id="subs-menu" role="menu" aria-label="Subtitle track" hidden></div>
+    </div>
     <input id="seek-input" type="text" placeholder="HH:MM:SS or seconds">
     <button id="seek-btn">Seek</button>
+    <div id="subs-notice" role="status" aria-live="polite"></div>
   </div>
 </div>
 <nav id="mobile-control-dock" aria-label="Playback controls">
@@ -1527,6 +1602,200 @@ broadcastSeek.addEventListener("keydown", e => {
   }
 });
 
+// --- Subtitles (burned-in) ------------------------------------------------
+// Subtitles here are NOT a per-viewer preference: the server burns the chosen
+// track into the shared encode, so switching restarts ffmpeg at the current
+// position and every viewer sees a ~2s blip. The UI says so out loud — a
+// silent toggle would look broken (or rude) otherwise.
+//
+// State is refreshed off the existing pollStatus tick (see the call in
+// pollStatus below) — no second timer. Probing costs more than /api/status,
+// so it re-fetches on source change, after a switch, and otherwise every few
+// ticks rather than every second.
+const subsControl = document.getElementById("subs-control");
+const subsBtn = document.getElementById("subs-btn");
+const subsMenu = document.getElementById("subs-menu");
+const subsNotice = document.getElementById("subs-notice");
+
+let subsState = null;        // last good GET payload, or null when unavailable
+let subsSourceKey = null;    // identity of the source the state belongs to
+let subsFetchInFlight = false;
+let subsForceRefresh = true; // fetch on the very first tick
+let subsTick = 0;
+let subsPostInFlight = false;
+
+function subsHide() {
+  subsState = null;
+  subsControl.style.display = "none";
+  subsCloseMenu();
+}
+
+function subsTrackLabel(idx) {
+  if (!subsState || idx == null) return "Off";
+  const t = (subsState.tracks || []).find(x => x.index === idx);
+  if (!t) return "Track " + idx;
+  return t.label || t.language || ("Track " + idx);
+}
+
+function subsRenderButton() {
+  if (!subsState) return;
+  subsBtn.textContent = "Subtitles: " + subsTrackLabel(subsState.current);
+  const disabled = subsState.enabled === false;
+  subsBtn.disabled = disabled;
+  subsBtn.title = disabled
+    ? "Subtitle burn-in is switched off on the server"
+    : "Burned-in subtitles — switching affects everyone watching and blips the stream ~2s";
+  if (disabled) subsCloseMenu();
+}
+
+function subsCloseMenu() {
+  subsMenu.hidden = true;
+  subsMenu.replaceChildren();
+  subsBtn.setAttribute("aria-expanded", "false");
+}
+
+function subsOpenMenu() {
+  if (!subsState || subsState.enabled === false) return;
+  subsMenu.replaceChildren();
+  const entries = [{ index: null, label: "Off" }].concat(
+    (subsState.tracks || []).map(t => ({
+      index: t.index,
+      label: t.label || t.language || ("Track " + t.index),
+    }))
+  );
+  for (const e of entries) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "menuitemradio");
+    const active = subsState.current === e.index || (e.index === null && subsState.current == null);
+    b.setAttribute("aria-checked", active ? "true" : "false");
+    const tick = document.createElement("span");
+    tick.className = "tick";
+    tick.textContent = active ? "✓" : "";
+    tick.setAttribute("aria-hidden", "true");
+    const name = document.createElement("span");
+    name.textContent = e.label;          // server string — textContent only
+    b.append(tick, name);
+    b.addEventListener("click", () => { subsCloseMenu(); subsChoose(e.index); });
+    subsMenu.appendChild(b);
+  }
+  if (subsState.first_play_delay) {
+    const note = document.createElement("div");
+    note.className = "subs-note";
+    note.textContent = "First use of a track plays without subtitles while it's extracted in the background — pick it again after a moment.";
+    subsMenu.appendChild(note);
+  }
+  subsMenu.hidden = false;
+  subsBtn.setAttribute("aria-expanded", "true");
+  const first = subsMenu.querySelector("button");
+  if (first) first.focus();
+}
+
+function subsSetNotice(text) {
+  subsNotice.textContent = text;
+  clearTimeout(subsSetNotice._t);
+  if (text) subsSetNotice._t = setTimeout(() => { subsNotice.textContent = ""; }, 9000);
+}
+
+async function subsChoose(idx) {
+  if (subsPostInFlight) return;
+  subsPostInFlight = true;
+  // Optimistic label; the poll below reconciles from the server.
+  if (subsState) { subsState.current = idx; subsRenderButton(); }
+  try {
+    const res = await fetch(`${API}/subtitles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subtitle_idx: idx }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 409 && data.error === "burn_in_disabled") {
+        subsSetNotice(data.message || "Subtitle burn-in is switched off on the server.");
+        showToast("Burn-in disabled");
+      } else if (res.status === 400 && data.error === "bad_track") {
+        subsSetNotice("That subtitle track is no longer available — the list has been refreshed.");
+        showToast("Unknown track");
+      } else {
+        const msg = data.error || ("HTTP " + res.status);
+        subsSetNotice("Subtitle switch failed: " + msg);
+        showToast("Subtitles failed: " + msg);
+      }
+      subsForceRefresh = true;
+      return;
+    }
+    showToast(idx == null ? "Subtitles off" : "Subtitles: " + subsTrackLabel(idx));
+    let notice = "Restarting the encode at the current position — everyone watching gets a ~2 second blip, and this changes subtitles for all viewers, not just you.";
+    if (idx != null && subsState && subsState.first_play_delay) {
+      notice += " First time on a track it plays without subtitles while it's extracted; pick it again in a minute to get them.";
+    }
+    subsSetNotice(notice);
+  } catch (e) {
+    subsSetNotice("Subtitle switch failed: " + e.message);
+    showToast("Subtitles failed: " + e.message);
+    subsForceRefresh = true;
+  } finally {
+    subsPostInFlight = false;
+    subsForceRefresh = true;
+  }
+}
+
+async function subsRefresh(status) {
+  // Called once per pollStatus tick. Bails cheaply when nothing can change.
+  if (!status || !status.playing) { subsSourceKey = null; subsHide(); return; }
+  const key = status.path || status.url || status.title || "playing";
+  if (key !== subsSourceKey) { subsSourceKey = key; subsForceRefresh = true; }
+  subsTick++;
+  if (!subsForceRefresh && subsTick % 5 !== 0) return;
+  if (subsFetchInFlight || subsPostInFlight) return;
+  subsFetchInFlight = true;
+  subsForceRefresh = false;
+  try {
+    const res = await fetch(`${API}/subtitles`);
+    const data = await res.json().catch(() => ({}));
+    // No stream / not a file source / source unavailable → nothing to offer.
+    if (!res.ok || !Array.isArray(data.tracks) || data.tracks.length === 0) {
+      subsHide();
+      return;
+    }
+    subsState = data;
+    subsControl.style.display = "block";
+    subsRenderButton();
+  } catch (e) {
+    subsHide();
+  } finally {
+    subsFetchInFlight = false;
+  }
+}
+
+subsBtn.addEventListener("click", () => {
+  if (subsMenu.hidden) subsOpenMenu(); else subsCloseMenu();
+});
+subsControl.addEventListener("keydown", e => {
+  if (e.key === "Escape" && !subsMenu.hidden) {
+    e.stopPropagation();
+    subsCloseMenu();
+    subsBtn.focus();
+    return;
+  }
+  if (subsMenu.hidden) return;
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault();
+  const items = Array.from(subsMenu.querySelectorAll("button"));
+  if (!items.length) return;
+  const i = items.indexOf(document.activeElement);
+  const next = e.key === "ArrowDown"
+    ? (i < 0 ? 0 : (i + 1) % items.length)
+    : (i <= 0 ? items.length - 1 : i - 1);
+  items[next].focus();
+});
+document.addEventListener("click", e => {
+  if (!subsMenu.hidden && !subsControl.contains(e.target)) subsCloseMenu();
+});
+document.addEventListener("focusin", e => {
+  if (!subsMenu.hidden && !subsControl.contains(e.target)) subsCloseMenu();
+});
+
 // Admin has no inline video preview — broadcast was removed in favour of
 // just controlling the stream (admin opens a viewer tab to actually watch).
 // Keep serverPaused state for control-button enable/disable logic.
@@ -1597,6 +1866,8 @@ async function pollStatus() {
     if (typeof s.server_unix === "number") {
       serverClockOffsetMs = s.server_unix * 1000 - Date.now();
     }
+    // Piggyback the subtitle state on this tick — no second timer.
+    subsRefresh(s);
   } catch (e) {}
 }
 
@@ -2215,12 +2486,15 @@ function renderUsers(items) {
       <span class="uname"></span>
       ${u.active_vod ? '<span class="udot" title="Streaming now"></span>' : ""}
       ${u.disabled ? '<span style="flex-shrink:0;font-size:0.65rem;letter-spacing:0.04em;font-weight:600;padding:0.08rem 0.4rem;border-radius:3px;background:#3a1818;color:#ff8a8a;border:1px solid #5a2424">DISABLED</span>' : ""}
+      ${u.invited_by ? '<span class="uvia" title="Self-registered with this invite code"></span>' : ""}
       <span class="umeta"></span>
       <button data-action="password">Password</button>
       <button data-action="disable">${u.disabled ? "Enable" : "Disable"}</button>
       <button data-action="delete" class="danger">Delete</button>
     `;
     li.querySelector(".uname").textContent = u.username;
+    // Host-created accounts have invited_by === null → no chip rendered above.
+    if (u.invited_by) li.querySelector(".uvia").textContent = `via ${u.invited_by}`;
     li.querySelector(".umeta").textContent =
       `created ${userWhen(u.created)} · last login ${userWhen(u.last_login)}`;
     for (const btn of li.querySelectorAll("button")) {

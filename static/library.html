@@ -304,6 +304,62 @@
   }
   #vol-slider { width: 80px; accent-color: var(--js-accent, #38bdf8); flex-shrink: 0; }
 
+  /* ---- Subtitles (burned in — switching restarts the transcode) -------- */
+  /* Hidden until /subtitles says the file has burnable text tracks. */
+  #cc-wrap { display: none; position: relative; flex-shrink: 0; }
+  #cc-wrap.available { display: inline-flex; }
+  #vod-controls #cc-btn {
+    font-size: 0.72rem; font-weight: 850; letter-spacing: 0.04em;
+  }
+  #vod-controls #cc-btn.on {
+    background: rgba(56, 189, 248, 0.16);
+    color: var(--js-accent-text, #7dd3fc);
+  }
+  #vod-controls #cc-btn:disabled { opacity: 0.45; cursor: default; }
+  #vod-controls #cc-btn:disabled:hover { background: transparent; }
+  #vod-controls #cc-btn:focus-visible,
+  #vod-controls #cc-menu button:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.28);
+  }
+  #cc-menu {
+    position: absolute; right: 0; bottom: calc(100% + 0.45rem); z-index: 40;
+    display: flex; flex-direction: column; gap: 0.15rem;
+    background: #111827;
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 10px;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.42);
+    padding: 0.3rem;
+    min-width: 11rem;
+    max-width: min(78vw, 20rem);
+    max-height: 52vh;
+    overflow-y: auto;
+  }
+  #cc-menu[hidden] { display: none; }
+  #vod-controls #cc-menu button {
+    width: 100%; min-width: 0; min-height: 40px;
+    justify-content: flex-start; gap: 0.45rem;
+    background: transparent; border-radius: 7px;
+    color: var(--js-text, #e7edf5);
+    font-size: 0.82rem; text-align: left; white-space: normal;
+    padding: 0.4rem 0.6rem;
+  }
+  #cc-menu .cc-tick {
+    flex-shrink: 0; width: 0.9rem;
+    color: var(--js-accent, #38bdf8); font-weight: 800;
+  }
+  #cc-menu .cc-label { min-width: 0; }
+  #cc-menu .cc-default {
+    color: var(--js-faint, #667386); font-size: 0.68rem; font-weight: 600;
+    margin-left: 0.35rem; white-space: nowrap;
+  }
+  #cc-menu .cc-note {
+    color: var(--js-faint, #667386);
+    font-size: 0.7rem; line-height: 1.35;
+    margin: 0.15rem 0 0; padding: 0.3rem 0.6rem 0.15rem;
+    border-top: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+  }
+
   /* ---- Toast ---------------------------------------------------------- */
   #toast {
     position: fixed;
@@ -380,6 +436,11 @@
     <button id="play-btn" title="Play / pause">▶</button>
     <span id="time-label">0:00 / 0:00</span>
     <input id="seek-bar" type="range" min="0" max="100" step="0.1" value="0" disabled>
+    <span id="cc-wrap">
+      <button id="cc-btn" type="button" title="Subtitles"
+              aria-haspopup="menu" aria-expanded="false" aria-label="Subtitles">CC</button>
+      <div id="cc-menu" role="menu" aria-label="Subtitles" hidden></div>
+    </span>
     <button id="mute-btn" title="Mute / unmute">🔊</button>
     <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="1" title="Volume">
     <button id="fs-btn" title="Fullscreen" style="display:none">⛶</button>
@@ -402,6 +463,9 @@ const seekBar = document.getElementById("seek-bar");
 const muteBtn = document.getElementById("mute-btn");
 const volSlider = document.getElementById("vol-slider");
 const fsBtn = document.getElementById("fs-btn");
+const ccWrap = document.getElementById("cc-wrap");
+const ccBtn = document.getElementById("cc-btn");
+const ccMenu = document.getElementById("cc-menu");
 const toastEl = document.getElementById("toast");
 
 function basename(p) { return (p || "").split("/").pop(); }
@@ -806,6 +870,7 @@ let statusTimer = null;
 let scrubbing = false;
 let seeking = false;  // an out-of-window /api/vod/seek round-trip in flight
 let beaconDone = false;
+let currentItem = null;   // item backing the active session (needed to restart it)
 
 const savedVol = parseFloat(localStorage.getItem("jetstream_volume"));
 if (isFinite(savedVol) && savedVol >= 0 && savedVol <= 1) {
@@ -860,6 +925,16 @@ function detachPlayer() {
   hardTeardown();
   video.removeAttribute("src");
   video.load();
+}
+
+// The one "sess.url changed, re-point the player at it" path. Every restart
+// (out-of-window seek, subtitle switch, fresh start) funnels through here so
+// there is a single teardown/attach/repaint sequence to reason about.
+function reattachSession() {
+  if (!sess) return;
+  attachPlayer(sess.url);
+  updateTimeUI();
+  pollVodStatus();
 }
 
 // ---- Resume progress reporting -----------------------------------------
@@ -924,6 +999,8 @@ function showPlayerView(title) {
 }
 
 function showLibraryView() {
+  hideSubtitleControl();
+  currentItem = null;
   playerView.hidden = true;
   libraryView.hidden = false;
   document.title = "jetstream — library";
@@ -933,18 +1010,34 @@ function showLibraryView() {
 
 // forceRestart=true sends an explicit start:0, which overrides the server's
 // automatic resume (used by the "Start over" toast action).
-async function startVod(item, forceRestart) {
+// startAt (seconds, absolute) is the subtitle-switch restart: an explicit
+// start likewise wins over resume-from-progress, so the pause is invisible
+// position-wise.
+async function startVod(item, forceRestart, startAt) {
   const title = item.name || basename(item.path) || "(untitled)";
   // One session per user server-side — stop the old one first anyway.
   await stopVod();
   const gen = sessGen;
+  currentItem = item;
+  // A different file gets a clean subtitle slate; a restart of the same file
+  // keeps the user's pick so the menu still reflects it afterwards.
+  if (subInfoPath !== item.path) {
+    subInfo = null;
+    subInfoPath = null;
+    subChoice = null;
+  }
+  hideSubtitleControl();
   showPlayerView(title);
   timeLabel.textContent = "Starting…";
   seekBar.disabled = true;
   seekBar.value = "0";
   try {
     // Omitting `start` lets the server resume from the saved position.
-    const payload = forceRestart ? { path: item.path, start: 0 } : { path: item.path };
+    const payload = { path: item.path };
+    if (typeof startAt === "number" && isFinite(startAt)) payload.start = Math.max(0, startAt);
+    else if (forceRestart) payload.start = 0;
+    // Subtitles are burned in by ffmpeg — omitting the index means "off".
+    if (subChoice !== null) payload.subtitle_idx = subChoice;
     const r = await fetch("/api/vod/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -986,14 +1079,16 @@ async function startVod(item, forceRestart) {
     } else {
       seekBar.disabled = true;
     }
-    attachPlayer(sess.url);
-    updateTimeUI();
-    if (typeof j.resumed_from === "number" && isFinite(j.resumed_from) && j.resumed_from > 0) {
+    reattachSession();
+    // Only the auto-resume (no explicit start) deserves the notice — a
+    // subtitle switch or "Start over" already put us where we asked for.
+    if (payload.start === undefined &&
+        typeof j.resumed_from === "number" && isFinite(j.resumed_from) && j.resumed_from > 0) {
       toastWithAction(`Resuming from ${formatTime(j.resumed_from)}`, "Start over",
         () => startVod(item, true));
     }
-    pollVodStatus();
     statusTimer = setInterval(pollVodStatus, 5000);
+    loadSubtitleInfo(item.path);   // deliberately not awaited: ffprobe must not delay playback
   } catch {
     if (gen === sessGen) {
       toast("Couldn't start playback — try again.");
@@ -1114,14 +1209,162 @@ seekBar.addEventListener("change", async () => {
     sess.url = j.playlist_url;
     sess.startOffset = (typeof j.start_offset === "number") ? j.start_offset : target;
     sess.ahead = null;  // fresh transcode — window regrows from the next poll
-    attachPlayer(sess.url);
-    updateTimeUI();
-    pollVodStatus();
+    reattachSession();
   } catch {
     if (gen === sessGen) toast("Seek failed — try again.");
   } finally {
     seeking = false;
   }
+});
+
+// ---- Subtitles ---------------------------------------------------------
+// Subtitles are burned into the video by ffmpeg, so there is no client-side
+// track to toggle: changing them means restarting the transcode at the
+// current position, exactly like an out-of-window seek. The UI says so.
+let subInfo = null;      // normalised /api/user/library/subtitles payload
+let subInfoPath = null;  // path subInfo describes (doubles as a 1-entry cache)
+let subChoice = null;    // active subtitle stream index, null = off
+
+function hideSubtitleMenu(refocus) {
+  if (ccMenu.hidden) return;
+  ccMenu.hidden = true;
+  ccBtn.setAttribute("aria-expanded", "false");
+  if (refocus) ccBtn.focus();
+}
+
+function hideSubtitleControl() {
+  hideSubtitleMenu(false);
+  ccWrap.classList.remove("available");
+}
+
+function subtitleTrackLabel(track) {
+  return track.label || track.language || ("Track " + track.index);
+}
+
+function subtitleMenuItem(label, idx, isDefault) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.setAttribute("role", "menuitemradio");
+  const active = subChoice === idx;
+  btn.setAttribute("aria-checked", active ? "true" : "false");
+  const tick = document.createElement("span");
+  tick.className = "cc-tick";
+  tick.setAttribute("aria-hidden", "true");
+  tick.textContent = active ? "✓" : "";
+  const text = document.createElement("span");
+  text.className = "cc-label";
+  text.textContent = label;
+  if (isDefault) {
+    const hint = document.createElement("span");
+    hint.className = "cc-default";
+    hint.textContent = "default";
+    text.appendChild(hint);
+  }
+  btn.appendChild(tick);
+  btn.appendChild(text);
+  btn.addEventListener("click", () => chooseSubtitle(idx));
+  return btn;
+}
+
+function renderSubtitleControl() {
+  if (!sess || !subInfo || !subInfo.tracks.length) {
+    hideSubtitleControl();
+    return;
+  }
+  ccWrap.classList.add("available");
+  if (!subInfo.enabled) {
+    // Burn-in is off server-side: a chosen index would be ignored, so offer
+    // no menu at all rather than a control that silently does nothing.
+    hideSubtitleMenu(false);
+    ccBtn.disabled = true;
+    ccBtn.classList.remove("on");
+    ccBtn.title = "Subtitles are switched off on the server";
+    ccBtn.setAttribute("aria-label", "Subtitles unavailable — burn-in is switched off on the server");
+    ccMenu.replaceChildren();
+    return;
+  }
+  ccBtn.disabled = false;
+  ccBtn.classList.toggle("on", subChoice !== null);
+  ccBtn.title = "Subtitles";
+  ccBtn.setAttribute("aria-label", "Subtitles");
+
+  const nodes = [subtitleMenuItem("Off", null, false)];
+  for (const track of subInfo.tracks) {
+    nodes.push(subtitleMenuItem(subtitleTrackLabel(track), track.index,
+      subInfo.defaultIndex === track.index));
+  }
+  const note = document.createElement("p");
+  note.className = "cc-note";
+  note.textContent = subInfo.firstPlayDelay
+    ? "Subtitles are burned in — switching restarts the video at this spot. The first play of a track extracts it in the background."
+    : "Subtitles are burned in — switching restarts the video at this spot.";
+  nodes.push(note);
+  ccMenu.replaceChildren(...nodes);
+}
+
+// Fired alongside/after the session start, never awaited by it: an ffprobe
+// must not hold up playback.
+async function loadSubtitleInfo(path) {
+  if (!path) return;
+  if (subInfoPath === path && subInfo) { renderSubtitleControl(); return; }
+  const gen = sessGen;
+  try {
+    const r = await fetch("/api/user/library/subtitles?path=" + encodeURIComponent(path));
+    if (!r.ok) return;
+    const j = await r.json();
+    if (gen !== sessGen || !sess) return;   // playback moved on while we probed
+    subInfo = {
+      tracks: Array.isArray(j.tracks) ? j.tracks : [],
+      enabled: j.enabled !== false,
+      defaultIndex: (typeof j.default_index === "number") ? j.default_index : null,
+      firstPlayDelay: !!j.first_play_delay,
+    };
+    subInfoPath = path;
+    renderSubtitleControl();
+  } catch {}
+}
+
+async function chooseSubtitle(idx) {
+  hideSubtitleMenu(true);
+  if (idx === subChoice || !sess || !currentItem) return;
+  const pos = displayedPosition();
+  subChoice = idx;
+  renderSubtitleControl();
+  if (idx === null) {
+    toast("Turning subtitles off — restarting from here…");
+  } else if (subInfo && subInfo.firstPlayDelay) {
+    toast("Switching subtitles… the first play of a track runs without them while it's extracted — play again to see them.");
+  } else {
+    toast("Switching subtitles…");
+  }
+  // Explicit start → the server's resume point can't override the position.
+  await startVod(currentItem, false, isFinite(pos) ? pos : 0);
+}
+
+ccBtn.addEventListener("click", () => {
+  if (ccBtn.disabled) return;
+  if (!ccMenu.hidden) { hideSubtitleMenu(true); return; }
+  ccMenu.hidden = false;
+  ccBtn.setAttribute("aria-expanded", "true");
+  const items = ccMenu.querySelectorAll("button");
+  const checked = ccMenu.querySelector('button[aria-checked="true"]');
+  const first = checked || items[0];
+  if (first) first.focus();
+});
+
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape" && !ccMenu.hidden) hideSubtitleMenu(true);
+});
+
+document.addEventListener("click", ev => {
+  if (!ccMenu.hidden && !ccWrap.contains(ev.target)) hideSubtitleMenu(false);
+});
+
+// A tab out of the menu (or any focus landing elsewhere) closes it too.
+ccWrap.addEventListener("focusout", () => {
+  setTimeout(() => {
+    if (!ccMenu.hidden && !ccWrap.contains(document.activeElement)) hideSubtitleMenu(false);
+  }, 0);
 });
 
 // ---- Play / pause / volume / fullscreen --------------------------------

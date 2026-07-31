@@ -155,10 +155,107 @@
   }
   .choice .now + .go { margin-top: 0.35rem; }
 
+  /* Account — deliberately quiet. The hub is for choosing what to watch, so
+     this collapses to a single low-contrast line under the two cards. */
+  .account {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+  #pw-toggle {
+    align-self: start;
+    max-width: 100%;
+    background: none;
+    border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    border-radius: 999px;
+    color: var(--js-muted, #9aa6b5);
+    padding: 0.42rem 0.9rem;
+    min-height: 40px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  #pw-toggle:hover {
+    color: var(--js-text, #e7edf5);
+    border-color: var(--js-line-strong, rgba(148, 163, 184, 0.28));
+  }
+  #pw-toggle:focus-visible {
+    outline: none;
+    box-shadow: var(--js-focus-ring, 0 0 0 3px rgba(56, 189, 248, 0.16));
+  }
+  #pw-form {
+    display: none;
+    flex-direction: column;
+    gap: 0.7rem;
+    padding: 1.1rem;
+    background: var(--js-surface, #111820);
+    border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    border-radius: var(--js-radius, 12px);
+    min-width: 0;
+  }
+  #pw-form.open { display: flex; }
+  #pw-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.78rem;
+    font-weight: 700;
+    min-width: 0;
+  }
+  #pw-form input {
+    width: 100%;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 0.55rem 0.7rem;
+    background: var(--js-surface-2, #151d27);
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: var(--js-radius-sm, 8px);
+    color: var(--js-text, #e7edf5);
+    font-size: 0.9rem;
+    font-family: inherit;
+  }
+  #pw-form input:focus-visible {
+    outline: none;
+    border-color: rgba(56, 189, 248, 0.72);
+    box-shadow: var(--js-focus-ring, 0 0 0 3px rgba(56, 189, 248, 0.16));
+  }
+  #pw-submit {
+    align-self: start;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 0.5rem 1.1rem;
+    background: var(--js-accent, #38bdf8);
+    border: 1px solid transparent;
+    border-radius: 999px;
+    color: #06131d;
+    font-size: 0.85rem;
+    font-weight: 780;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  #pw-submit:disabled { opacity: 0.55; cursor: default; }
+  #pw-submit:focus-visible {
+    outline: none;
+    box-shadow: var(--js-focus-ring, 0 0 0 3px rgba(56, 189, 248, 0.16));
+  }
+  .pw-msg {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+  .pw-msg:empty { display: none; }
+  .pw-msg.error { color: var(--js-danger-text, #fca5a5); }
+  .pw-msg.ok { color: var(--js-accent-text, #7dd3fc); }
+
   @media (max-width: 640px) {
     .choices { grid-template-columns: minmax(0, 1fr); }
     .choice { min-height: 0; padding: 1.1rem; }
     #who { order: 5; margin-left: 0; flex-basis: 100%; }
+    #pw-toggle, #pw-submit { align-self: stretch; }
   }
 </style>
 <link rel="stylesheet" href="/jetstream-theme.css">
@@ -187,6 +284,24 @@
       <span class="go">Open the library →</span>
     </a>
   </div>
+
+  <section class="account">
+    <button id="pw-toggle" type="button" aria-expanded="false" aria-controls="pw-form">Change password</button>
+    <p class="pw-msg ok" id="pw-ok" role="status"></p>
+    <form id="pw-form" novalidate autocomplete="on">
+      <label for="pw-current">Current password
+        <input id="pw-current" name="current_password" type="password" autocomplete="current-password">
+      </label>
+      <label for="pw-new">New password
+        <input id="pw-new" name="new_password" type="password" autocomplete="new-password">
+      </label>
+      <label for="pw-confirm">Confirm new password
+        <input id="pw-confirm" name="confirm_password" type="password" autocomplete="new-password">
+      </label>
+      <p class="pw-msg error" id="pw-error" role="alert"></p>
+      <button id="pw-submit" type="submit">Update password</button>
+    </form>
+  </section>
 </main>
 
 <script>
@@ -227,6 +342,87 @@ const nowEl = document.getElementById("now-playing");
 document.getElementById("logout-btn").addEventListener("click", async () => {
   try { await fetch("/api/auth/logout", { method: "POST" }); } catch {}
   location.href = "/";
+});
+
+// Self-service password change. Collapsed by default; the server keeps this
+// session alive and revokes the user's other sessions, which is surprising
+// enough that the success line has to say so out loud.
+const pwToggle = document.getElementById("pw-toggle");
+const pwForm = document.getElementById("pw-form");
+const pwCurrent = document.getElementById("pw-current");
+const pwNew = document.getElementById("pw-new");
+const pwConfirm = document.getElementById("pw-confirm");
+const pwSubmit = document.getElementById("pw-submit");
+const pwError = document.getElementById("pw-error");
+const pwOk = document.getElementById("pw-ok");
+
+function pwSetError(msg) { pwError.textContent = msg || ""; }
+
+function pwOpen(open) {
+  pwForm.classList.toggle("open", open);
+  pwToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  pwToggle.textContent = open ? "Cancel" : "Change password";
+  if (open) {
+    pwOk.textContent = "";
+    pwCurrent.focus();
+  }
+}
+
+pwToggle.addEventListener("click", () => {
+  const willOpen = !pwForm.classList.contains("open");
+  if (!willOpen) {
+    pwSetError("");
+    pwForm.reset();
+  }
+  pwOpen(willOpen);
+});
+
+pwForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const current = pwCurrent.value;
+  const next = pwNew.value;
+  const confirm = pwConfirm.value;
+
+  if (!current) { pwSetError("Enter your current password."); pwCurrent.focus(); return; }
+  if (next.length < 8) { pwSetError("New password must be at least 8 characters."); pwNew.focus(); return; }
+  if (next !== confirm) { pwSetError("New passwords don't match."); pwConfirm.focus(); return; }
+  if (next === current) { pwSetError("New password must be different from your current one."); pwNew.focus(); return; }
+
+  pwSetError("");
+  pwSubmit.disabled = true;
+  try {
+    const r = await fetch("/api/auth/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: current, new_password: next })
+    });
+    if (r.status === 401) {
+      // 401 here means "wrong current password", not an expired session —
+      // the endpoint requires a session to reach at all.
+      pwSetError("That's not your current password.");
+      pwCurrent.value = "";
+      pwCurrent.focus();
+      return;
+    }
+    if (r.status === 429) { pwSetError("Too many attempts. Try again in a few minutes."); return; }
+    let body = null;
+    try { body = await r.json(); } catch {}
+    if (!r.ok) {
+      if (body && body.error === "bad_new_password") {
+        pwSetError(body.message || "That new password isn't allowed.");
+      } else {
+        pwSetError("Couldn't change your password. Try again.");
+      }
+      return;
+    }
+    pwForm.reset();
+    pwOpen(false);
+    pwOk.textContent = "Password changed. Your other devices have been signed out — you're still signed in here.";
+  } catch {
+    pwSetError("Network error. Try again.");
+  } finally {
+    pwSubmit.disabled = false;
+  }
 });
 </script>
 </body>

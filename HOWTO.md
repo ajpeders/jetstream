@@ -95,6 +95,21 @@ Symptoms: user reports VOD won't start and gets `409 vod_capacity`, or `nvidia-s
 
 Usually you don't need to: the idle reaper kills any session with no segment fetches for `VOD_IDLE_TIMEOUT_S` (120 s) — closed tabs self-clean within ~2 minutes. Manual kill is for "right now" or for a client that's still fetching but shouldn't be.
 
+## Subtitles
+
+**On-demand (VOD):** each viewer picks their own — the `CC` button in the `/library` player lists the file's text tracks plus Off. Each user has their own encode, so this is genuinely per-viewer.
+
+**Live stream:** burned into the one shared encode, so the control on `/controls` (and `/admin`) changes it **for everyone watching** and costs a ~2 s blip while ffmpeg restarts at the current position. There is no per-viewer live toggle — that needs a WebVTT sidecar (see ROADMAP).
+
+Both share two gotchas:
+- The **first** play of a given track shows no subtitles: a background job extracts the track to a small `.srt` cache first (the libass filter would otherwise demux the whole file before frame one). The next play of that file+track has them. The UI says so.
+- `USE_SUBTITLES=0` disables burn-in globally; the controls then show as unavailable rather than silently doing nothing.
+- Turning subtitles **off** for the live stream sticks for the current source only — the next queue item auto-picks English again.
+
+## Change your own password
+
+Users change their own at `/home` → Change password. It signs out their **other** devices but keeps the current one. The host's `/admin` reset (which revokes everything) is still there for a locked-out user.
+
 ## Continue watching (per-user resume)
 
 Automatic — no setup. Playback position is saved per user per file in `/data/progress.json` and the library shows a "Continue watching" row.

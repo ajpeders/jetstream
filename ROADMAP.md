@@ -39,6 +39,16 @@ Rate limiting is keyed on `_trusted_client_ip()` (nginx-set `X-Real-IP`), never 
 
 - **Jetstream watcher agent (automation)** — the report queue (#34) already persists agent-readable JSON at `/data/reports.json`, exposes `GET /admin/api/reports`, and now accepts triage write-back at `POST /admin/api/reports/<id>/triage` (sets the reserved `triage` field under `reports_lock` — a direct file edit would be clobbered by Flask's in-memory rewrite). The admin reports panel renders the verdict when present. Still to build: the watcher loop itself — polls the queue, gathers nearby app/ffmpeg/browser context, triages likely causes, writes back, and either adds a roadmap note or drafts a fix for admin review. Design + failure-taxonomy playbook captured in `apps/watcher/DESIGN.md`; only the agent runner is outstanding.
 
+- **Stream rooms (a "mod" tier that can run its own live room)** — *next up; needs a design session before any code.* Wanted: a trusted user can spin up their own live room — own queue, own viewers, own chat — instead of everyone sharing the single broadcast.
+
+  Be clear-eyed about the cost: **this is a rearchitecture, not a feature.** Every live-playback global in `app.py` assumes exactly one stream — `current_proc` / `current_source` / `current_paused` / `active_run_id` / `next_run_id` / `finished_run_ids` under `state_lock`, the pre-roll globals, `skip_votes`, `_composer_state` (a single media-sequence + discontinuity counter space), `playlist`, `recent_items`, the IP-keyed `viewers` / `viewer_labels` / `viewer_session_start`, the single global chat + reaction rings, and `settings.viewer_public`. On disk it's one `/hls` tree with one `stream.m3u8`, and the watcher + composer threads are singletons driving it. Making rooms real means keying all of that by room id and running a watcher/composer per room — or accepting a hard cap and running N independent instances.
+
+  Cheaper adjacent option worth weighing first: the private-VOD engine is *already* per-user and multi-session. "Watch together in a room" could be built as a shared VOD session (one encode, several authorized viewers, synced position) rather than N live pipelines — much closer to what already works.
+
+  Also needs: a `mod` tier (a third invite/account level between friend and admin), per-room authorization, room lifecycle/reaping, and a concurrency cap — each room is another ffmpeg competing for the same NVENC slots the live stream and VOD already share.
+
+- **Per-viewer live subtitles (WebVTT sidecar)** — the live encode burns subtitles into the shared video, so the shipped toggle is necessarily broadcast-wide (everyone sees the change). A true per-viewer CC toggle needs subs extracted to WebVTT, served alongside, referenced via `EXT-X-MEDIA`, and the composer taught to carry a subtitle rendition across run boundaries. Previously marked won't-do; re-listed because the question keeps coming up.
+
 - **Users can't change their own password** — only an admin can reset it (`POST /admin/api/users/<id>/password`). A gap now that people self-register and the host may never have known the password.
 
 - **Admin Users panel doesn't surface `invited_by`** — the field is stored on every self-registered account but isn't rendered, which is exactly the data you'd need to clean up after a leaked friend code.

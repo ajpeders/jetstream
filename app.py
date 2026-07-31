@@ -3457,7 +3457,14 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
     # entry that was added while USE_SUBTITLES was off (subtitle_idx → null)
     # would stay sub-less forever once burn-in was flipped on. URLs don't
     # carry sub indices and are skipped.
-    if source["type"] == "file" and source.get("subtitle_idx") is None:
+    # `subtitles_off` is the one thing that beats the re-pick: an operator
+    # explicitly choosing "off" for the current source (via /api/*/subtitles)
+    # must stick, or the picker turns them straight back on and off becomes
+    # unreachable. It rides on the source dict, so it survives seeks and
+    # restarts of THIS source but not a move to the next item — which is the
+    # right scope for a "subtitles for what's playing" control.
+    if (source["type"] == "file" and source.get("subtitle_idx") is None
+            and not source.get("subtitles_off")):
         source = {**source, "subtitle_idx": _pick_default_subtitle(ffmpeg_input)}
     subtitle_idx = source.get("subtitle_idx") if source["type"] == "file" else None
     old_source = None
@@ -3840,6 +3847,57 @@ def api_auth_logout():
     return resp
 
 
+@app.route("/api/auth/password", methods=["POST"])
+def api_auth_password():
+    """Self-service password change. Until accounts could self-register the
+    host always knew the password they'd issued; now they may never have, so
+    the user needs to be able to rotate it themselves.
+
+    Succeeding revokes every OTHER session for the account but keeps the
+    caller's — "change password" doubles as "sign out my other devices"
+    without logging you out of the device you're standing at."""
+    u = _session_user()  # gate guarantees this, but stay defensive
+    if not u:
+        return jsonify({"error": "auth_required"}), 401
+    if not _ip_rate_check(login_rate, login_rate_lock, _trusted_client_ip(),
+                          LOGIN_RATE_WINDOW, LOGIN_RATE_MAX, record=False):
+        return jsonify({"error": "rate_limited"}), 429
+    data = request.get_json(silent=True) or {}
+    current = str(data.get("current_password") or "")
+    new = str(data.get("new_password") or "")
+    with users_lock:
+        me = next((x for x in users if x["id"] == u["id"]), None)
+        scrypt_rec = dict(me.get("scrypt") or {}) if me else None
+    # Verify outside the lock — scrypt is deliberately slow.
+    if not scrypt_rec or not _verify_password(current, scrypt_rec):
+        # Charge a wrong current-password to the login bucket: this endpoint
+        # is an online guessing oracle against a live session otherwise.
+        _ip_rate_check(login_rate, login_rate_lock, _trusted_client_ip(),
+                       LOGIN_RATE_WINDOW, LOGIN_RATE_MAX)
+        return jsonify({"error": "bad_password"}), 401
+    if len(new) < 8:
+        return jsonify({"error": "bad_new_password",
+                        "message": "min 8 chars"}), 400
+    new_rec = _hash_password(new)
+    with users_lock:
+        me = next((x for x in users if x["id"] == u["id"]), None)
+        if not me:
+            return jsonify({"error": "auth_required"}), 401
+        me["scrypt"] = new_rec
+        _save_users()
+    # Revoke everything, then re-issue for this caller — simpler than
+    # selectively sparing one sid, and leaves exactly one live session.
+    _revoke_user_sessions(u["id"])
+    sid = _create_user_session(u["id"])
+    resp = jsonify({"ok": True})
+    resp.set_cookie(
+        USER_SESSION_COOKIE, sid,
+        max_age=USER_SESSION_TTL,
+        httponly=True, secure=True, samesite="Lax",
+    )
+    return resp
+
+
 @app.route("/api/auth/me")
 def api_auth_me():
     u = _session_user()  # gate guarantees a session, but stay defensive
@@ -3860,6 +3918,10 @@ def api_admin_users():
                     "created": u.get("created"), "last_login": u.get("last_login"),
                     "disabled": bool(u.get("disabled")),
                     "active_vod": u["id"] in active_vod_uids,
+                    # Which invite minted this account (None = host-created).
+                    # The cleanup path for a leaked friend code is "find every
+                    # account from it" — that's only visible via this field.
+                    "invited_by": u.get("invited_by"),
                 } for u in users
             ]})
     data = request.get_json(silent=True) or {}
@@ -5252,6 +5314,72 @@ def api_seek():
     return jsonify({"ok": True, "start_seconds": target})
 
 
+@app.route("/admin/api/subtitles", methods=["GET", "POST"])
+@app.route("/api/control/subtitles", methods=["GET", "POST"])
+def api_subtitles():
+    """Subtitle track for the CURRENT live source: list (GET) or switch/off
+    (POST `{subtitle_idx: int|null}`).
+
+    Live subtitles are burned into the shared encode, so this is necessarily
+    a broadcast-wide setting — there's no per-viewer toggle without a WebVTT
+    sidecar (roadmapped). Switching restarts ffmpeg at the current position,
+    exactly like a seek, so viewers see a ~2 s blip rather than a drop.
+    Control-tier gated (friend/admin) like the rest of /api/control/*."""
+    with state_lock:
+        source = dict(current_source) if current_source else None
+    if not source:
+        return jsonify({"error": "no stream running"}), 400
+    if source.get("type") != "file":
+        # yt-dlp/URL sources have no local file to probe for sub streams.
+        return jsonify({"error": "not a file source"}), 400
+    try:
+        full = _safe_resolve(source["ref"], must_be_file=True)
+    except Exception:
+        return jsonify({"error": "source unavailable"}), 404
+
+    if request.method == "GET":
+        tracks = []
+        for t in _probe_subtitle_tracks(str(full)):
+            lang = t.get("language")
+            name = _SUB_LANG_NAMES.get(lang or "",
+                                       (lang or "").upper() or "Unknown")
+            tracks.append({
+                "index": t["index"], "codec": t.get("codec"),
+                "language": lang, "label": f"{name} ({t.get('codec')})",
+            })
+        return jsonify({
+            "tracks": tracks,
+            "current": source.get("subtitle_idx"),
+            "enabled": SUBTITLE_BURN_IN,
+            "first_play_delay": True,
+        })
+
+    if not SUBTITLE_BURN_IN:
+        return jsonify({"error": "burn_in_disabled",
+                        "message": "Subtitle burn-in is off "
+                                   "(USE_SUBTITLES=0)"}), 409
+    data = request.get_json(silent=True) or {}
+    raw = data.get("subtitle_idx")
+    try:
+        sub_idx = None if raw is None else int(raw)
+    except (TypeError, ValueError):
+        return jsonify({"error": "bad_track"}), 400
+    if sub_idx is not None:
+        valid = {t["index"] for t in _probe_subtitle_tracks(str(full))}
+        if sub_idx not in valid:
+            return jsonify({"error": "bad_track"}), 400
+    # Restart in place: same source, same position, new burn-in choice.
+    # The explicit-off sentinel is required — _start_stream re-picks a
+    # default whenever subtitle_idx is None, so without it "off" would be
+    # immediately undone.
+    position = max(0.0, _current_position() or 0.0)
+    source["subtitle_idx"] = sub_idx
+    source["subtitles_off"] = sub_idx is None
+    _start_stream(source, start_seconds=position)
+    return jsonify({"ok": True, "subtitle_idx": sub_idx,
+                    "start_seconds": position})
+
+
 @app.route("/admin/api/stop", methods=["POST"])
 @app.route("/api/control/stop", methods=["POST"])
 def api_stop():
@@ -5786,6 +5914,51 @@ def api_user_library_browse():
 def api_user_library_search():
     items, truncated = _search_viewer_library(request.args.get("q", "").strip())
     return jsonify({"results": items, "truncated": truncated})
+
+
+# Language codes worth spelling out; anything else falls back to the raw tag.
+_SUB_LANG_NAMES = {
+    "eng": "English", "spa": "Spanish", "fre": "French", "fra": "French",
+    "ger": "German", "deu": "German", "ita": "Italian", "por": "Portuguese",
+    "rus": "Russian", "jpn": "Japanese", "kor": "Korean", "chi": "Chinese",
+    "zho": "Chinese", "dut": "Dutch", "nld": "Dutch", "swe": "Swedish",
+    "nor": "Norwegian", "dan": "Danish", "fin": "Finnish", "pol": "Polish",
+    "tur": "Turkish", "ara": "Arabic", "heb": "Hebrew", "hin": "Hindi",
+}
+
+
+@app.route("/api/user/library/subtitles")
+def api_user_library_subtitles():
+    """Text subtitle tracks burnable into a VOD session, for the picker.
+    `index` is what /api/vod/start takes as `subtitle_idx`.
+
+    `enabled` reports the global SUBTITLE_BURN_IN gate, and `first_play_delay`
+    warns that the FIRST play of a track transcodes without subs while the
+    background cache-extract runs (see the burn-in notes on _subtitles_filter)
+    — without that the UI would look broken rather than merely delayed."""
+    rel = (request.args.get("path") or "").strip("/")
+    if not _viewer_file_allowed(rel):
+        return jsonify({"error": "not_found"}), 404
+    try:
+        full = _safe_resolve(rel, must_be_file=True)
+    except Exception:
+        return jsonify({"error": "not_found"}), 404
+    tracks = []
+    for t in _probe_subtitle_tracks(str(full)):
+        lang = t.get("language")
+        name = _SUB_LANG_NAMES.get(lang or "", (lang or "").upper() or "Unknown")
+        tracks.append({
+            "index": t["index"],
+            "codec": t.get("codec"),
+            "language": lang,
+            "label": f"{name} ({t.get('codec')})",
+        })
+    return jsonify({
+        "tracks": tracks,
+        "enabled": SUBTITLE_BURN_IN,
+        "default_index": _pick_default_subtitle(str(full)),
+        "first_play_delay": True,
+    })
 
 
 def _vod_owned_session(sid: str) -> dict | None:

@@ -75,6 +75,7 @@ Friend (a `friend`-level invite token; never needs the admin password):
 - `POST /api/control/{play,play_url,seek,pause,resume,stop,skip}` — same payloads as the `/admin/api/*` twins below
 - `GET / POST /api/control/queue`, `DELETE /api/control/queue/<idx>`, `POST /api/control/queue/<idx>/move`, `/api/control/queue/clear`, `/api/control/queue/shuffle`
 - `GET /api/control/browse?path=…`
+- `GET / POST /api/control/subtitles` — subtitle track for the **current live source**. `GET` lists burnable text tracks + `current`; `POST {subtitle_idx: int|null}` switches (or `null` = off) by restarting ffmpeg at the current position. Live subs are burned into the shared encode, so this changes what **everyone** sees and costs a ~2 s blip — there is no per-viewer toggle without a WebVTT sidecar (roadmapped).
 - These are the same view functions as the matching `/admin/api/*` routes (a second route alias), gated to `friend`+`admin` tokens by the request gate. Host-only surface (settings, tokens, viewers, perf) is **not** aliased.
 
 User (`js_user` session — host-created, or self-registered with a `friend` code):
@@ -83,6 +84,8 @@ User (`js_user` session — host-created, or self-registered with a `friend` cod
 - `GET /library` — private VOD library: grid + search, backed by `/api/user/library/{browse,search}`.
 - `POST /api/vod/start` `{path}` — omit `start` to auto-resume from saved progress (response carries `resumed_from`); send `start: 0` to force from the beginning. Spins up a private on-demand HLS stream under `/hls/vod/<session_id>/` that only that user's session can fetch. One session per user; global cap `VOD_MAX_SESSIONS` (default 2) → `409 vod_capacity` beyond.
 - `POST /api/vod/progress` `{session_id, position}` — client reports the absolute playhead (the server only knows `start_offset`). Drives Continue watching.
+- `GET /api/user/library/subtitles?path=…` → `{tracks:[{index,codec,language,label}], enabled, default_index, first_play_delay}` — burnable text tracks for a file; `index` is what `/api/vod/start` takes as `subtitle_idx`. VOD defaults to **no** subtitles (unlike live, which auto-picks English at play time); the picker is the opt-in.
+- `POST /api/auth/password` `{current_password, new_password}` — self-service change. Keeps the caller signed in, revokes their other sessions.
 - `GET /api/user/continue` → `{items:[{path,title,position,duration,updated,percent}]}`; `DELETE` with `{path}` dismisses one.
 - `POST /api/vod/seek` `{to_seconds}` — kill ffmpeg + restart with `-ss` (fresh playlist generation; `?g=` cache-buster).
 - `POST /api/vod/stop`, `GET /api/vod/status`
