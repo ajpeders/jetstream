@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -41,6 +43,18 @@ TOKEN_LEVELS = ("viewer", "friend")
 # Levels permitted to hit /api/control/* and load /controls.
 CONTROL_LEVELS = frozenset({"friend", "admin"})
 TOKEN_LAST_SEEN_SAVE_INTERVAL = 60
+# ---- v2: user accounts (admin-created, username+password) ----
+# Users are a tier alongside invite tokens, not a replacement: the `js_user`
+# session cookie is deliberately distinct from the `lt` invite cookie so one
+# person can hold both. Sessions are server-side records (not signed cookies)
+# so password reset / account delete can revoke them instantly.
+USERS_FILE = Path(os.environ.get("USERS_FILE", "/data/users.json"))
+USER_SESSIONS_FILE = Path(os.environ.get("USER_SESSIONS_FILE", "/data/sessions.json"))
+USER_SESSION_COOKIE = "js_user"
+USER_SESSION_TTL = 60 * 60 * 24 * 30  # 30 days
+USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
+LOGIN_RATE_WINDOW = 60   # seconds
+LOGIN_RATE_MAX = 5       # per-IP login attempts per window
 PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
 RECENT_FILE = Path(os.environ.get("RECENT_FILE", "/data/recent.json"))
 RECENT_LIMIT = int(os.environ.get("RECENT_LIMIT", "50"))
@@ -102,6 +116,25 @@ TARGET_HEIGHT = int(os.environ.get("TARGET_HEIGHT", "1080"))
 HLS_SEG_TIME = os.environ.get("HLS_SEG_TIME", "1")
 # 24 segments × 1s = 24s lookback, matching the low-latency player tuning.
 HLS_LIST_SIZE = os.environ.get("HLS_LIST_SIZE", "24")
+
+# ---- v2: private per-user VOD sessions ----
+# Each logged-in user can run one on-demand transcode into /hls/vod/<sid>/.
+# Sessions are capped (each is a full ffmpeg encode competing with the live
+# stream for NVENC slots) and reaped when segment fetches stop arriving.
+VOD_DIR_BASE = HLS_DIR / "vod"
+VOD_MAX_SESSIONS = int(os.environ.get("VOD_MAX_SESSIONS", "2"))
+VOD_IDLE_TIMEOUT_S = int(os.environ.get("VOD_IDLE_TIMEOUT_S", "120"))
+# VOD drops -re; -readrate caps transcode speed (2.0 = 2x realtime) so a film
+# doesn't peg the encoder. 0 = unlimited.
+VOD_READRATE = os.environ.get("VOD_READRATE", "2.0")
+# Force VOD encodes onto libx264, reserving NVENC sessions for live + preroll.
+VOD_FORCE_CPU = os.environ.get("VOD_FORCE_CPU", "0") == "1"
+# VOD keeps the FULL playlist (-hls_list_size 0, no delete_segments): with
+# the -readrate paced encoder running ahead of the 1x viewer, ANY rolling
+# window eventually slides past the playhead and deletes the segment the
+# player needs next (review finding — deterministic stall ~15 min in). Only
+# affordable because /hls/vod is a disk-backed volume (docker-compose.yml),
+# NOT part of the ~1.5 GiB /hls tmpfs.
 
 STREAM_QUALITY_PRESETS = {
     "default": {
@@ -439,6 +472,226 @@ def _caller_can_control() -> bool:
     return _token_level(request.cookies.get(TOKEN_COOKIE)) in CONTROL_LEVELS
 
 
+# ==== v2: users & sessions =================================================
+# Admin-created accounts (no self-registration). Follows the tokens idiom:
+# module list + lock + load/save to /data. Passwords are scrypt-hashed
+# (stdlib only — no new deps); sessions are server-side so they can be
+# revoked on password reset / delete / disable.
+
+users_lock = threading.Lock()
+users: list[dict] = []
+# {"id","username","scrypt":{"salt","hash","n","r","p"},"created",
+#  "last_login","disabled"}
+
+user_sessions_lock = threading.Lock()
+user_sessions: dict[str, dict] = {}
+# sid -> {"user_id","created","expires"}
+
+# IP -> [timestamps within LOGIN_RATE_WINDOW]. Pruned lazily per attempt.
+login_rate_lock = threading.Lock()
+login_rate: dict[str, list[float]] = {}
+
+
+def _atomic_write_json(path: Path, obj) -> None:
+    """Write-then-rename so a crash mid-write can't leave a truncated JSON
+    file. The pre-v2 stores write in place (a corrupt tokens.json at least
+    fails loudly via _warn_state_load_failed); the credential stores get the
+    stronger guarantee from day one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2))
+    os.replace(tmp, path)
+
+
+def _load_users():
+    global users
+    if USERS_FILE.exists():
+        try:
+            users = json.loads(USERS_FILE.read_text())
+            return
+        except Exception as e:
+            _warn_state_load_failed("users", USERS_FILE, e)
+    users = []
+
+
+def _save_users():
+    _atomic_write_json(USERS_FILE, users)
+
+
+def _load_user_sessions():
+    global user_sessions
+    if USER_SESSIONS_FILE.exists():
+        try:
+            user_sessions = json.loads(USER_SESSIONS_FILE.read_text())
+            return
+        except Exception as e:
+            _warn_state_load_failed("user sessions", USER_SESSIONS_FILE, e)
+    user_sessions = {}
+
+
+def _save_user_sessions():
+    """Persist sessions, pruning expired ones so the file can't grow
+    unbounded. Caller holds user_sessions_lock."""
+    now = time.time()
+    stale = [sid for sid, rec in user_sessions.items()
+             if float(rec.get("expires") or 0) < now]
+    for sid in stale:
+        del user_sessions[sid]
+    _atomic_write_json(USER_SESSIONS_FILE, user_sessions)
+
+
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
+
+
+def _hash_password(pw: str) -> dict:
+    salt = secrets.token_bytes(16)
+    h = hashlib.scrypt(pw.encode(), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R,
+                       p=_SCRYPT_P, dklen=32)
+    return {"salt": salt.hex(), "hash": h.hex(),
+            "n": _SCRYPT_N, "r": _SCRYPT_R, "p": _SCRYPT_P}
+
+
+def _verify_password(pw: str, rec: dict) -> bool:
+    try:
+        h = hashlib.scrypt(
+            pw.encode(), salt=bytes.fromhex(rec["salt"]),
+            n=int(rec["n"]), r=int(rec["r"]), p=int(rec["p"]), dklen=32)
+        return hmac.compare_digest(h.hex(), rec["hash"])
+    except Exception:
+        return False
+
+
+def _session_user() -> dict | None:
+    """The user record behind the request's `js_user` cookie, or None.
+    Mirrors _token_level as the capability chokepoint for the user tier:
+    unknown/expired session or disabled user both read as logged-out."""
+    sid = request.cookies.get(USER_SESSION_COOKIE)
+    if not sid:
+        return None
+    now = time.time()
+    with user_sessions_lock:
+        rec = user_sessions.get(sid)
+        if not rec or float(rec.get("expires") or 0) < now:
+            return None
+        uid = rec["user_id"]
+    with users_lock:
+        for u in users:
+            if u["id"] == uid and not u.get("disabled"):
+                return u
+    return None
+
+
+def _create_user_session(user_id: str) -> str:
+    sid = secrets.token_urlsafe(32)
+    now = time.time()
+    with user_sessions_lock:
+        user_sessions[sid] = {
+            "user_id": user_id, "created": now, "expires": now + USER_SESSION_TTL,
+        }
+        _save_user_sessions()
+    return sid
+
+
+def _revoke_user_sessions(user_id: str) -> None:
+    """Drop every session for a user — password reset, disable, delete."""
+    with user_sessions_lock:
+        dead = [sid for sid, rec in user_sessions.items()
+                if rec.get("user_id") == user_id]
+        for sid in dead:
+            del user_sessions[sid]
+        _save_user_sessions()
+
+
+def _ip_rate_check(bucket: dict[str, list[float]], lock: threading.Lock,
+                   ip: str, window: float, max_n: int) -> bool:
+    """Generic per-IP rolling-window rate check (the shape _chat_rate_check
+    and friends each hand-roll). Records the attempt timestamp on success;
+    sweeps fully-stale rows each call so scanner IPs that never return
+    don't leave permanent entries."""
+    now = time.time()
+    cutoff = now - window
+    with lock:
+        for stale in [k for k, v in bucket.items()
+                      if k != ip and (not v or v[-1] <= cutoff)]:
+            del bucket[stale]
+        timestamps = [t for t in bucket.get(ip, []) if t > cutoff]
+        if len(timestamps) >= max_n:
+            bucket[ip] = timestamps
+            return False
+        timestamps.append(now)
+        bucket[ip] = timestamps
+        return True
+
+
+def _trusted_client_ip() -> str:
+    """Client IP for SECURITY decisions (rate limiting). _client_ip trusts
+    the leftmost X-Forwarded-For entry, which the CLIENT controls — fine for
+    viewer-tracking labels, useless against an attacker rotating forged XFF
+    values to dodge a limiter. X-Real-IP is set by our own nginx from its
+    realip-resolved $remote_addr (Traefik appends the true peer last, nginx
+    walks it recursively), so it can't be forged from outside; fall back to
+    the socket peer when nginx isn't in front (dev/test client)."""
+    return request.headers.get("X-Real-IP") or request.remote_addr or "unknown"
+
+
+# ==== v2: vod session registry (engine lands in WP-2A) =====================
+# sid -> {"user_id","rel_path","title","proc","start_offset","started_at",
+#         "last_access","duration","status","generation"}
+vod_lock = threading.Lock()
+vod_sessions: dict[str, dict] = {}
+
+
+def _vod_session_dir(sid: str) -> Path:
+    return VOD_DIR_BASE / sid
+
+
+def _vod_detach_locked(sid: str) -> dict | None:
+    """Pop a session out of the registry and return it for disposal. Caller
+    holds vod_lock. Deliberately does NOT touch the process or the dir — the
+    per-segment _authcheck_vod heartbeat contends on vod_lock, so anything
+    slow (proc.wait, rmtree) must happen in _vod_dispose AFTER the lock is
+    released (review finding: a 5 s proc.wait under this lock stalled every
+    viewer's segment auth)."""
+    return vod_sessions.pop(sid, None)
+
+
+def _vod_dispose(sid: str, sess: dict | None) -> None:
+    """Terminate a detached session's ffmpeg and remove its dir. Caller must
+    NOT hold vod_lock."""
+    if not sess:
+        return
+    proc = sess.get("proc")
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    shutil.rmtree(_vod_session_dir(sid), ignore_errors=True)
+
+
+def _vod_kill_session(sid: str) -> bool:
+    """Detach + dispose in one call. Returns False for an unknown sid."""
+    with vod_lock:
+        sess = _vod_detach_locked(sid)
+    if sess is None:
+        return False
+    _vod_dispose(sid, sess)
+    return True
+
+
+def _vod_kill_sessions_for_user(user_id: str) -> None:
+    with vod_lock:
+        dead = [(sid, _vod_detach_locked(sid))
+                for sid in [s for s, rec in vod_sessions.items()
+                            if rec.get("user_id") == user_id]]
+    for sid, sess in dead:
+        _vod_dispose(sid, sess)
+
+
 def _load_playlist():
     global playlist
     if PLAYLIST_FILE.exists():
@@ -719,6 +972,8 @@ def _load_state() -> dict | None:
 
 
 _load_tokens()
+_load_users()
+_load_user_sessions()
 _load_playlist()
 _load_recent()
 _load_requests()
@@ -1145,6 +1400,11 @@ def _cleanup_hls():
     _composer_state_lock; lock order matches the composer's tick path so
     they can't deadlock.)"""
     for entry in HLS_DIR.iterdir():
+        # The VOD tree is not ours: private per-user sessions live under
+        # /hls/vod/ with their own reaper. A live-stream stop/idle must not
+        # nuke someone's in-flight film.
+        if entry == VOD_DIR_BASE:
+            continue
         try:
             if entry.is_dir():
                 shutil.rmtree(entry)
@@ -1153,6 +1413,7 @@ def _cleanup_hls():
         except FileNotFoundError:
             pass
     RUN_DIR_BASE.mkdir(parents=True, exist_ok=True)
+    VOD_DIR_BASE.mkdir(parents=True, exist_ok=True)
     # Reset run state and composer counters — without /hls/ on disk there's
     # nothing for those numbers to refer to. Lock order: state_lock first,
     # _composer_state_lock second (same as composer cleanup path).
@@ -1943,6 +2204,7 @@ def _build_ffmpeg_cmd(
     audio_idx: int | None = None,
     subtitle_idx: int | None = None,
     audio_input: str | None = None,
+    mode: str = "live",
 ) -> list[str]:
     """Build the ffmpeg HLS command. Output goes into `run_dir/`:
     `init.mp4` (fmp4 init segment), `seg_NNNNN.m4s` (media segments), and
@@ -1959,8 +2221,20 @@ def _build_ffmpeg_cmd(
     `audio_input` (a separate URL, only set on the YouTube DASH path) feeds
     audio from a 2nd `-i` input. Without this, YouTube's "best muxed" tops
     out at 360p — we ask yt-dlp for separate video+audio formats so we can
-    get real 1080p, then merge here at encode time."""
+    get real 1080p, then merge here at encode time.
+
+    `mode` ("live" | "vod"): "live" is the original behavior, unchanged.
+    "vod" (v2 per-user sessions) drops -re for -readrate pacing, drops the
+    zerolatency tune on libx264, honors VOD_FORCE_CPU, and writes a full
+    never-deleting playlist with a final ENDLIST (disk-backed session dir).
+    `run_dir` is the VOD session dir."""
     input_str = str(input_path)
+    # v2: local encoder flags so VOD_FORCE_CPU can demote a VOD encode to
+    # libx264 without touching the live stream's globals. In live mode these
+    # equal the globals exactly.
+    force_cpu = mode == "vod" and VOD_FORCE_CPU
+    use_nvenc = USE_NVENC and not force_cpu
+    use_vaapi = USE_VAAPI and not force_cpu
     # Single ffprobe pass — codec for HW-decode eligibility, height for output
     # cap, transfer/primaries for HDR detection.
     info = _probe_video_info(input_str) or {}
@@ -1980,7 +2254,7 @@ def _build_ffmpeg_cmd(
     # tonemap on this iGPU (no VPP), and the zscale tonemap chain only works
     # on CPU-side frames.
     hw_decode = (
-        USE_VAAPI and USE_VAAPI_DECODE
+        use_vaapi and USE_VAAPI_DECODE
         and src_codec in HWACCEL_DECODE_CODECS
         and not is_hdr
     )
@@ -1991,16 +2265,16 @@ def _build_ffmpeg_cmd(
     # produces no output, so DV sources fall back to CPU decode (still NVENC
     # encoded). The is_hdr branch below handles the nv_decode=False case.
     nv_decode = (
-        USE_NVENC and src_codec in NVDEC_DECODE_CODECS
+        use_nvenc and src_codec in NVDEC_DECODE_CODECS
         and not info.get("is_dovi")
     )
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin"]
-    if USE_NVENC:
+    if use_nvenc:
         # Frames are kept in `cuda` hw frames format when NVDEC is used so the
         # whole pipeline (decode → optional scale_cuda → nvenc) stays on-GPU.
         if nv_decode:
             cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
-    elif USE_VAAPI:
+    elif use_vaapi:
         # Bind a named device "va" to our renderD128 and pin the filter chain
         # to it explicitly. Without -filter_hw_device, scale_vaapi/hwupload
         # picks the default vaapi device, which may be a second iGPU/driver
@@ -2014,7 +2288,15 @@ def _build_ffmpeg_cmd(
                     "-hwaccel_device", "va"]
     if start_seconds > 0:
         cmd += ["-ss", f"{start_seconds:.3f}"]
-    cmd += ["-re", "-i", input_str]
+    if mode == "vod":
+        # VOD isn't paced for a shared live edge — read at VOD_READRATE×
+        # realtime so the buffer runs ahead of the viewer without flat-out
+        # transcoding the whole file ("0" = unpaced, full speed).
+        if VOD_READRATE != "0":
+            cmd += ["-readrate", VOD_READRATE]
+        cmd += ["-i", input_str]
+    else:
+        cmd += ["-re", "-i", input_str]
     # YouTube DASH path: separate audio URL feeds a 2nd input. -ss is repeated
     # so both inputs seek to the same position, keeping audio in sync after
     # admin scrubbing. -re paces both at native rate.
@@ -2055,7 +2337,7 @@ def _build_ffmpeg_cmd(
                 f"({Path(input_str).name} #{subtitle_idx})",
                 file=sys.stderr,
             )
-    if USE_NVENC:
+    if use_nvenc:
         # NVENC encode + (when codec is supported) NVDEC decode. Filter chain:
         #   - SDR fast path (NVDEC + no subs): scale_cuda only, frames never
         #     leave the GPU.
@@ -2142,7 +2424,7 @@ def _build_ffmpeg_cmd(
             # untouched and works in both browsers.
             "-bsf:v", "h264_metadata=aud=insert",
         ]
-    elif USE_VAAPI:
+    elif use_vaapi:
         # When hw_decode is on, frames are already in vaapi format on the GPU,
         # so scale_vaapi runs entirely on the GPU. Otherwise hwupload moves
         # CPU-decoded frames onto the GPU before encode.
@@ -2237,7 +2519,12 @@ def _build_ffmpeg_cmd(
             "-vf", vf,
             "-c:v", "libx264",
             "-preset", "veryfast",
-            "-tune", "zerolatency",
+        ]
+        # zerolatency exists for the live stream's lag budget; VOD has no
+        # shared live edge, so keep b-frames/lookahead for better quality.
+        if mode != "vod":
+            cmd += ["-tune", "zerolatency"]
+        cmd += [
             "-b:v", video_bitrate,
             "-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_TIME})",
             "-color_range", "tv",
@@ -2251,11 +2538,26 @@ def _build_ffmpeg_cmd(
         "-ac", "2",
         "-f", "hls",
         "-hls_time", HLS_SEG_TIME,
-        "-hls_list_size", HLS_LIST_SIZE,
-        # +program_date_time tags every segment with the server's wall clock.
-        # Clients use that as a universal reference to converge on the same
-        # playhead (vs. each holding their own per-buffer "live edge").
-        "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments+program_date_time",
+    ]
+    if mode == "vod":
+        cmd += [
+            # Full playlist, nothing deleted: segments live on the disk-backed
+            # /hls/vod volume, so back-seek within the transcoded range is free
+            # and client-side. No omit_endlist — when the transcode completes,
+            # ffmpeg writes #EXT-X-ENDLIST and the player fires a real `ended`
+            # instead of hanging at the last segment waiting for a live edge.
+            "-hls_list_size", "0",
+            "-hls_flags", "independent_segments",
+        ]
+    else:
+        cmd += [
+            "-hls_list_size", HLS_LIST_SIZE,
+            # +program_date_time tags every segment with the server's wall clock.
+            # Clients use that as a universal reference to converge on the same
+            # playhead (vs. each holding their own per-buffer "live edge").
+            "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments+program_date_time",
+        ]
+    cmd += [
         # fmp4 segments (.m4s) instead of mpegts (.ts). Firefox's MSE doesn't
         # accept raw mpegts, so with .ts segments Hls.js transmuxes each one
         # to fmp4 in JavaScript before appending — a known FF stutter source
@@ -3134,6 +3436,24 @@ def _gate_viewer_routes():
         return None  # nginx subrequest endpoint — has its own logic below
     if p == "/api/now-playing":
         return None  # title-only external display feed — deliberately tokenless
+    # v2 login surface — reachable logged-out by definition. The theme CSS is
+    # exempt too (login.html links it); nothing else static is opened up —
+    # the /build/ bundles stay token-gated so a private instance doesn't hand
+    # its full client-side route map to anonymous scanners.
+    if p in ("/login", "/api/auth/login", "/jetstream-theme.css"):
+        return None
+    if p == "/api/_authcheck_vod":
+        return None  # nginx subrequest endpoint — has its own logic below
+    # v2 user area: the library browser + VOD control APIs require a logged-in
+    # user session (never an invite token — invite links stay watch/control
+    # only). Pages redirect to login; APIs get JSON 401s.
+    if (p == "/library" or p.startswith("/api/user/") or p.startswith("/api/vod/")
+            or p in ("/api/auth/logout", "/api/auth/me")):
+        if _session_user():
+            return None
+        if p == "/library":
+            return redirect("/login?next=" + urllib.parse.quote(p))
+        return jsonify({"error": "auth_required"}), 401
     # Control surface (the /controls page + /api/control/* endpoints) requires
     # a friend-or-admin token regardless of public mode — viewers and the
     # anonymous public can watch but never drive playback. Check this before
@@ -3160,6 +3480,10 @@ def _gate_viewer_routes():
     cookie_t = request.cookies.get(TOKEN_COOKIE)
     if _valid_token(cookie_t):
         _mark_token_seen(cookie_t)
+        return None
+    # A logged-in user is at least a viewer: accounts can watch the live
+    # stream without also needing an invite token.
+    if _session_user():
         return None
     qs_t = request.args.get("t")
     if _valid_token(qs_t):
@@ -3193,7 +3517,8 @@ def api_authcheck():
     Without _track_viewer here the active viewers list and history go silent."""
     with settings_lock:
         public = settings.get("viewer_public")
-    if not public and not _valid_token(request.cookies.get(TOKEN_COOKIE)):
+    if (not public and not _valid_token(request.cookies.get(TOKEN_COOKIE))
+            and not _session_user()):
         return ("", 401)
     # Continuous-watch cap: a session past the limit gets its segments cut off.
     # Checked before _track_viewer so an expired session stops refreshing its
@@ -3204,6 +3529,174 @@ def api_authcheck():
     # for known IPs and only emits a connect-log on the very first sighting.
     _track_viewer()
     return ("", 204)
+
+
+# ==== v2: auth routes + VOD authcheck ======================================
+
+@app.route("/api/_authcheck_vod")
+def api_authcheck_vod():
+    """nginx auth_request target for /hls/vod/*. Unlike the live stream, a
+    VOD session belongs to exactly one user: 204 only when the caller's
+    `js_user` session owns the <sid> embedded in the original URI (forwarded
+    by nginx as X-Original-URI). Doubles as the idle-reaper heartbeat — each
+    segment fetch bumps last_access, the same trick _authcheck plays with
+    _track_viewer."""
+    u = _session_user()
+    if not u:
+        return ("", 401)
+    m = re.match(r"^/hls/vod/([A-Za-z0-9_-]+)/", request.headers.get("X-Original-URI", ""))
+    if not m:
+        return ("", 403)
+    with vod_lock:
+        sess = vod_sessions.get(m.group(1))
+        if not sess or sess.get("user_id") != u["id"]:
+            return ("", 403)
+        sess["last_access"] = time.time()
+    return ("", 204)
+
+
+@app.route("/login")
+def login_page():
+    return send_from_directory("static", "login.html")
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    # Rate-limit on the TRUSTED ip: keying on _client_ip (leftmost XFF) lets
+    # an attacker rotate forged XFF headers and never trip the limiter.
+    if not _ip_rate_check(login_rate, login_rate_lock, _trusted_client_ip(),
+                          LOGIN_RATE_WINDOW, LOGIN_RATE_MAX):
+        return jsonify({"error": "rate_limited"}), 429
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username") or "").strip().lower()
+    password = str(data.get("password") or "")
+    with users_lock:
+        user = next((u for u in users if u["username"] == username), None)
+        scrypt_rec = dict(user.get("scrypt") or {}) if user else None
+        disabled = bool(user.get("disabled")) if user else True
+    # scrypt is deliberately slow (~16 MiB / tens of ms) — verify OUTSIDE
+    # users_lock so a login burst can't serialize every other user-store
+    # reader behind the KDF. (No dummy-verify on unknown usernames: the
+    # username set is admin-curated, not enumerable-sensitive.)
+    if disabled or not scrypt_rec or not _verify_password(password, scrypt_rec):
+        return jsonify({"error": "bad_credentials"}), 401
+    with users_lock:
+        user = next((u for u in users if u["username"] == username), None)
+        if not user or user.get("disabled"):
+            return jsonify({"error": "bad_credentials"}), 401
+        user["last_login"] = time.time()
+        _save_users()
+        uid = user["id"]
+    sid = _create_user_session(uid)
+    resp = jsonify({"ok": True})
+    resp.set_cookie(
+        USER_SESSION_COOKIE, sid,
+        max_age=USER_SESSION_TTL,
+        httponly=True, secure=True, samesite="Lax",
+    )
+    return resp
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    sid = request.cookies.get(USER_SESSION_COOKIE)
+    if sid:
+        with user_sessions_lock:
+            if sid in user_sessions:
+                del user_sessions[sid]
+                _save_user_sessions()
+    resp = jsonify({"ok": True})
+    resp.delete_cookie(USER_SESSION_COOKIE)
+    return resp
+
+
+@app.route("/api/auth/me")
+def api_auth_me():
+    u = _session_user()  # gate guarantees a session, but stay defensive
+    if not u:
+        return jsonify({"error": "auth_required"}), 401
+    return jsonify({"id": u["id"], "username": u["username"]})
+
+
+@app.route("/admin/api/users", methods=["GET", "POST"])
+def api_admin_users():
+    if request.method == "GET":
+        with vod_lock:
+            active_vod_uids = {s.get("user_id") for s in vod_sessions.values()}
+        with users_lock:
+            return jsonify({"users": [
+                {
+                    "id": u["id"], "username": u["username"],
+                    "created": u.get("created"), "last_login": u.get("last_login"),
+                    "disabled": bool(u.get("disabled")),
+                    "active_vod": u["id"] in active_vod_uids,
+                } for u in users
+            ]})
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username") or "").strip().lower()
+    password = str(data.get("password") or "")
+    if not USERNAME_RE.match(username):
+        return jsonify({"error": "bad_username",
+                        "message": "3-32 chars, a-z 0-9 _ . -"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "bad_password", "message": "min 8 chars"}), 400
+    with users_lock:
+        if any(u["username"] == username for u in users):
+            return jsonify({"error": "duplicate"}), 409
+        rec = {
+            "id": secrets.token_urlsafe(12),
+            "username": username,
+            "scrypt": _hash_password(password),
+            "created": time.time(),
+            "last_login": None,
+            "disabled": False,
+        }
+        users.append(rec)
+        _save_users()
+    return jsonify({"id": rec["id"]})
+
+
+@app.route("/admin/api/users/<uid>", methods=["DELETE"])
+def api_admin_user_delete(uid):
+    with users_lock:
+        before = len(users)
+        users[:] = [u for u in users if u["id"] != uid]
+        if len(users) == before:
+            return jsonify({"error": "not_found"}), 404
+        _save_users()
+    _revoke_user_sessions(uid)
+    _vod_kill_sessions_for_user(uid)
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/api/users/<uid>/password", methods=["POST"])
+def api_admin_user_password(uid):
+    password = str((request.get_json(silent=True) or {}).get("password") or "")
+    if len(password) < 8:
+        return jsonify({"error": "bad_password", "message": "min 8 chars"}), 400
+    with users_lock:
+        user = next((u for u in users if u["id"] == uid), None)
+        if not user:
+            return jsonify({"error": "not_found"}), 404
+        user["scrypt"] = _hash_password(password)
+        _save_users()
+    _revoke_user_sessions(uid)  # a reset means "lock out whoever had it"
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/api/users/<uid>/disabled", methods=["POST"])
+def api_admin_user_disabled(uid):
+    disabled = bool((request.get_json(silent=True) or {}).get("disabled"))
+    with users_lock:
+        user = next((u for u in users if u["id"] == uid), None)
+        if not user:
+            return jsonify({"error": "not_found"}), 404
+        user["disabled"] = disabled
+        _save_users()
+    if disabled:
+        _revoke_user_sessions(uid)
+        _vod_kill_sessions_for_user(uid)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/session/continue", methods=["POST"])
@@ -4845,6 +5338,344 @@ def poster():
     # cache for an hour so re-rendering a grid doesn't re-hit Flask.
     resp.headers["Cache-Control"] = "public, max-age=3600"
     return resp
+
+
+# ==== v2: vod engine =======================================================
+# Per-user on-demand transcode sessions. Each session is one ffmpeg (built by
+# _build_ffmpeg_cmd with mode="vod") writing an fmp4 HLS ladder-of-one into
+# /hls/vod/<sid>/, served by nginx behind /api/_authcheck_vod (which also
+# bumps last_access per segment fetch — the reaper's idle signal). Seeks are
+# kill+restart into the same sid with a bumped `generation` so the client can
+# cache-bust the playlist URL. No playlist splicing, ever.
+
+VOD_PLAYLIST_NAME = "idx.m3u8"  # what _build_ffmpeg_cmd names its playlist
+
+
+def _vod_playlist_url(sid: str, generation: int) -> str:
+    url = f"/hls/vod/{sid}/{VOD_PLAYLIST_NAME}"
+    return f"{url}?g={generation}" if generation else url
+
+
+def _vod_build_cmd(sess_dir: Path, rel_path: str, start: float,
+                   audio_idx: int | None, subtitle_idx: int | None) -> list[str]:
+    full = _safe_resolve(rel_path, must_be_file=True)
+    return _build_ffmpeg_cmd(
+        full, sess_dir, start, audio_idx, subtitle_idx, mode="vod")
+
+
+def _vod_start(user_id: str, rel_path: str, start: float = 0.0,
+               subtitle_idx: int | None = None) -> dict | tuple:
+    """Start a VOD session. Returns the registry record (plus "session_id")
+    on success, or an ("error-code",) tuple: ("not_found",) for a bad path,
+    ("capacity",) when all VOD_MAX_SESSIONS slots are taken by OTHER users
+    (starting a new film replaces your own session first — one per user)."""
+    rel = (rel_path or "").strip("/")
+    if not _viewer_file_allowed(rel):
+        return ("not_found",)
+    try:
+        full = _safe_resolve(rel, must_be_file=True)
+    except Exception:
+        return ("not_found",)
+    # Probes (ffprobe subprocesses) run before taking vod_lock so a slow disk
+    # can't stall the per-segment _authcheck_vod heartbeat.
+    duration = _probe_duration(full)
+    start = max(0.0, float(start or 0.0))
+    if duration is not None and start >= duration:
+        start = max(0.0, duration - 1.0)
+    audio_idx = _probe_english_audio(str(full))
+    sid = secrets.token_urlsafe(16)
+    sess_dir = _vod_session_dir(sid)
+    now = time.time()
+    # Placeholder-first: reserve the registry slot BEFORE the slow command
+    # build (it ffprobes the source) and the spawn. This closes two races a
+    # probe-then-lock shape had: (a) capacity TOCTOU — two starts could both
+    # pass the cap check they measured pre-lock; (b) rapid same-user
+    # double-click — the later start detaches this placeholder, and we notice
+    # at install time instead of leaving the registry pointing at film A
+    # while the client plays film B.
+    rec = {
+        "user_id": user_id, "rel_path": rel, "title": full.name,
+        "proc": None, "start_offset": start, "started_at": now,
+        "last_access": now, "duration": duration, "status": "starting",
+        "generation": 0,
+        # kept so _vod_seek rebuilds the exact same track selection
+        "audio_idx": audio_idx, "subtitle_idx": subtitle_idx,
+    }
+    with vod_lock:
+        old = [(s, _vod_detach_locked(s))
+               for s in [s for s, r in vod_sessions.items()
+                         if r.get("user_id") == user_id]]
+        over_cap = len(vod_sessions) >= VOD_MAX_SESSIONS
+        if not over_cap:
+            vod_sessions[sid] = rec
+    for old_sid, old_sess in old:  # one-per-user: replaced session dies
+        _vod_dispose(old_sid, old_sess)
+    if over_cap:
+        return ("capacity",)
+    try:
+        cmd = _build_ffmpeg_cmd(
+            full, sess_dir, start, audio_idx, subtitle_idx, mode="vod")
+        sess_dir.mkdir(parents=True, exist_ok=True)
+        proc = _spawn_ffmpeg(cmd, sess_dir / "ffmpeg.log")
+    except Exception:
+        with vod_lock:
+            _vod_detach_locked(sid)
+        shutil.rmtree(sess_dir, ignore_errors=True)
+        return ("not_found",)
+    with vod_lock:
+        if vod_sessions.get(sid) is rec:
+            rec["proc"] = proc
+            rec["status"] = "running"
+            rec["last_access"] = time.time()
+            return {**rec, "session_id": sid}
+    # Superseded while we were spawning (a newer start by the same user, or
+    # an admin kill) — dispose our encoder rather than leaking it.
+    _vod_dispose(sid, {"proc": proc})
+    return ("conflict",)
+
+
+def _vod_seek(sid: str, position: float) -> dict | None:
+    """Restart a session's ffmpeg at `position` — same sid, wiped dir,
+    generation+1 (the playlist URL carries ?g=<gen> as a cache-buster).
+    Returns the updated record, or None for an unknown sid.
+
+    Three phases so vod_lock is never held across slow work (proc.wait,
+    rmtree, the ffprobe inside the command builder) — the per-segment
+    _authcheck_vod heartbeat contends on this lock, so a seek that held it
+    for 5+ s would stall every VOD viewer's segment fetches."""
+    with vod_lock:  # phase 1: take exclusive hold of the proc handle
+        sess = vod_sessions.get(sid)
+        if not sess or sess.get("status") == "seeking":
+            return None  # unknown, or a concurrent seek already in flight
+        old_proc = sess.get("proc")
+        sess["proc"] = None
+        sess["status"] = "seeking"
+        sess["last_access"] = time.time()  # don't get idle-reaped mid-seek
+        rel_path = sess["rel_path"]
+        audio_idx = sess.get("audio_idx")
+        subtitle_idx = sess.get("subtitle_idx")
+        duration = sess.get("duration")
+    # phase 2 (unlocked): all the slow work
+    _vod_dispose(sid, {"proc": old_proc})  # terminate + wait + rmtree
+    sess_dir = _vod_session_dir(sid)
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    position = max(0.0, float(position or 0.0))
+    if duration is not None and position >= duration:
+        position = max(0.0, duration - 1.0)
+    try:
+        cmd = _vod_build_cmd(sess_dir, rel_path, position,
+                             audio_idx, subtitle_idx)
+    except Exception:
+        # Source vanished mid-session (e.g. library cleanup) — drop it.
+        _vod_kill_session(sid)
+        return None
+    proc = _spawn_ffmpeg(cmd, sess_dir / "ffmpeg.log")
+    with vod_lock:  # phase 3: reinstall, unless killed while we worked
+        if vod_sessions.get(sid) is sess:
+            sess["proc"] = proc
+            sess["start_offset"] = position
+            sess["generation"] = int(sess.get("generation") or 0) + 1
+            sess["last_access"] = time.time()
+            sess["status"] = "running"
+            return dict(sess)
+    # Session was killed (admin/stop/reaper) during phase 2 — don't leak the
+    # freshly spawned encoder.
+    _vod_dispose(sid, {"proc": proc})
+    return None
+
+
+def _vod_stop(sid: str) -> bool:
+    return _vod_kill_session(sid)
+
+
+def _vod_reaper():
+    """Reap idle and dead VOD sessions every 5s. Idle = no segment fetch
+    (last_access via _authcheck_vod) for VOD_IDLE_TIMEOUT_S. Dead ffmpeg is
+    only reaped once last_access is >30s old — grace so a just-started proc
+    that crashed instantly still leaves its ffmpeg.log inspectable and a
+    session isn't reaped between /api/vod/start and the first fetch.
+    Detach under the lock, dispose (proc.wait/rmtree) outside it."""
+    while True:
+        time.sleep(5)
+        try:
+            now = time.time()
+            doomed = []
+            with vod_lock:
+                for sid, sess in list(vod_sessions.items()):
+                    idle = now - float(sess.get("last_access") or 0)
+                    proc = sess.get("proc")
+                    dead = proc is not None and proc.poll() is not None
+                    if idle > VOD_IDLE_TIMEOUT_S or (dead and idle > 30):
+                        doomed.append((sid, _vod_detach_locked(sid), dead, idle))
+            for sid, sess, dead, idle in doomed:
+                print(f"vod: reaping session {sid} "
+                      f"({'dead ffmpeg' if dead else 'idle'}, "
+                      f"idle {idle:.0f}s)", file=sys.stderr)
+                _vod_dispose(sid, sess)
+        except Exception as e:
+            print(f"vod reaper error: {e}", file=sys.stderr)
+
+
+# Orphan sweep before the reaper starts: vod_sessions is memory-only, so any
+# dirs left by a previous process (crash / deploy restart) have no registry
+# entry and would otherwise sit on the VOD volume forever (_cleanup_hls
+# deliberately skips this tree). Single gunicorn worker (-w 1), so there's no
+# sibling process whose live sessions this could wipe.
+if VOD_DIR_BASE.exists():
+    for _orphan in VOD_DIR_BASE.iterdir():
+        shutil.rmtree(_orphan, ignore_errors=True)
+
+threading.Thread(target=_vod_reaper, daemon=True, name="vod-reaper").start()
+
+
+@app.route("/library")
+def library_page():
+    # Gate redirects logged-out browsers to /login before this runs.
+    return send_from_directory("static", "library.html")
+
+
+@app.route("/api/user/library/browse")
+def api_user_library_browse():
+    """User-tier twin of /api/library/browse — same helper, same payload.
+    Gated to logged-in users by _gate_viewer_routes (/api/user/ prefix)."""
+    return jsonify(_viewer_list_dir(request.args.get("path", "")))
+
+
+@app.route("/api/user/library/search")
+def api_user_library_search():
+    items, truncated = _search_viewer_library(request.args.get("q", "").strip())
+    return jsonify({"results": items, "truncated": truncated})
+
+
+def _vod_owned_session(sid: str) -> dict | None:
+    """Registry record for `sid` IF the calling user owns it, else None.
+    Not-owned and non-existent are deliberately the same answer (404) so
+    session ids can't be probed."""
+    u = _session_user()
+    if not u or not sid:
+        return None
+    with vod_lock:
+        sess = vod_sessions.get(sid)
+        if not sess or sess.get("user_id") != u["id"]:
+            return None
+        return dict(sess)
+
+
+@app.route("/api/vod/start", methods=["POST"])
+def api_vod_start():
+    u = _session_user()
+    data = request.get_json(silent=True) or {}
+    try:
+        start = float(data.get("start") or 0.0)
+    except (TypeError, ValueError):
+        start = 0.0
+    sub_raw = data.get("subtitle_idx")
+    try:
+        subtitle_idx = int(sub_raw) if sub_raw is not None else None
+    except (TypeError, ValueError):
+        subtitle_idx = None
+    res = _vod_start(u["id"], str(data.get("path") or ""), start, subtitle_idx)
+    if isinstance(res, tuple):
+        if res[0] == "capacity":
+            return jsonify({
+                "error": "vod_capacity",
+                "message": f"All {VOD_MAX_SESSIONS} streams in use — "
+                           "try again later",
+            }), 409
+        if res[0] == "conflict":
+            # A newer start by the same user superseded this one mid-spawn.
+            return jsonify({"error": "vod_conflict"}), 409
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({
+        "session_id": res["session_id"],
+        "playlist_url": _vod_playlist_url(res["session_id"], 0),
+        "duration": res["duration"],
+        "start_offset": res["start_offset"],
+    })
+
+
+@app.route("/api/vod/seek", methods=["POST"])
+def api_vod_seek():
+    data = request.get_json(silent=True) or {}
+    sid = str(data.get("session_id") or "")
+    if not _vod_owned_session(sid):
+        return jsonify({"error": "not_found"}), 404
+    try:
+        position = float(data.get("position") or 0.0)
+    except (TypeError, ValueError):
+        position = 0.0
+    sess = _vod_seek(sid, position)
+    if not sess:
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({
+        "playlist_url": _vod_playlist_url(sid, sess["generation"]),
+        "start_offset": sess["start_offset"],
+    })
+
+
+@app.route("/api/vod/stop", methods=["POST"])
+def api_vod_stop():
+    data = request.get_json(silent=True) or {}
+    sid = str(data.get("session_id") or "")
+    if not _vod_owned_session(sid):
+        return jsonify({"error": "not_found"}), 404
+    _vod_stop(sid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/vod/status")
+def api_vod_status():
+    sid = request.args.get("session_id", "")
+    sess = _vod_owned_session(sid)
+    if not sess:
+        return jsonify({"error": "not_found"}), 404
+    # Buffer depth: segments on disk × segment duration (nothing is deleted
+    # for VOD, so this is the full transcoded range from start_offset).
+    try:
+        n_segs = sum(1 for p in _vod_session_dir(sid).glob("seg_*.m4s"))
+        transcoded_ahead_s = n_segs * float(HLS_SEG_TIME)
+    except Exception:
+        transcoded_ahead_s = None
+    status = sess.get("status", "running")
+    proc = sess.get("proc")
+    if proc is not None and proc.poll() is not None:
+        # poll() at read time is fresh enough — but a clean exit (rc 0,
+        # transcode complete) and a mid-file crash are different answers:
+        # the client treats "ended" as "the whole remainder is on disk" and
+        # stops polling, which would leave a crash looking fully buffered.
+        status = "ended" if proc.returncode == 0 else "error"
+    return jsonify({
+        "status": status,
+        "start_offset": sess["start_offset"],
+        "duration": sess["duration"],
+        "transcoded_ahead_s": transcoded_ahead_s,
+    })
+
+
+@app.route("/admin/api/vod/sessions")
+def api_admin_vod_sessions():
+    with vod_lock:
+        snap = [(sid, dict(sess)) for sid, sess in vod_sessions.items()]
+    with users_lock:
+        names = {u["id"]: u["username"] for u in users}
+    return jsonify({
+        "sessions": [{
+            "session_id": sid,
+            "username": names.get(sess.get("user_id"), "?"),
+            "title": sess.get("title"),
+            "start_offset": sess.get("start_offset"),
+            "started_at": sess.get("started_at"),
+            "last_access": sess.get("last_access"),
+        } for sid, sess in snap],
+        "cap": VOD_MAX_SESSIONS,
+    })
+
+
+@app.route("/admin/api/vod/sessions/<sid>", methods=["DELETE"])
+def api_admin_vod_session_delete(sid):
+    if not _vod_stop(sid):
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

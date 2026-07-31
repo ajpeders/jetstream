@@ -8,12 +8,15 @@ A small Flask + ffmpeg service that broadcasts video files (and yt-dlp-resolvabl
   src/                            Svelte UI islands
   static/admin.html               admin UI
   static/viewer.html              viewer UI
+  static/login.html               user login (/login)
+  static/library.html             private VOD library (/library)
   static/build/                   generated frontend bundle (gitignored)
   package.json                    frontend build tooling
   Dockerfile                      python:3.12-slim + ffmpeg + gunicorn + yt-dlp
   nginx-default.conf.template     nginx sidecar config (envsubst at start)
   ARCHITECTURE.md                 how it works
   ROADMAP.md                      what's left
+  HOWTO.md                        operator guides
 
 ~/homelab/services/jetstream/     ← deployment include
   docker-compose.yml              includes this app compose file
@@ -49,7 +52,7 @@ Don't rely on `docker cp` for `app.py` on prod — it survives until the next `d
 
 ## Endpoints
 
-Three access tiers. **Viewer** and **friend** are both invite tokens (the `lt` cookie, minted from the admin page, no password); **admin** is Traefik basicauth. A token's tier is its `level` field in `tokens.json` (`viewer` | `friend`; tokens predating the field default to `viewer`). The admin token (`_admin_`) is the implicit top tier.
+Four access tiers. **Viewer** and **friend** are both invite tokens (the `lt` cookie, minted from the admin page, no password); **user** is an admin-created account (username + password at `/login`, `js_user` session cookie — distinct from `lt`); **admin** is Traefik basicauth. A token's tier is its `level` field in `tokens.json` (`viewer` | `friend`; tokens predating the field default to `viewer`). The admin token (`_admin_`) is the implicit top tier.
 
 Public (no token — exempt from the viewer gate):
 - `GET /api/now-playing` — feed for external displays (e.g. a living-room hub). Returns `{"title", "playing", "is_live", "position_seconds", "duration_seconds", "server_unix"}` with the currently-playing title prettified from the raw filename (scene-release cruft trimmed — `Hokum 2026 REPACK 1080p ...mkv` → `Hokum 2026`). `title` is `""`, `playing` is `false`, and the timing fields are `null` when idle; `server_unix` lets a poller detect a stale/cached reply. Deliberately tokenless and non-sensitive (no paths, viewers, or tokens leak). 2 s `Cache-Control`. Point a display at it with e.g. `JETSTREAM_TITLE_URL=https://live.thelunadog.com/api/now-playing`.
@@ -67,6 +70,15 @@ Friend (a `friend`-level invite token; never needs the admin password):
 - `GET /api/control/browse?path=…`
 - These are the same view functions as the matching `/admin/api/*` routes (a second route alias), gated to `friend`+`admin` tokens by the request gate. Host-only surface (settings, tokens, viewers, perf) is **not** aliased.
 
+User (`js_user` session — admin-created accounts, no self-registration):
+- `GET /login` — username + password. Rate-limited 5 attempts / 60 s per IP. Sets `js_user` (30 d). Passwords are scrypt-hashed (stdlib); sessions are server-side (`/data/sessions.json`) and revoked on password reset / disable / delete.
+- `GET /library` — private VOD library: grid + search, backed by `/api/user/library/{browse,search}`.
+- `POST /api/vod/start` `{path}` — spins up a private on-demand HLS stream under `/hls/vod/<session_id>/` that only that user's session can fetch. One session per user; global cap `VOD_MAX_SESSIONS` (default 2) → `409 vod_capacity` beyond.
+- `POST /api/vod/seek` `{to_seconds}` — kill ffmpeg + restart with `-ss` (fresh playlist generation; `?g=` cache-buster).
+- `POST /api/vod/stop`, `GET /api/vod/status`
+- `GET /hls/vod/<session_id>/*` — served by nginx after an ownership auth subrequest to `/api/_authcheck_vod` (session must own the sid; **no LAN bypass** here, unlike `/hls/`).
+- Logged-in users can also watch the live stream.
+
 Admin (Traefik basicauth on prod):
 - `POST /admin/api/play` `{path, start_seconds, subtitle_idx?}`
 - `POST /admin/api/play_url` `{url}` — yt-dlp resolves; playlists expand into the queue
@@ -78,6 +90,8 @@ Admin (Traefik basicauth on prod):
 - `GET /admin/api/viewers`, `GET /admin/api/viewers/history` — active viewers + 200-line tail of the connect log
 - `GET /admin/api/perf` — ffmpeg PID + uptime, segment count, run state, viewer count
 - `GET /admin/api/browse?path=…`
+- `GET / POST /admin/api/users`, `DELETE /admin/api/users/<id>`, `POST /admin/api/users/<id>/password`, `POST /admin/api/users/<id>/disabled` — account CRUD. Password reset / disable / delete revoke the user's sessions. Admin UI grows a Users panel (host-only; hidden on `/controls`).
+- `GET /admin/api/vod/sessions`, `DELETE /admin/api/vod/sessions/<sid>` — inspect / kill active VOD sessions. Surfaced in the admin UI's Active VOD panel (host-only).
 
 ## Features
 
@@ -122,6 +136,12 @@ Not supported:
 | `TARGET_HEIGHT` | `1080` | Output cap. Source-bounded — smaller sources don't get upscaled. |
 | `HLS_SEG_TIME` | `1` | Segment seconds. Matches the player live-edge tuning. |
 | `HLS_LIST_SIZE` | `24` | Live playlist depth. |
+| `USERS_FILE` | `/data/users.json` | User accounts (scrypt-hashed passwords). |
+| `USER_SESSIONS_FILE` | `/data/sessions.json` | Server-side login sessions (`js_user` cookie). |
+| `VOD_MAX_SESSIONS` | `2` | Global cap on concurrent VOD sessions; `409 vod_capacity` beyond. |
+| `VOD_IDLE_TIMEOUT_S` | `120` | No segment fetches for this long → VOD ffmpeg killed, session dir removed. |
+| `VOD_READRATE` | `2.0` | VOD input pacing (`-readrate`; VOD doesn't use `-re`). |
+| `VOD_FORCE_CPU` | `0` | Push VOD encodes to libx264 — reserves NVENC sessions for live + preroll. |
 
 WSGI: gunicorn 23.0 (`-w 1 -k gthread --threads 16 --timeout 120`). One worker shares the in-process state (watcher, composer, viewers dict); 16 threads handle concurrent `/api/_authcheck` + admin requests.
 
@@ -133,5 +153,7 @@ State files live under `/data/` (mounted from `state/jetstream/`):
 - `settings.json` — `viewer_public`, `auto_fill`
 - `state.json` — current source + position (auto-saved every ~10s; restored on startup)
 - `viewer_log.jsonl` — append-only connect log
+- `users.json` — user accounts (scrypt-hashed passwords)
+- `sessions.json` — server-side login sessions
 
-See **ARCHITECTURE.md** for the data flow + design rationale, **ROADMAP.md** for what's left.
+See **ARCHITECTURE.md** for the data flow + design rationale, **ROADMAP.md** for what's left, **HOWTO.md** for operator guides.

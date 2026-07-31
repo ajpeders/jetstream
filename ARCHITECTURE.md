@@ -80,6 +80,10 @@ This is what makes queue advances / seeks / resumes seamless on the viewer side:
 | `viewers_lock` | `viewers{}`, `viewer_labels{}` |
 | `chat_lock` | `chat_messages[]`, `chat_next_id`, `chat_rate{}` |
 | `_library_cache_lock` | `_scan_library`'s mtime-invalidated cache |
+| `users_lock` | `users{}` + `/data/users.json` writes |
+| `user_sessions_lock` | login sessions + `/data/sessions.json` writes |
+| `login_rate_lock` | per-IP login-attempt window |
+| `vod_lock` | VOD session table (procs, run generations, last-fetch timestamps) |
 
 ### Watcher thread
 
@@ -111,6 +115,16 @@ The Flask endpoint also calls `_track_viewer()` so the active-viewers list and h
 
 For non-`/hls` paths nginx just proxies through to Flask, which runs the existing `_gate_viewer_routes()` before-request hook.
 
+### Users & sessions
+
+Admin-created accounts only — no self-registration. Username + password, scrypt-hashed via stdlib `hashlib.scrypt` (no external deps), stored in `/data/users.json` under `users_lock`. Login at `/login`, rate-limited 5 attempts / 60 s per IP (`login_rate_lock`).
+
+Sessions are **server-side**: opaque id in the `js_user` cookie (30 d), record in `/data/sessions.json` under `user_sessions_lock`. Deliberately distinct from the `lt` invite cookie — a browser can hold both. Revocation is real, not cookie-expiry-based: password reset, disable, and delete all drop the user's session records, so the cookie dies server-side immediately.
+
+The request gate treats a valid `js_user` session as viewer-equivalent for the live stream (logged-in users can watch live) and as the sole key for the user-only surface (`/library`, `/api/user/*`, `/api/vod/*`). Invite tokens never unlock the user surface; the VOD auth check (below) keys ownership to the session, not the tier.
+
+Admin CRUD: `GET/POST /admin/api/users`, `DELETE /admin/api/users/<id>`, `POST …/password`, `POST …/disabled`.
+
 ### Viewer tracking + logs
 
 `_track_viewer()` runs from `/api/_authcheck`, keyed by `X-Forwarded-For` IP (forwarded by nginx). On *new* IP, fires `[viewer] connect ...` to stderr with token label + ipinfo.io geo + UA. Geo lookups happen on a daemon thread to avoid blocking. `_viewer_count()` prunes IPs idle >30s and emits `[viewer] disconnect ...`. Both the active list (`/admin/api/viewers`) and the JSONL log (`/data/viewer_log.jsonl`, exposed via `/admin/api/viewers/history`) include the resolved token label.
@@ -132,6 +146,44 @@ Server restart wipes the chat — intentional, no persistence.
 ### Tokens / gating
 
 Per-friend invite tokens live in `tokens.json`. Admin mints with a label, viewer hits `?t=<token>`, server sets `lt` cookie (90d). All non-admin paths gated by `_gate_viewer_routes()` unless `settings.viewer_public=true`. Admin paths gated externally by Traefik basicauth on prod (no auth on dev — localhost-only).
+
+## VOD engine
+
+Private Netflix-style on-demand playback for logged-in users, layered next to (not into) the live pipeline. The live stream is untouched.
+
+### Session lifecycle
+
+`POST /api/vod/start {path}` allocates a session id, spawns a dedicated ffmpeg writing HLS into `/hls/vod/<session_id>/`, records it in the session table under `vod_lock`. Constraints:
+- **One session per user** — a new start replaces the user's existing session.
+- **Global cap** `VOD_MAX_SESSIONS` (default 2) → `409 vod_capacity`. Cap exists because each session is a full encode.
+- `GET /api/vod/status` reports the caller's session; admin sees all via `GET /admin/api/vod/sessions` and can kill any via `DELETE /admin/api/vod/sessions/<sid>`.
+
+VOD ffmpeg differs from live on purpose:
+- **No `-re`** — input paced by `-readrate` (`VOD_READRATE=2.0`), so the encoder builds buffer ahead of the viewer at 2× instead of crawling at realtime. Seeks and startup feel snappy without racing the disk.
+- **No `-tune zerolatency`** — there's no live edge to chase.
+- **Full playlist, nothing deleted** (`-hls_list_size 0`, no `delete_segments`, no `omit_endlist`): with the paced encoder running ahead of the 1× viewer, *any* rolling window eventually slides past the playhead and deletes the segment the player needs next — a deterministic mid-film stall. Instead the whole transcoded range stays on disk (back-seek within it is free and client-side) and ffmpeg writes `#EXT-X-ENDLIST` at completion so the player gets a real `ended`. Affordable because `/hls/vod` is a **disk-backed volume** (`jetstream-vod` in compose, nested over the `/hls` tmpfs and mounted in both containers) — bounded by `VOD_MAX_SESSIONS` × one film, the startup orphan sweep, and the idle reaper.
+- `VOD_FORCE_CPU=1` optionally pins VOD to libx264, reserving the GPU's limited NVENC sessions for live + preroll.
+
+### Seek model
+
+Seek = kill ffmpeg + restart with `-ss <t>`, same as the live pause/seek philosophy — but the client is *not* on a composed continuous playlist, so each (re)start writes a fresh playlist generation and the client reloads the manifest with a `?g=` cache-buster. No composer involvement; a VOD session is one player on one private playlist.
+
+### Idle reaper
+
+A reaper thread watches per-session last-segment-fetch timestamps (updated from the VOD auth check, so nginx-served segments still count). No fetches for `VOD_IDLE_TIMEOUT_S` (120 s) → ffmpeg killed, `/hls/vod/<sid>/` removed, session dropped. Closed tabs can't pin an encoder or tmpfs space. `_cleanup_hls` (live idle cleanup) explicitly skips `/hls/vod/` so going live-idle doesn't nuke active VOD sessions.
+
+### VOD auth (nginx)
+
+```
+user ──▶ nginx /hls/vod/<sid>/* ──▶ auth_request /__authcheck_vod ──▶ Flask /api/_authcheck_vod
+                                       (passes X-Original-URI)          │
+                                                                        ▼
+                                                    js_user session must OWN <sid> → 200 / 403
+```
+
+Flask parses the sid out of `X-Original-URI` and checks the requesting `js_user` session owns that VOD session. Two deliberate differences from the live `/hls/` block:
+- **No LAN bypass.** `/hls/` skips auth for LAN clients (living-room devices); `/hls/vod/` never does — private VOD is private even on the LAN.
+- Ownership, not tier: a valid login isn't enough; the session must own the sid. Guessing another user's session id gets a 403.
 
 ## Client (admin.html, viewer.html)
 

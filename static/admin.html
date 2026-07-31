@@ -308,6 +308,63 @@
     background: #3a1818; color: #ff8a8a; border: 1px solid #5a2424; cursor: pointer;
   }
   #reactions-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
+  /* Users panel — admin-created accounts for private VOD streams. Host-only
+     (hidden on /controls); same chrome as the friends panel. */
+  #users-panel {
+    padding: 1rem 1.2rem;
+    background: #0e0e0e;
+    border-bottom: 1px solid #1f1f1f;
+  }
+  #users-panel h2 {
+    margin: 0 0 0.7rem; font-size: 0.9rem; font-weight: 500; color: #ccc;
+    letter-spacing: 0.02em;
+  }
+  #users-panel form { display: flex; gap: 0.4rem; margin-bottom: 0.6rem; flex-wrap: wrap; }
+  #users-panel input {
+    flex: 1; max-width: 14em;
+    background: #1a1a1a; color: #eee;
+    border: 1px solid #333; border-radius: 3px;
+    padding: 0.35rem 0.6rem; font-size: 0.85rem; font-family: inherit;
+  }
+  #users-panel .form-err { color: #ff8a8a; font-size: 0.75rem; margin: 0 0 0.5rem; display: none; }
+  #users-panel ul { list-style: none; padding: 0; margin: 0; }
+  #users-panel li {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.4rem 0; border-top: 1px solid #1a1a1a;
+    font-size: 0.85rem;
+  }
+  #users-panel li:first-child { border-top: none; }
+  #users-panel li.disabled .uname { color: #666; text-decoration: line-through; }
+  #users-panel .uname { color: #ccc; flex-shrink: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #users-panel .udot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    background: #7dcc99; box-shadow: 0 0 4px #7dcc99;
+  }
+  #users-panel .umeta { flex: 1; color: #555; font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #users-panel button { padding: 0.25rem 0.6rem; font-size: 0.75rem; }
+  /* Active VOD panel — per-user private streams currently running. Host-only
+     (hidden on /controls); same chrome as the reactions panel. */
+  #vod-panel {
+    margin-top: 1rem; background: #161616; border: 1px solid #262626;
+    border-radius: 6px; padding: 0.8rem 1rem;
+  }
+  #vod-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+  #vod-panel h2 { margin: 0; font-size: 0.95rem; color: #ddd; }
+  #vod-panel .badge {
+    font-size: 0.7rem; background: #222; color: #888; border: 1px solid #333;
+    border-radius: 10px; padding: 0.05rem 0.5rem;
+  }
+  #vod-panel .tbl-wrap { overflow-x: auto; }
+  #vod-panel table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  #vod-panel th { text-align: left; color: #666; font-weight: 500; padding: 0.25rem 0.6rem 0.25rem 0; white-space: nowrap; }
+  #vod-panel td {
+    color: #ccc; padding: 0.3rem 0.6rem 0.3rem 0; border-top: 1px solid #1f1f1f;
+    max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #vod-panel td.vwho { color: #cda; }
+  #vod-panel td.vtime { color: #888; font-variant-numeric: tabular-nums; }
+  #vod-panel button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
+  #vod-panel .empty-v { color: #555; padding: 0.7rem 0; font-size: 0.85rem; display: block; }
   /* "Queue" button alongside file rows */
   ul#list li button.queue-btn {
     padding: 0.2rem 0.55rem; font-size: 0.75rem; flex-shrink: 0;
@@ -689,7 +746,7 @@
     #seek-bar input[type="number"] { flex: 1; min-width: 0; }
 
     #friends-panel, #url-panel, #stream-settings-panel, #queue-panel, #requests-panel, #viewers-panel,
-    #search-row, #breadcrumb, #search-info { padding: 0.7rem 0.8rem; }
+    #users-panel, #search-row, #breadcrumb, #search-info { padding: 0.7rem 0.8rem; }
 
     /* Library grid: tighter gutter on a phone + smaller minimum card size
        so 2-3 columns fit on a 390-440px viewport instead of just 1-2.
@@ -726,7 +783,8 @@
        full height but flatten horizontal padding so multiple fit on a row. */
     #queue-panel button,
     #requests-panel button,
-    #friends-panel button {
+    #friends-panel button,
+    #users-panel button {
       padding: 0.4rem 0.7rem;
       font-size: 0.8rem;
     }
@@ -868,6 +926,23 @@
   </div>
   <ul id="viewers-list" style="list-style:none;padding:0;margin:0.5rem 0 0;font-size:0.85rem"></ul>
   <div id="viewers-history" style="display:none;margin-top:0.6rem;max-height:18rem;overflow:auto;font-size:0.8rem;background:#111;padding:0.5rem;border-radius:4px"></div>
+</div>
+<div id="users-panel">
+  <h2>User accounts</h2>
+  <form id="user-form" autocomplete="off">
+    <input id="user-name" type="text" placeholder="username (a-z 0-9 _ . -)" maxlength="32" autocomplete="off" required>
+    <input id="user-pass" type="password" placeholder="password (min 8)" minlength="8" autocomplete="new-password" required>
+    <button type="submit">Create user</button>
+  </form>
+  <div class="form-err" id="user-form-err"></div>
+  <ul id="users-list"><li><span class="umeta">Loading…</span></li></ul>
+</div>
+<div id="vod-panel">
+  <div class="head">
+    <h2>Active VOD streams</h2>
+    <span class="badge" id="vod-count">0 of 0 streams</span>
+  </div>
+  <div class="tbl-wrap" id="vod-sessions"><span class="empty-v">No active streams.</span></div>
 </div>
 <div id="search-row">
   <input id="search-input" type="search" placeholder="🔍 Search the whole library…" autocomplete="off">
@@ -1746,7 +1821,7 @@ friendForm.addEventListener("submit", async e => {
 // valid so the rest of the script doesn't need null guards.
 if (!IS_ADMIN) {
   document.body.classList.add("controls-page");
-  for (const id of ["friends-panel", "stream-settings-panel", "viewers-panel", "requests-panel", "reports-panel", "reactions-panel"]) {
+  for (const id of ["friends-panel", "stream-settings-panel", "viewers-panel", "requests-panel", "reports-panel", "reactions-panel", "users-panel", "vod-panel"]) {
     const el = document.getElementById(id);
     if (el) el.style.display = "none";
   }
@@ -2110,6 +2185,186 @@ reactionsGrid.addEventListener("click", async e => {
 if (IS_ADMIN) {
   setInterval(refreshCustomReactions, 10000);
   refreshCustomReactions();
+}
+
+// ---- User accounts (host-only) ----------------------------------------
+// Admin-created accounts for private VOD streams. Same idiom as the invite
+// tokens list: fetch → render rows, delegated per-row button actions.
+// All user-supplied strings go through textContent or escapeHtml.
+const usersList = document.getElementById("users-list");
+const userForm = document.getElementById("user-form");
+const userNameInput = document.getElementById("user-name");
+const userPassInput = document.getElementById("user-pass");
+const userFormErr = document.getElementById("user-form-err");
+
+function userWhen(ts) {
+  return ts ? fmtAgo(Date.now() / 1000 - ts) : "never";
+}
+
+function renderUsers(items) {
+  if (!items.length) {
+    usersList.innerHTML = `<li><span class="umeta">No user accounts yet.</span></li>`;
+    return;
+  }
+  usersList.innerHTML = "";
+  for (const u of items) {
+    const li = document.createElement("li");
+    if (u.disabled) li.classList.add("disabled");
+    // Static markup only — username/dates injected below via textContent.
+    li.innerHTML = `
+      <span class="uname"></span>
+      ${u.active_vod ? '<span class="udot" title="Streaming now"></span>' : ""}
+      ${u.disabled ? '<span style="flex-shrink:0;font-size:0.65rem;letter-spacing:0.04em;font-weight:600;padding:0.08rem 0.4rem;border-radius:3px;background:#3a1818;color:#ff8a8a;border:1px solid #5a2424">DISABLED</span>' : ""}
+      <span class="umeta"></span>
+      <button data-action="password">Password</button>
+      <button data-action="disable">${u.disabled ? "Enable" : "Disable"}</button>
+      <button data-action="delete" class="danger">Delete</button>
+    `;
+    li.querySelector(".uname").textContent = u.username;
+    li.querySelector(".umeta").textContent =
+      `created ${userWhen(u.created)} · last login ${userWhen(u.last_login)}`;
+    for (const btn of li.querySelectorAll("button")) {
+      btn.dataset.id = u.id;
+      btn.dataset.username = u.username;
+    }
+    li.querySelector('[data-action="disable"]').dataset.disabled = u.disabled ? "1" : "";
+    usersList.appendChild(li);
+  }
+}
+
+async function loadUsers() {
+  try {
+    const res = await fetch("/admin/api/users");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    renderUsers((await res.json()).users || []);
+  } catch (e) {
+    usersList.innerHTML = `<li><span class="umeta">Failed to load: ${escapeHtml(e.message)}</span></li>`;
+  }
+}
+
+userForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  userFormErr.style.display = "none";
+  const username = userNameInput.value.trim();
+  const password = userPassInput.value;
+  if (!username || !password) return;
+  try {
+    const res = await fetch("/admin/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      userFormErr.textContent = j.error === "duplicate"
+        ? "That username is already taken."
+        : (j.message || j.error || ("HTTP " + res.status));
+      userFormErr.style.display = "block";
+      return;
+    }
+    userNameInput.value = "";
+    userPassInput.value = "";
+    showToast(`User ${username} created`);
+    loadUsers();
+  } catch (e) { showToast("Failed: " + e.message); }
+});
+
+usersList.addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-action]");
+  if (!btn) return;
+  const id = encodeURIComponent(btn.dataset.id);
+  const who = btn.dataset.username;
+  try {
+    if (btn.dataset.action === "password") {
+      const pw = prompt(`New password for ${who} (min 8 chars). Their sessions get logged out.`);
+      if (pw == null) return;
+      const res = await fetch(`/admin/api/users/${id}/password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pw }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.message || j.error || ("HTTP " + res.status));
+      showToast(`Password reset for ${who}`);
+    } else if (btn.dataset.action === "disable") {
+      const disable = !btn.dataset.disabled;
+      const res = await fetch(`/admin/api/users/${id}/disabled`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ disabled: disable }),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      showToast(disable ? `${who} disabled — sessions revoked` : `${who} enabled`);
+      loadUsers();
+      refreshVodSessions();
+    } else if (btn.dataset.action === "delete") {
+      if (!confirm(`Delete user ${who}? Their sessions are revoked and any active stream is killed.`)) return;
+      const res = await fetch(`/admin/api/users/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      showToast(`Deleted ${who}`);
+      loadUsers();
+      refreshVodSessions();
+    }
+  } catch (e) { showToast("Failed: " + e.message); }
+});
+
+// ---- Active VOD sessions (host-only) ----------------------------------
+// Live table of per-user private streams. 10s poll like the reactions
+// panel; a kill DELETEs the session and refreshes both this table and the
+// users list (the active_vod dot changes). Every dynamic string below is
+// escapeHtml-ed before hitting innerHTML.
+const vodSessionsEl = document.getElementById("vod-sessions");
+const vodCountEl = document.getElementById("vod-count");
+
+async function refreshVodSessions() {
+  try {
+    const res = await fetch("/admin/api/vod/sessions");
+    if (!res.ok) return;
+    const j = await res.json();
+    const sessions = j.sessions || [];
+    vodCountEl.textContent = `${sessions.length} of ${j.cap ?? "?"} streams`;
+    if (!sessions.length) {
+      vodSessionsEl.innerHTML = '<span class="empty-v">No active streams.</span>';
+      return;
+    }
+    const now = Date.now() / 1000;
+    vodSessionsEl.innerHTML = `
+      <table>
+        <thead><tr><th>User</th><th>Title</th><th>Position</th><th>Started</th><th>Last access</th><th></th></tr></thead>
+        <tbody>${sessions.map(s => `
+          <tr>
+            <td class="vwho">${escapeHtml(s.username || "?")}</td>
+            <td title="${escapeHtml(s.title || "")}">${escapeHtml(s.title || "?")}</td>
+            <td class="vtime">${formatTime(s.start_offset)}</td>
+            <td class="vtime">${escapeHtml(fmtAgo(now - (s.started_at || now)))}</td>
+            <td class="vtime">${escapeHtml(fmtAgo(now - (s.last_access || now)))}</td>
+            <td><button type="button" class="danger" data-sid="${escapeHtml(String(s.session_id))}">Kill</button></td>
+          </tr>`).join("")}
+        </tbody>
+      </table>`;
+  } catch {}
+}
+
+vodSessionsEl.addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-sid]");
+  if (!btn) return;
+  if (!confirm("Kill this stream? The viewer's playback stops immediately.")) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/admin/api/vod/sessions/${encodeURIComponent(btn.dataset.sid)}`, { method: "DELETE" });
+    showToast(res.ok ? "Stream killed" : "Kill failed");
+  } catch (e) { showToast("Failed: " + e.message); }
+  refreshVodSessions();
+  loadUsers();
+});
+
+if (IS_ADMIN) {
+  loadUsers();
+  refreshVodSessions();
+  // 10s poll: active_vod dots and the sessions table stay fresh without
+  // hammering the API.
+  setInterval(loadUsers, 10000);
+  setInterval(refreshVodSessions, 10000);
 }
 
 // ---- Anonymous chat (admin) -------------------------------------------
