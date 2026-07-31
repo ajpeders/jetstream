@@ -94,7 +94,7 @@
     grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
     padding: 0.75rem clamp(0.8rem, 2vw, 1.25rem) 1.25rem;
   }
-  #results li {
+  #results li, #continue-list li {
     background: var(--js-surface, #111820);
     border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
     border-radius: 8px;
@@ -107,11 +107,11 @@
     font-size: 0.85rem;
     color: #ccc;
   }
-  #results li:hover {
+  #results li:hover, #continue-list li:hover {
     background: #151e29;
     border-color: var(--js-line-strong, rgba(148, 163, 184, 0.28));
   }
-  #results .rthumb {
+  #results .rthumb, #continue-list .rthumb {
     aspect-ratio: 2 / 3;
     background: #0d131b;
     border: 1px solid rgba(148, 163, 184, 0.14);
@@ -119,23 +119,23 @@
     overflow: hidden;
     width: 100%;
   }
-  #results .rthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
-  #results .rthumb img.loaded { opacity: 1; }
+  #results .rthumb img, #continue-list .rthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
+  #results .rthumb img.loaded, #continue-list .rthumb img.loaded { opacity: 1; }
   #results .rthumb.folder {
     align-items: center; color: #9ec7e8; display: inline-flex;
     background: linear-gradient(180deg, #172131, #101821);
     font-size: 0.9rem; font-weight: 850; justify-content: center;
     line-height: 1.15; padding: 0.7rem; text-align: center; text-transform: uppercase;
   }
-  #results .rtitle { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; overflow: hidden; }
-  #results .rtitle .rt-name {
+  #results .rtitle, #continue-list .rtitle { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; overflow: hidden; }
+  #results .rtitle .rt-name, #continue-list .rtitle .rt-name {
     display: -webkit-box;
     font-size: 0.83rem; font-weight: 750; line-height: 1.25;
     min-height: 2.05rem; overflow: hidden; text-overflow: ellipsis;
     white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
     color: var(--js-text, #e7edf5);
   }
-  #results .rtitle .rt-parent {
+  #results .rtitle .rt-parent, #continue-list .rtitle .rt-parent {
     color: var(--js-faint, #667386); font-size: 0.68rem; line-height: 1.2;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
@@ -144,6 +144,75 @@
     background: transparent !important; border: none !important;
     color: var(--js-faint, #667386); display: flex; align-items: center;
   }
+
+  /* ---- Continue watching ---------------------------------------------- */
+  /* Horizontally scrolling strip so narrow phones scroll instead of
+     squashing the poster tiles down to unreadable slivers. */
+  #continue-section[hidden] { display: none; }
+  #continue-heading {
+    margin: 0;
+    padding: 0.85rem clamp(0.8rem, 2vw, 1.25rem) 0;
+    color: var(--js-muted, #9aa6b5);
+    font-size: 0.78rem; font-weight: 750;
+    letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  #continue-list {
+    list-style: none; margin: 0;
+    display: flex; gap: 0.85rem;
+    overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    padding: 0.6rem clamp(0.8rem, 2vw, 1.25rem) 0.9rem;
+  }
+  #continue-list li {
+    flex: 0 0 148px;
+    width: 148px;
+    position: relative;
+    grid-template-rows: auto auto auto;
+  }
+  #continue-list .rc-dismiss {
+    position: absolute; top: 0.3rem; right: 0.3rem; z-index: 2;
+    min-width: 40px; min-height: 40px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(8, 13, 20, 0.72);
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 999px;
+    color: var(--js-text, #e7edf5);
+    cursor: pointer; font-family: inherit; font-size: 0.85rem; line-height: 1;
+    padding: 0;
+  }
+  #continue-list .rc-dismiss:hover { background: rgba(8, 13, 20, 0.92); }
+  #continue-list .rc-dismiss:focus-visible {
+    outline: none; border-color: rgba(56, 189, 248, 0.72);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+  }
+  #continue-list .rc-bar {
+    background: #1b2530;
+    border-radius: 999px;
+    height: 4px;
+    overflow: hidden;
+    width: 100%;
+  }
+  #continue-list .rc-bar-fill {
+    background: var(--js-accent, #38bdf8);
+    display: block; height: 100%; width: 0;
+  }
+  #continue-list .rc-left {
+    color: var(--js-faint, #667386);
+    font-size: 0.68rem; line-height: 1.2;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #toast .toast-text { margin-right: 0.6rem; }
+  #toast .toast-action {
+    background: rgba(56, 189, 248, 0.13);
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 999px;
+    color: var(--js-accent-text, #7dd3fc);
+    cursor: pointer; font-family: inherit;
+    font-size: 0.78rem; font-weight: 700;
+    min-height: 40px; padding: 0.3rem 0.8rem;
+  }
+  #toast.actionable { pointer-events: auto; }
 
   /* ---- Player --------------------------------------------------------- */
   #player-view { flex: 1; display: flex; flex-direction: column; }
@@ -264,6 +333,11 @@
       grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
       gap: 0.5rem; padding: 0.6rem 0.85rem 0.85rem;
     }
+    #continue-list {
+      gap: 0.5rem; padding: 0.5rem 0.85rem 0.7rem;
+    }
+    #continue-list li { flex-basis: 118px; width: 118px; }
+    #continue-heading { padding: 0.7rem 0.85rem 0; }
     #vol-slider { display: none; }
     #vod-controls { gap: 0.15rem; }
     video { max-height: calc(100vh - 190px); }
@@ -281,6 +355,10 @@
 </header>
 
 <section id="library-view">
+  <section id="continue-section" hidden aria-labelledby="continue-heading">
+    <h2 id="continue-heading">Continue watching</h2>
+    <ul id="continue-list"></ul>
+  </section>
   <div id="library-nav">
     <button id="library-back" type="button" disabled>Back</button>
     <span id="library-path">Library</span>
@@ -338,9 +416,31 @@ function formatTime(sec) {
 let toastTimer = null;
 function toast(msg) {
   toastEl.textContent = msg;
+  toastEl.classList.remove("actionable");
   toastEl.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toastEl.classList.remove("show"), 3500);
+}
+
+// Same toast, plus one inline button (e.g. "Start over" on a resume notice).
+// Needs pointer-events back on, hence the .actionable class.
+function toastWithAction(msg, actionLabel, onAction, ms) {
+  const text = document.createElement("span");
+  text.className = "toast-text";
+  text.textContent = msg;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "toast-action";
+  btn.textContent = actionLabel;
+  btn.addEventListener("click", () => {
+    toastEl.classList.remove("show", "actionable");
+    clearTimeout(toastTimer);
+    onAction();
+  });
+  toastEl.replaceChildren(text, btn);
+  toastEl.classList.add("show", "actionable");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show", "actionable"), ms || 8000);
 }
 
 // ---- Who am I / logout -------------------------------------------------
@@ -568,6 +668,9 @@ let searchDebounce = null;
 searchInput.addEventListener("input", () => {
   const q = searchInput.value.trim();
   clearTimeout(searchDebounce);
+  // The Continue-watching row belongs to the browse view only.
+  continueSuppressed = !!q;
+  syncContinueVisibility();
   if (!q) {
     browseLibrary(libPathCurrent);
     return;
@@ -581,6 +684,111 @@ libraryBack.addEventListener("click", () => {
 });
 
 browseLibrary("");
+
+// ---- Continue watching -------------------------------------------------
+// Server-side per-user resume points. The row lives above the browser and is
+// hidden entirely when empty or while search results are showing.
+const continueSection = document.getElementById("continue-section");
+const continueList = document.getElementById("continue-list");
+let continueCount = 0;
+let continueSuppressed = false;   // true while search results replace the browse view
+let continueSeq = 0;
+
+function syncContinueVisibility() {
+  continueSection.hidden = continueSuppressed || continueCount === 0;
+}
+
+function formatRemaining(sec) {
+  if (!isFinite(sec) || sec <= 0) return "";
+  const mins = Math.round(sec / 60);
+  if (mins < 1) return "under a minute left";
+  if (mins < 60) return mins + " min left";
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return m ? `${h} h ${m} min left` : `${h} h left`;
+}
+
+async function dismissContinue(item, li) {
+  try {
+    const r = await fetch("/api/user/continue", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: item.path }),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+  } catch {
+    toast("Couldn't remove that — try again.");
+    return;
+  }
+  li.remove();
+  continueCount = Math.max(0, continueCount - 1);
+  syncContinueVisibility();
+}
+
+function renderContinueCard(item) {
+  const { li, thumb, name, parent } = makeCard();
+  const title = item.title || basename(item.path) || "(untitled)";
+  name.textContent = title;
+  parent.textContent = requestParent(item.path || "");
+  if (item.path) {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = "";
+    img.addEventListener("load", () => img.classList.add("loaded"));
+    img.src = `/poster?path=${encodeURIComponent(item.path)}`;
+    thumb.appendChild(img);
+  }
+
+  const pct = Math.min(100, Math.max(0, Number(item.percent) || 0));
+  const bar = document.createElement("span");
+  bar.className = "rc-bar";
+  const fill = document.createElement("span");
+  fill.className = "rc-bar-fill";
+  fill.style.width = pct + "%";
+  bar.appendChild(fill);
+  li.appendChild(bar);
+
+  const dur = (typeof item.duration === "number" && isFinite(item.duration)) ? item.duration : null;
+  if (dur) {
+    const left = document.createElement("span");
+    left.className = "rc-left";
+    left.textContent = formatRemaining(dur - (Number(item.position) || 0));
+    li.appendChild(left);
+  }
+
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "rc-dismiss";
+  dismiss.textContent = "✕";
+  dismiss.setAttribute("aria-label", "Remove " + title + " from Continue watching");
+  dismiss.addEventListener("click", ev => {
+    ev.stopPropagation();   // don't let the dismiss double as a play tap
+    dismissContinue(item, li);
+  });
+  li.appendChild(dismiss);
+
+  // No explicit start → the server resumes from the saved position.
+  li.addEventListener("click", () => startVod({ path: item.path, name: title }));
+  return li;
+}
+
+async function loadContinueRow() {
+  const seq = ++continueSeq;
+  let items = [];
+  try {
+    const r = await fetch("/api/user/continue");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (Array.isArray(j.items)) items = j.items;
+  } catch {
+    items = [];
+  }
+  if (seq !== continueSeq) return;
+  continueCount = items.length;
+  continueList.replaceChildren(...items.map(it => renderContinueCard(it)));
+  syncContinueVisibility();
+}
+
+loadContinueRow();
 
 // ---- VOD player --------------------------------------------------------
 // sess is the single source of truth for the active VOD session.
@@ -654,8 +862,44 @@ function detachPlayer() {
   video.load();
 }
 
+// ---- Resume progress reporting -----------------------------------------
+// Absolute position in the film (startOffset + element time) is what the
+// server stores, so the resume point survives out-of-window seeks.
+function progressBody() {
+  if (!sess) return null;
+  const pos = displayedPosition();
+  if (!isFinite(pos) || pos <= 0) return null;
+  return JSON.stringify({ session_id: sess.id, position: pos });
+}
+
+// Fire-and-forget; a failed report just means a slightly stale resume point.
+function reportProgress() {
+  const body = progressBody();
+  if (!body) return;
+  try {
+    fetch("/api/vod/progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true,
+    }).catch(() => {});
+  } catch {}
+}
+
+function beaconProgress() {
+  const body = progressBody();
+  if (!body) return;
+  try {
+    navigator.sendBeacon("/api/vod/progress",
+      new Blob([body], { type: "application/json" }));
+  } catch {}
+}
+
+video.addEventListener("pause", reportProgress);
+
 // Politely end the current session server-side and reset local state.
 async function stopVod() {
+  reportProgress();   // last word on where the user got to
   if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
   const old = sess;
   sess = null;
@@ -683,9 +927,13 @@ function showLibraryView() {
   playerView.hidden = true;
   libraryView.hidden = false;
   document.title = "jetstream — library";
+  // Whatever was just watched should be reflected in the row.
+  loadContinueRow();
 }
 
-async function startVod(item) {
+// forceRestart=true sends an explicit start:0, which overrides the server's
+// automatic resume (used by the "Start over" toast action).
+async function startVod(item, forceRestart) {
   const title = item.name || basename(item.path) || "(untitled)";
   // One session per user server-side — stop the old one first anyway.
   await stopVod();
@@ -695,10 +943,12 @@ async function startVod(item) {
   seekBar.disabled = true;
   seekBar.value = "0";
   try {
+    // Omitting `start` lets the server resume from the saved position.
+    const payload = forceRestart ? { path: item.path, start: 0 } : { path: item.path };
     const r = await fetch("/api/vod/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: item.path }),
+      body: JSON.stringify(payload),
     });
     if (gen !== sessGen) return;  // user already navigated away
     if (r.status === 409) {
@@ -738,6 +988,10 @@ async function startVod(item) {
     }
     attachPlayer(sess.url);
     updateTimeUI();
+    if (typeof j.resumed_from === "number" && isFinite(j.resumed_from) && j.resumed_from > 0) {
+      toastWithAction(`Resuming from ${formatTime(j.resumed_from)}`, "Start over",
+        () => startVod(item, true));
+    }
     pollVodStatus();
     statusTimer = setInterval(pollVodStatus, 5000);
   } catch {
@@ -781,6 +1035,8 @@ async function pollVodStatus() {
       return;
     }
     updateTimeUI();
+    // Same ~5 s tick doubles as the resume-progress heartbeat.
+    if (!video.paused && !seeking) reportProgress();
   } catch {}
 }
 
@@ -940,6 +1196,7 @@ fsBtn.addEventListener("click", () => {
 function beaconStop() {
   if (!sess || beaconDone) return;
   beaconDone = true;
+  beaconProgress();   // save the resume point before the session goes away
   try {
     navigator.sendBeacon("/api/vod/stop",
       new Blob([JSON.stringify({ session_id: sess.id })], { type: "application/json" }));

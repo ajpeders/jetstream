@@ -64,6 +64,24 @@ INVITE_RATE_WINDOW = 60   # seconds
 INVITE_RATE_MAX = 10      # per-IP code-redeem attempts (guards code guessing)
 REGISTER_RATE_WINDOW = 3600  # seconds
 REGISTER_RATE_MAX = 5        # per-IP signups per hour
+
+# ---- Continue watching (per-user VOD resume) ----
+# {user_id: {rel_path: {"position","duration","updated","title"}}}. Written
+# from the client's 5 s status poll, so disk writes are throttled the same
+# way token last_seen is — the in-memory map is authoritative between flushes.
+PROGRESS_FILE = Path(os.environ.get("PROGRESS_FILE", "/data/progress.json"))
+PROGRESS_SAVE_INTERVAL = 30      # seconds between disk flushes
+PROGRESS_MAX_PER_USER = 100      # newest-first cap; oldest fall off
+# Within this many seconds of the end, treat it as finished: drop it from
+# Continue watching rather than resuming someone into the credits.
+PROGRESS_DONE_TAIL_S = 90
+# Below this, resuming is more annoying than helpful (accidental open).
+PROGRESS_MIN_RESUME_S = 30
+# Both thresholds are clamped to a fraction of the runtime, or short content
+# breaks: with a flat 90 s tail every position in a 60 s clip counts as
+# "finished" and nothing is ever resumable. A 2 h film keeps the flat values.
+PROGRESS_DONE_TAIL_FRACTION = 0.10
+PROGRESS_MIN_RESUME_FRACTION = 0.05
 PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
 RECENT_FILE = Path(os.environ.get("RECENT_FILE", "/data/recent.json"))
 RECENT_LIMIT = int(os.environ.get("RECENT_LIMIT", "50"))
@@ -507,6 +525,11 @@ invite_rate: dict[str, list[float]] = {}
 register_rate_lock = threading.Lock()
 register_rate: dict[str, list[float]] = {}
 
+# Continue watching. {user_id: {rel_path: {...}}}
+progress_lock = threading.Lock()
+watch_progress: dict[str, dict[str, dict]] = {}
+_progress_last_saved = 0.0
+
 
 def _atomic_write_json(path: Path, obj) -> None:
     """Write-then-rename so a crash mid-write can't leave a truncated JSON
@@ -655,6 +678,84 @@ def _trusted_client_ip() -> str:
     walks it recursively), so it can't be forged from outside; fall back to
     the socket peer when nginx isn't in front (dev/test client)."""
     return request.headers.get("X-Real-IP") or request.remote_addr or "unknown"
+
+
+# ---- Continue watching store ----
+
+def _load_progress():
+    global watch_progress
+    if PROGRESS_FILE.exists():
+        try:
+            loaded = json.loads(PROGRESS_FILE.read_text())
+            watch_progress = loaded if isinstance(loaded, dict) else {}
+            return
+        except Exception as e:
+            _warn_state_load_failed("watch progress", PROGRESS_FILE, e)
+    watch_progress = {}
+
+
+def _save_progress_locked(force: bool = False) -> None:
+    """Flush progress to disk at most every PROGRESS_SAVE_INTERVAL. Callers
+    hold progress_lock. Progress arrives on every client's 5 s poll, so
+    writing through each time would hammer the disk for data that's cheap to
+    lose — worst case a viewer re-watches the last few seconds."""
+    global _progress_last_saved
+    now = time.time()
+    if not force and now - _progress_last_saved < PROGRESS_SAVE_INTERVAL:
+        return
+    _progress_last_saved = now
+    _atomic_write_json(PROGRESS_FILE, watch_progress)
+
+
+def _progress_record(user_id: str, rel_path: str, position: float,
+                     duration: float | None, title: str | None) -> None:
+    """Remember where `user_id` is in `rel_path`. Finishing (within
+    PROGRESS_DONE_TAIL_S of the end) clears the entry instead of storing it,
+    so a watched film leaves Continue watching by itself."""
+    if not user_id or not rel_path:
+        return
+    position = max(0.0, float(position or 0.0))
+    if duration and duration > 0:
+        tail = min(PROGRESS_DONE_TAIL_S, duration * PROGRESS_DONE_TAIL_FRACTION)
+        floor = min(PROGRESS_MIN_RESUME_S, duration * PROGRESS_MIN_RESUME_FRACTION)
+        finished = position >= duration - tail
+    else:
+        floor = PROGRESS_MIN_RESUME_S
+        finished = False
+    with progress_lock:
+        mine = watch_progress.setdefault(user_id, {})
+        if finished or position < floor:
+            # Also clears a previously-saved position: rewinding to the start
+            # and leaving means "I'm done with this", not "resume at 0:05".
+            if mine.pop(rel_path, None) is not None:
+                _save_progress_locked(force=True)
+            return
+        mine[rel_path] = {
+            "position": position,
+            "duration": duration,
+            "updated": time.time(),
+            "title": title or Path(rel_path).name,
+        }
+        if len(mine) > PROGRESS_MAX_PER_USER:
+            for stale in sorted(mine, key=lambda k: mine[k].get("updated", 0),
+                                )[:len(mine) - PROGRESS_MAX_PER_USER]:
+                del mine[stale]
+        _save_progress_locked()
+
+
+def _progress_lookup(user_id: str, rel_path: str) -> float | None:
+    """Saved position for this user+file, or None."""
+    with progress_lock:
+        rec = (watch_progress.get(user_id) or {}).get(rel_path)
+        return float(rec["position"]) if rec else None
+
+
+def _progress_forget(user_id: str, rel_path: str) -> bool:
+    with progress_lock:
+        removed = (watch_progress.get(user_id) or {}).pop(rel_path, None)
+        if removed is not None:
+            _save_progress_locked(force=True)
+        return removed is not None
 
 
 # ==== v2: vod session registry (engine lands in WP-2A) =====================
@@ -997,6 +1098,7 @@ def _load_state() -> dict | None:
 _load_tokens()
 _load_users()
 _load_user_sessions()
+_load_progress()
 _load_playlist()
 _load_recent()
 _load_requests()
@@ -3794,6 +3896,11 @@ def api_admin_user_delete(uid):
         _save_users()
     _revoke_user_sessions(uid)
     _vod_kill_sessions_for_user(uid)
+    # Deleting the account takes its watch history with it — otherwise the
+    # rows linger forever keyed to an id nothing can log in as.
+    with progress_lock:
+        if watch_progress.pop(uid, None) is not None:
+            _save_progress_locked(force=True)
     return jsonify({"ok": True})
 
 
@@ -5699,16 +5806,27 @@ def _vod_owned_session(sid: str) -> dict | None:
 def api_vod_start():
     u = _session_user()
     data = request.get_json(silent=True) or {}
-    try:
-        start = float(data.get("start") or 0.0)
-    except (TypeError, ValueError):
-        start = 0.0
+    rel_path = str(data.get("path") or "")
+    # Auto-resume: an ABSENT `start` means "put me where I left off"; an
+    # explicit start (including 0) is the caller overriding that — which is
+    # how "Start over" works. `or 0.0` would collapse those two cases, so
+    # test for the key's presence, not its truthiness.
+    resumed_from = None
+    if "start" in data and data.get("start") is not None:
+        try:
+            start = float(data.get("start"))
+        except (TypeError, ValueError):
+            start = 0.0
+    else:
+        start = _progress_lookup(u["id"], rel_path.strip("/")) or 0.0
+        if start > 0:
+            resumed_from = start
     sub_raw = data.get("subtitle_idx")
     try:
         subtitle_idx = int(sub_raw) if sub_raw is not None else None
     except (TypeError, ValueError):
         subtitle_idx = None
-    res = _vod_start(u["id"], str(data.get("path") or ""), start, subtitle_idx)
+    res = _vod_start(u["id"], rel_path, start, subtitle_idx)
     if isinstance(res, tuple):
         if res[0] == "capacity":
             return jsonify({
@@ -5725,7 +5843,62 @@ def api_vod_start():
         "playlist_url": _vod_playlist_url(res["session_id"], 0),
         "duration": res["duration"],
         "start_offset": res["start_offset"],
+        # Non-null when we put the viewer back mid-film, so the UI can say
+        # so and offer "Start over".
+        "resumed_from": resumed_from,
     })
+
+
+@app.route("/api/vod/progress", methods=["POST"])
+def api_vod_progress():
+    """Client heartbeat carrying the absolute playhead. The server can't know
+    it — it only knows the session's start_offset, not where the player is
+    inside the transcoded range — so the page reports it on its existing 5 s
+    status poll and on teardown."""
+    data = request.get_json(silent=True) or {}
+    sess = _vod_owned_session(str(data.get("session_id") or ""))
+    if not sess:
+        return jsonify({"error": "not_found"}), 404
+    try:
+        position = float(data.get("position"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "bad_position"}), 400
+    _progress_record(sess["user_id"], sess["rel_path"], position,
+                     sess.get("duration"), sess.get("title"))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/user/continue", methods=["GET", "DELETE"])
+def api_user_continue():
+    """The Continue-watching row: in-progress films, newest first."""
+    u = _session_user()
+    if request.method == "DELETE":
+        path = str((request.get_json(silent=True) or {}).get("path") or "")
+        if not _progress_forget(u["id"], path.strip("/")):
+            return jsonify({"error": "not_found"}), 404
+        return jsonify({"ok": True})
+    with progress_lock:
+        mine = dict(watch_progress.get(u["id"]) or {})
+    items = []
+    for rel_path, rec in mine.items():
+        # Skip anything the library can no longer serve (file deleted, or a
+        # root removed from VIEWER_LIBRARY_ROOTS) — a card that 404s on click
+        # is worse than no card.
+        if not _viewer_file_allowed(rel_path):
+            continue
+        duration = rec.get("duration")
+        position = float(rec.get("position") or 0)
+        items.append({
+            "path": rel_path,
+            "title": rec.get("title") or Path(rel_path).name,
+            "position": position,
+            "duration": duration,
+            "updated": rec.get("updated"),
+            "percent": (min(100.0, position / duration * 100)
+                        if duration else 0.0),
+        })
+    items.sort(key=lambda x: x.get("updated") or 0, reverse=True)
+    return jsonify({"items": items})
 
 
 @app.route("/api/vod/seek", methods=["POST"])

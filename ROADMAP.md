@@ -1,23 +1,51 @@
 # jetstream roadmap
 
-v1 + a viewer-interaction pass shipped. All tracked cleanup items closed. v2 (accounts + private VOD) in progress on branch `v2`.
+v1 + a viewer-interaction pass shipped. All tracked cleanup items closed. **v2 (accounts + private VOD) shipped to main and prod** (merge `25a05df`), followed by v2.1 (home screen + invite-gated signup, `a71c892`).
 
-## v2 (in progress, branch `v2`)
+## v2 — shipped
 
 v1's invite-token live stream is unchanged — v2 layers on top.
 
 | What | Status | Notes |
 |---|---|---|
-| User accounts | in progress | Admin-created only (no self-registration). Username + password, scrypt-hashed (stdlib), `/data/users.json`; server-side sessions in `/data/sessions.json`, `js_user` cookie (30 d, distinct from `lt`), revoked on password reset / disable / delete. `/login` rate-limited 5/60 s per IP. Admin API: `GET/POST /admin/api/users`, `DELETE /admin/api/users/<id>`, `POST …/password`, `POST …/disabled`. Admin UI: Users panel (host-only, hidden on `/controls`). Logged-in users can also watch live. |
-| Private VOD (Netflix-style) | in progress | `/library` grid + search (`/api/user/library/{browse,search}`) → private HLS under `/hls/vod/<sid>/`, ownership-checked via nginx `auth_request` → `/api/_authcheck_vod` (`X-Original-URI`; no LAN bypass, unlike `/hls/`). One session per user, global cap `VOD_MAX_SESSIONS` (2, `409 vod_capacity`). Seek = kill + restart with `-ss` (fresh playlist gen, `?g=` cache-buster). Idle reaper: `VOD_IDLE_TIMEOUT_S` (120 s) no-fetch → ffmpeg killed, dir removed. ffmpeg: `-readrate VOD_READRATE=2.0` (no `-re`), no zerolatency, full playlist on the disk-backed `jetstream-vod` volume (`-hls_list_size 0`, ENDLIST on completion), `VOD_FORCE_CPU=1` to spare NVENC. Routes: `POST /api/vod/{start,seek,stop}`, `GET /api/vod/status`; admin `GET/DELETE /admin/api/vod/sessions[/<sid>]` + Active VOD panel. |
+| User accounts | shipped | Created by the host **or** by invite-gated self-registration (see v2.1). Username + password, scrypt-hashed (stdlib), `/data/users.json`; server-side sessions in `/data/sessions.json`, `js_user` cookie (30 d, distinct from `lt`), revoked on password reset / disable / delete. `/login` rate-limited 5/60 s per IP. Admin API: `GET/POST /admin/api/users`, `DELETE /admin/api/users/<id>`, `POST …/password`, `POST …/disabled`. Admin UI: Users panel (host-only, hidden on `/controls`). Logged-in users can also watch live. |
+| Private VOD (Netflix-style) | shipped | `/library` grid + search (`/api/user/library/{browse,search}`) → private HLS under `/hls/vod/<sid>/`, ownership-checked via nginx `auth_request` → `/api/_authcheck_vod` (`X-Original-URI`; no LAN bypass, unlike `/hls/`). One session per user, global cap `VOD_MAX_SESSIONS` (2, `409 vod_capacity`). Seek = kill + restart with `-ss` (fresh playlist gen, `?g=` cache-buster). Idle reaper: `VOD_IDLE_TIMEOUT_S` (120 s) no-fetch → ffmpeg killed, dir removed. ffmpeg: `-readrate VOD_READRATE=2.0` (no `-re`), no zerolatency, full playlist on the disk-backed `jetstream-vod` volume (`-hls_list_size 0`, ENDLIST on completion), `VOD_FORCE_CPU=1` to spare NVENC. Routes: `POST /api/vod/{start,seek,stop}`, `GET /api/vod/status`; admin `GET/DELETE /admin/api/vod/sessions[/<sid>]` + Active VOD panel. |
 
 New env: `USERS_FILE`, `USER_SESSIONS_FILE`, `VOD_MAX_SESSIONS`, `VOD_IDLE_TIMEOUT_S`, `VOD_READRATE`, `VOD_FORCE_CPU`. New locks: `users_lock`, `user_sessions_lock`, `login_rate_lock`, `vod_lock`. New pages: `static/login.html`, `static/library.html`. `_cleanup_hls` now skips `/hls/vod/`; nginx grows `location /hls/vod/` + `/__authcheck_vod`.
+
+**Deploy requirement:** VOD segment dirs live on the disk-backed `jetstream-vod` volume mounted at `/hls/vod` in *both* containers — a bare restart won't create it. Deploy with `docker compose up -d --build`; without the volume, VOD segments land on the 1.5 GiB `/hls` tmpfs and a feature-length film fills it.
+
+**Not exercised on GPU hardware yet:** NVENC session count under live + preroll + 2 concurrent VOD sessions (`VOD_FORCE_CPU=1` is the escape hatch), and an HDR source through the VOD path.
+
+## v2.1 — shipped
+
+| What | Status | Notes |
+|---|---|---|
+| Home screen | shipped | `static/home.html`, served by the gate for unauthenticated `/` and `/controls`. Two doors: type a friend code (`POST /api/invite/redeem` — the type-in twin of `?t=`, sets the same `lt` cookie) or sign in. Replaced an inline dead-end page that offered neither a code field nor a login link, so an account holder with no `lt` cookie had no reachable entry point at all. |
+| Invite-gated signup | shipped | `POST /api/auth/register {code, username, password}` — requires a **`friend`-level** code (viewer codes stay watch-only, `403`). No open registration; the code is re-validated server-side rather than trusted from the redeem step. Codes are **reusable** (one link covers a household); each user records `invited_by`/`invite_token` so a leaked link's accounts can be found and removed. Auto-logs-in and keeps `lt` so live keeps working. A code alone still just watches — the account is an optional upgrade, so invite links already in the wild are unaffected. Rate limits: redeem 10/60 s per trusted IP; signup 5/hour charged on accounts **created**, not attempts (`_ip_rate_check(record=False)` peek) so mistyped passwords can't lock out a NAT'd household. |
+| Post-login hub | shipped | `static/hub.html` at `/home` — pick live stream or my library; live card shows the now-playing title. Post-login default moved `/library` → `/home`. Viewer header gained "🎬 My library" / "Sign in" driven by the new `user` field in `/api/status`. |
+
+Rate limiting is keyed on `_trusted_client_ip()` (nginx-set `X-Real-IP`), never the client-forgeable leftmost `X-Forwarded-For`.
+
+## v2.2 — shipped
+
+| What | Status | Notes |
+|---|---|---|
+| Continue watching | shipped | Per-user VOD resume. `{user_id: {path: {position, duration, updated, title}}}` in `/data/progress.json`, disk-flushed at most every `PROGRESS_SAVE_INTERVAL` (30 s) because progress arrives on every client's 5 s poll. The client reports the **absolute** playhead (`POST /api/vod/progress {session_id, position}`) — the server only knows `start_offset`, not where the player sits inside the transcoded range. `/api/vod/start` with **no** `start` key auto-resumes and returns `resumed_from`; an explicit `start: 0` forces from-the-top ("Start over" in the resume toast) — testing for key presence, not truthiness, is what keeps those two cases distinct. Row + dismiss via `GET/DELETE /api/user/continue`; `library.html` gets a horizontally-scrolling card strip with progress bars and remaining-time labels. Finishing clears the entry; deleting a user drops their history; entries capped at `PROGRESS_MAX_PER_USER` (100) and hidden when the file is no longer library-visible. |
+
+**Threshold gotcha (found in test):** the "finished" tail and "too early to resume" floor are clamped to a fraction of runtime (10% / 5%) rather than flat 90 s / 30 s. With flat values, every position in a sub-90 s clip counted as finished and nothing short was ever resumable. Feature-length content keeps the flat numbers.
 
 ## Open
 
 - **Jetstream watcher agent (automation)** — the report queue (#34) already persists agent-readable JSON at `/data/reports.json`, exposes `GET /admin/api/reports`, and now accepts triage write-back at `POST /admin/api/reports/<id>/triage` (sets the reserved `triage` field under `reports_lock` — a direct file edit would be clobbered by Flask's in-memory rewrite). The admin reports panel renders the verdict when present. Still to build: the watcher loop itself — polls the queue, gathers nearby app/ffmpeg/browser context, triages likely causes, writes back, and either adds a roadmap note or drafts a fix for admin review. Design + failure-taxonomy playbook captured in `apps/watcher/DESIGN.md`; only the agent runner is outstanding.
 
-- **`app.py` past ~5300 lines** — consider an `auth.py` / `vod.py` blueprint split. Future item; don't refactor mid-v2.
+- **Users can't change their own password** — only an admin can reset it (`POST /admin/api/users/<id>/password`). A gap now that people self-register and the host may never have known the password.
+
+- **Admin Users panel doesn't surface `invited_by`** — the field is stored on every self-registered account but isn't rendered, which is exactly the data you'd need to clean up after a leaked friend code.
+
+- **VOD subtitle picker** — `/api/vod/start` accepts `subtitle_idx` but `library.html` never sends it, so VOD always uses the auto-picked English track (or none).
+
+- **`app.py` past ~5800 lines** — consider an `auth.py` / `vod.py` blueprint split. Growing steadily; each feature makes it harder to defer.
 
 ## Closed (works in practice / won't-do)
 

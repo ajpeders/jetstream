@@ -8,7 +8,9 @@ A small Flask + ffmpeg service that broadcasts video files (and yt-dlp-resolvabl
   src/                            Svelte UI islands
   static/admin.html               admin UI
   static/viewer.html              viewer UI
+  static/home.html                front door — friend code or sign in (/)
   static/login.html               user login (/login)
+  static/hub.html                 post-login chooser (/home)
   static/library.html             private VOD library (/library)
   static/build/                   generated frontend bundle (gitignored)
   package.json                    frontend build tooling
@@ -79,7 +81,9 @@ User (`js_user` session — host-created, or self-registered with a `friend` cod
 - `GET /login` — username + password. Rate-limited 5 attempts / 60 s per IP. Sets `js_user` (30 d). Passwords are scrypt-hashed (stdlib); sessions are server-side (`/data/sessions.json`) and revoked on password reset / disable / delete. Post-login lands on `/home`.
 - `GET /home` — the hub: pick **live stream** or **my library**.
 - `GET /library` — private VOD library: grid + search, backed by `/api/user/library/{browse,search}`.
-- `POST /api/vod/start` `{path}` — spins up a private on-demand HLS stream under `/hls/vod/<session_id>/` that only that user's session can fetch. One session per user; global cap `VOD_MAX_SESSIONS` (default 2) → `409 vod_capacity` beyond.
+- `POST /api/vod/start` `{path}` — omit `start` to auto-resume from saved progress (response carries `resumed_from`); send `start: 0` to force from the beginning. Spins up a private on-demand HLS stream under `/hls/vod/<session_id>/` that only that user's session can fetch. One session per user; global cap `VOD_MAX_SESSIONS` (default 2) → `409 vod_capacity` beyond.
+- `POST /api/vod/progress` `{session_id, position}` — client reports the absolute playhead (the server only knows `start_offset`). Drives Continue watching.
+- `GET /api/user/continue` → `{items:[{path,title,position,duration,updated,percent}]}`; `DELETE` with `{path}` dismisses one.
 - `POST /api/vod/seek` `{to_seconds}` — kill ffmpeg + restart with `-ss` (fresh playlist generation; `?g=` cache-buster).
 - `POST /api/vod/stop`, `GET /api/vod/status`
 - `GET /hls/vod/<session_id>/*` — served by nginx after an ownership auth subrequest to `/api/_authcheck_vod` (session must own the sid; **no LAN bypass** here, unlike `/hls/`).
@@ -144,6 +148,7 @@ Not supported:
 | `HLS_LIST_SIZE` | `24` | Live playlist depth. |
 | `USERS_FILE` | `/data/users.json` | User accounts (scrypt-hashed passwords). |
 | `USER_SESSIONS_FILE` | `/data/sessions.json` | Server-side login sessions (`js_user` cookie). |
+| `PROGRESS_FILE` | `/data/progress.json` | Per-user VOD watch positions (Continue watching). |
 | `VOD_MAX_SESSIONS` | `2` | Global cap on concurrent VOD sessions; `409 vod_capacity` beyond. |
 | `VOD_IDLE_TIMEOUT_S` | `120` | No segment fetches for this long → VOD ffmpeg killed, session dir removed. |
 | `VOD_READRATE` | `2.0` | VOD input pacing (`-readrate`; VOD doesn't use `-re`). |
@@ -159,7 +164,8 @@ State files live under `/data/` (mounted from `state/jetstream/`):
 - `settings.json` — `viewer_public`, `auto_fill`
 - `state.json` — current source + position (auto-saved every ~10s; restored on startup)
 - `viewer_log.jsonl` — append-only connect log
-- `users.json` — user accounts (scrypt-hashed passwords)
+- `users.json` — user accounts (scrypt-hashed passwords; `invited_by`/`invite_token` on self-registered ones)
 - `sessions.json` — server-side login sessions
+- `progress.json` — per-user VOD watch positions (Continue watching)
 
 See **ARCHITECTURE.md** for the data flow + design rationale, **ROADMAP.md** for what's left, **HOWTO.md** for operator guides.

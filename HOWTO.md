@@ -95,6 +95,15 @@ Symptoms: user reports VOD won't start and gets `409 vod_capacity`, or `nvidia-s
 
 Usually you don't need to: the idle reaper kills any session with no segment fetches for `VOD_IDLE_TIMEOUT_S` (120 s) — closed tabs self-clean within ~2 minutes. Manual kill is for "right now" or for a client that's still fetching but shouldn't be.
 
+## Continue watching (per-user resume)
+
+Automatic — no setup. Playback position is saved per user per file in `/data/progress.json` and the library shows a "Continue watching" row.
+
+- Resuming happens when `/api/vod/start` is called without a `start`; the UI's "Start over" sends an explicit `start: 0`.
+- A film is considered finished (and leaves the row) within the last 10% or 90 s, whichever is smaller.
+- To wipe one user's history: delete their key from `/data/progress.json` and restart, or delete the account (which clears it automatically).
+- `PROGRESS_FILE` relocates the store; `PROGRESS_MAX_PER_USER` (100) caps entries per user.
+
 ## Tune VOD env vars
 
 All set in the compose `.env`; apply with `docker compose up -d` (no rebuild).
