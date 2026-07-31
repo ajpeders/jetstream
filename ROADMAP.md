@@ -55,7 +55,17 @@ Rate limiting is keyed on `_trusted_client_ip()` (nginx-set `X-Real-IP`), never 
 
 - **VOD subtitle picker** — `/api/vod/start` accepts `subtitle_idx` but `library.html` never sends it, so VOD always uses the auto-picked English track (or none).
 
-- **`app.py` past ~5800 lines** — consider an `auth.py` / `vod.py` blueprint split. Growing steadily; each feature makes it harder to defer.
+- **`app.py` split (6,162 lines, 237 functions, 109 routes, 6 threads)** — *analysed, deliberately not yet done.* The measurements, so the next attempt doesn't have to redo them:
+
+  **The boundary is cleaner than it looks.** An `auth` module (users/sessions/passwords/register/login/admin-user routes) is ~22 functions needing 13 helpers from the rest; a `vod` module is ~20 functions needing 9. Crucially the rest of `app.py` needs exactly **one** symbol back from either — `_session_user` — so there's a single circular edge, not a web.
+
+  **The usual refactor landmine is mostly absent.** Cross-module breakage comes from *rebinding* module-level globals, not mutating them. The vod functions use `global` **zero** times; the auth ones use it twice (`_load_users`, `_load_user_sessions`), and both rebind globals that would move into the same module. Dict/list mutation (`vod_sessions`, `watch_progress`) is shared correctly through an imported reference.
+
+  **Two real blockers, both must be handled first:**
+  1. **The Dockerfile copies only `app.py`** (`COPY app.py /app/app.py`). Any new module must be added there or the container crashes on import at boot — prod down, for a change with no user-facing benefit. Verify by actually building the image, not by reading the diff.
+  2. **No safety net on the live pipeline.** The test suites cover auth and VOD thoroughly, but the composer, watcher, pre-roll, chat, reactions, requests and reports have no characterisation tests — and those are exactly what a bad move would break. `_build_ffmpeg_cmd` is the exception: the 192-variant byte-identity harness used for the VOD-mode change covers it.
+
+  **Suggested order:** characterisation tests for the live pipeline → Dockerfile + an image-boots smoke test → extract `vod` (zero globals, best-covered) → extract `auth` → only then consider splitting the live pipeline itself. Do it in its own session, not appended to a feature batch.
 
 ## Closed (works in practice / won't-do)
 
