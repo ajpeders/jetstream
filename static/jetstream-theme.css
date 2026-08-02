@@ -1937,6 +1937,79 @@ ul#list .card .poster,
   color: var(--js-faint) !important;
 }
 
+body.front-door-page,
+body.hub-page {
+  background:
+    linear-gradient(180deg, #111820 0%, var(--js-page) 38%, #080b0f 100%) !important;
+}
+
+body.front-door-page .card {
+  border-radius: 16px !important;
+  padding: 1.35rem !important;
+}
+
+body.front-door-page h1,
+body.hub-page header h1 {
+  color: var(--js-text) !important;
+}
+
+body.front-door-page h1::before,
+body.hub-page header h1::before {
+  background: linear-gradient(135deg, var(--js-accent), #60a5fa) !important;
+  box-shadow: 0 0 0 4px rgba(var(--js-accent-rgb), 0.13), 0 0 18px rgba(var(--js-accent-rgb), 0.38) !important;
+}
+
+body.front-door-page button,
+body.front-door-page a.action,
+body.hub-page #logout-btn {
+  border-radius: 12px !important;
+}
+
+body.front-door-page a.action {
+  background: linear-gradient(180deg, rgba(var(--js-accent-rgb), 0.28), rgba(var(--js-accent-rgb), 0.14)) !important;
+  border-color: rgba(var(--js-accent-rgb), 0.44) !important;
+  color: var(--js-accent-text) !important;
+}
+
+body.front-door-page .divider,
+body.front-door-page .hint,
+body.front-door-page .back button,
+body.hub-page .lead,
+body.hub-page .choice p,
+body.hub-page .choice .now {
+  color: var(--js-faint) !important;
+}
+
+body.hub-page main {
+  align-content: center !important;
+  width: min(100%, 58rem) !important;
+}
+
+body.hub-page .choices {
+  gap: clamp(0.8rem, 2vw, 1rem) !important;
+}
+
+body.hub-page .choice {
+  background: linear-gradient(180deg, rgba(20, 29, 39, 0.98), rgba(12, 18, 26, 0.98)) !important;
+  border: 1px solid rgba(167, 179, 194, 0.15) !important;
+  border-radius: 14px !important;
+  box-shadow: var(--js-shadow-soft) !important;
+}
+
+body.hub-page .choice:hover {
+  border-color: rgba(var(--js-accent-rgb), 0.36) !important;
+}
+
+body.hub-page .choice .kicker,
+body.hub-page .choice .go {
+  color: var(--js-accent-text) !important;
+}
+
+body.hub-page .choice h2,
+body.hub-page .choice .now strong {
+  color: var(--js-text) !important;
+}
+
 @media (min-width: 1120px) {
   body.admin-page #reports-panel {
     grid-column: 2;
@@ -2074,5 +2147,393 @@ ul#list .card .poster,
   ul#list,
   #request-results.library-grid {
     grid-template-columns: repeat(auto-fill, minmax(106px, 1fr)) !important;
+  }
+}
+
+/* ── Mobile app polish ─────────────────────────────────────────────────
+   Phone views should feel like a media app, not a squeezed admin console. */
+@media (max-width: 760px) {
+  body.viewer-page,
+  body.admin-page,
+  body.controls-page,
+  body.hub-page {
+    background:
+      linear-gradient(180deg, #0f1720 0, #091018 15rem, #06090d 100%) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0.65rem !important;
+    min-height: 100vh;
+    padding: 0 0.65rem max(1rem, env(safe-area-inset-bottom)) !important;
+  }
+
+  body.viewer-page > header,
+  body.admin-page > header,
+  body.controls-page > header,
+  body.hub-page > header {
+    border-radius: 0 0 16px 16px !important;
+    display: grid !important;
+    gap: 0.2rem 0.65rem !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    margin: 0 -0.65rem 0.05rem !important;
+    min-height: 0 !important;
+    padding: calc(0.75rem + env(safe-area-inset-top)) 0.75rem 0.75rem !important;
+  }
+
+  body.viewer-page header h1,
+  body.admin-page header h1,
+  body.controls-page header h1,
+  body.hub-page header h1 {
+    align-self: center !important;
+    flex: 0 1 auto !important;
+    font-size: 1rem !important;
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    width: auto !important;
+  }
+
+  body.viewer-page #status,
+  body.admin-page #status,
+  body.controls-page #status {
+    flex-basis: auto !important;
+    font-size: 0.82rem !important;
+    grid-column: 1 / -1 !important;
+    grid-row: 2 !important;
+    margin: 0 !important;
+    min-width: 0 !important;
+    order: initial !important;
+  }
+
+  body.viewer-page header > span[style*="margin-left:auto"],
+  body.admin-page header > span[style*="margin-left:auto"],
+  body.controls-page header > span[style*="margin-left:auto"] {
+    align-self: center !important;
+    display: flex !important;
+    gap: 0.4rem !important;
+    grid-column: 2 !important;
+    grid-row: 1 / span 2 !important;
+    justify-content: flex-end !important;
+    margin-left: 0 !important;
+    width: auto !important;
+  }
+
+  body.viewer-page #report-btn,
+  body.viewer-page #voteskip-btn,
+  body.viewer-page #controls-link,
+  body.admin-page header button,
+  body.controls-page header button,
+  body.hub-page #logout-btn {
+    border-radius: 12px !important;
+    min-height: 40px !important;
+    padding: 0 0.75rem !important;
+    white-space: nowrap;
+  }
+
+  body.viewer-page main,
+  body.admin-page #player,
+  body.controls-page #player,
+  #player-view #player-wrap {
+    border-radius: 16px !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body.viewer-page #player-wrap {
+    aspect-ratio: 16 / 9;
+    min-height: 0 !important;
+  }
+
+  body.viewer-page video {
+    height: 100% !important;
+    max-height: none !important;
+  }
+
+  #unmute-overlay,
+  #play-overlay {
+    font-size: 0.74rem !important;
+    letter-spacing: 0.1em !important;
+  }
+
+  body.viewer-page #vol-controls {
+    bottom: 0.7rem !important;
+    left: auto !important;
+    right: 0.7rem !important;
+    transform: none !important;
+  }
+
+  body.viewer-page #reaction-fab {
+    bottom: 0.7rem !important;
+    left: 0.7rem !important;
+  }
+
+  body.viewer-page #vol-controls,
+  body.viewer-page #reaction-fab {
+    background: rgba(13, 19, 28, 0.92) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38) !important;
+  }
+
+  body.viewer-page #vol-controls button,
+  body.viewer-page #reaction-fab {
+    min-height: 44px !important;
+    min-width: 44px !important;
+  }
+
+  body.viewer-page #stability-btn {
+    border-color: rgba(var(--js-accent-rgb), 0.36) !important;
+    min-width: 4.3rem !important;
+  }
+
+  body.viewer-page #queue-panel,
+  body.viewer-page #reqlist-panel,
+  body.viewer-page #request-panel,
+  body.viewer-page #reactions-panel,
+  body.viewer-page #chat,
+  body.admin-page #friends-panel,
+  body.admin-page #url-panel,
+  body.admin-page #stream-settings-panel,
+  body.admin-page #queue-panel,
+  body.admin-page #recent-panel,
+  body.admin-page #requests-panel,
+  body.admin-page #reports-panel,
+  body.admin-page #reactions-panel,
+  body.admin-page #viewers-panel,
+  body.admin-page #users-panel,
+  body.admin-page #vod-panel,
+  body.admin-page #chat-panel,
+  body.admin-page #search-row,
+  body.admin-page #breadcrumb,
+  body.admin-page #search-info {
+    border-radius: 16px !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+    width: 100% !important;
+  }
+
+  #queue-head,
+  #reqlist-head,
+  #request-head,
+  #reactions-head,
+  #chat-header,
+  body.admin-page #queue-panel .head,
+  body.admin-page #recent-panel .head,
+  body.admin-page #requests-panel .head,
+  body.admin-page #reports-panel .head,
+  body.admin-page #reactions-panel .head,
+  body.admin-page #viewers-panel .head,
+  body.admin-page #vod-panel .head {
+    min-height: 48px !important;
+    padding: 0.75rem 0.9rem !important;
+  }
+
+  #queue-head h2,
+  #reqlist-head h2,
+  #request-head h2,
+  #reactions-head h2,
+  #chat-header h2,
+  body.admin-page h2 {
+    font-size: 0.74rem !important;
+    letter-spacing: 0.08em !important;
+  }
+
+  #queue-head .toggle,
+  #reqlist-head .toggle,
+  #request-head .toggle,
+  #reactions-head .toggle,
+  #chat-header .toggle {
+    align-items: center;
+    background: rgba(167, 179, 194, 0.08);
+    border: 1px solid rgba(167, 179, 194, 0.12);
+    border-radius: 999px;
+    display: inline-flex;
+    height: 28px;
+    justify-content: center;
+    width: 28px;
+  }
+
+  #request-search,
+  #search-input,
+  #url-input,
+  #friend-name,
+  #user-name,
+  #user-pass,
+  #seek-input,
+  #chat-name-input,
+  #chat-input {
+    border-radius: 12px !important;
+    font-size: 0.94rem !important;
+    min-height: 46px !important;
+  }
+
+  body.viewer-page #request-search {
+    margin: 0.75rem 0.85rem 0.55rem !important;
+    width: calc(100% - 1.7rem) !important;
+  }
+
+  body.viewer-page #library-nav {
+    border-radius: 12px !important;
+    margin: 0 0.85rem 0.85rem !important;
+    width: calc(100% - 1.7rem) !important;
+  }
+
+  #request-results.library-grid,
+  #results,
+  ul#list {
+    padding: 0.85rem !important;
+  }
+
+  #chat-messages {
+    min-height: 5.5rem !important;
+    padding: 0.85rem !important;
+  }
+
+  #chat-form {
+    background: rgba(7, 12, 18, 0.78) !important;
+    gap: 0.55rem !important;
+    padding: 0.75rem !important;
+  }
+
+  #chat-send {
+    border-radius: 12px !important;
+    min-height: 46px !important;
+  }
+
+  body.admin-page #broadcast-bar,
+  body.controls-page #broadcast-bar,
+  body.admin-page #seek-bar,
+  body.controls-page #seek-bar {
+    padding: 0.75rem !important;
+  }
+
+  body.admin-page #seek-bar,
+  body.controls-page #seek-bar {
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+
+  body.admin-page #seek-input,
+  body.controls-page #seek-input,
+  body.admin-page #seek-btn,
+  body.controls-page #seek-btn {
+    grid-column: 1 / -1;
+  }
+
+  body.admin-page #url-panel,
+  body.admin-page #friends-panel,
+  body.admin-page #stream-settings-panel,
+  body.admin-page #users-panel {
+    padding: 1rem !important;
+  }
+
+  body.admin-page #url-panel form,
+  body.admin-page #friends-panel form,
+  body.admin-page #users-panel form {
+    gap: 0.65rem !important;
+  }
+
+  body.admin-page #url-panel button,
+  body.admin-page #friends-panel button,
+  body.admin-page #users-panel button,
+  body.admin-page #stream-settings-panel select {
+    border-radius: 12px !important;
+    min-height: 48px !important;
+  }
+
+  #public-toggle-wrap {
+    background: rgba(9, 14, 20, 0.5);
+    border: 1px solid rgba(167, 179, 194, 0.12);
+    border-radius: 12px;
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 0.7rem !important;
+  }
+
+  body.front-door-page {
+    align-items: center !important;
+    justify-content: center !important;
+    padding: max(1rem, env(safe-area-inset-top)) 0.85rem max(1rem, env(safe-area-inset-bottom)) !important;
+  }
+
+  body.front-door-page .card {
+    border-radius: 18px !important;
+    max-width: 24rem !important;
+    padding: 1.35rem 1.2rem !important;
+  }
+
+  body.front-door-page button,
+  body.front-door-page a.action {
+    min-height: 48px !important;
+  }
+
+  body.hub-page main {
+    align-content: start !important;
+    gap: 0.8rem !important;
+    padding: 0 !important;
+    flex: 0 0 auto !important;
+    width: 100% !important;
+  }
+
+  body.hub-page .lead {
+    display: none !important;
+  }
+
+  body.hub-page .choices {
+    display: grid !important;
+    gap: 0.65rem !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  body.hub-page .choice {
+    border-radius: 16px !important;
+    min-height: 0 !important;
+    padding: 1rem !important;
+  }
+
+  body.hub-page .choice .go {
+    align-items: center;
+    background: rgba(var(--js-accent-rgb), 0.12);
+    border: 1px solid rgba(var(--js-accent-rgb), 0.22);
+    border-radius: 12px;
+    display: inline-flex;
+    justify-content: center;
+    min-height: 42px;
+    padding: 0 0.8rem;
+  }
+}
+
+@media (max-width: 430px) {
+  body.viewer-page,
+  body.admin-page,
+  body.controls-page,
+  body.hub-page {
+    gap: 0.55rem !important;
+    padding-left: 0.55rem !important;
+    padding-right: 0.55rem !important;
+  }
+
+  body.viewer-page > header,
+  body.admin-page > header,
+  body.controls-page > header,
+  body.hub-page > header {
+    margin-left: -0.55rem !important;
+    margin-right: -0.55rem !important;
+  }
+
+  body.admin-page #seek-bar,
+  body.controls-page #seek-bar {
+    gap: 0.45rem !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  body.admin-page #seek-bar button,
+  body.controls-page #seek-bar button {
+    padding-left: 0.25rem !important;
+    padding-right: 0.25rem !important;
+  }
+
+  body.admin-page #seek-bar button[data-delta="60"],
+  body.controls-page #seek-bar button[data-delta="60"],
+  body.admin-page #seek-bar button[data-delta="600"],
+  body.controls-page #seek-bar button[data-delta="600"] {
+    grid-column: auto;
   }
 }
