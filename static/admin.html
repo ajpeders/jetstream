@@ -661,7 +661,11 @@
   #subs-btn[aria-expanded="true"] { background: #333; border-color: #444; }
   #subs-menu {
     position: absolute;
-    bottom: calc(100% + 0.35rem);
+    /* Opens DOWNWARD. The VOD player's CC menu (library.html) opens upward
+       because it hangs off a bottom control bar; this button lives in the
+       seek row at the top of the page, so anchoring to `bottom` put "Off"
+       and the first track above the top of the viewport — unreachable. */
+    top: calc(100% + 0.35rem);
     left: 0;
     min-width: 13rem;
     max-width: min(22rem, 80vw);

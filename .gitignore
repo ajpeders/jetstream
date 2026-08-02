@@ -12,3 +12,4 @@ state/
 .codex
 .claude/
 .ui-shots/
+.playwright-mcp/

@@ -35,6 +35,39 @@ Rate limiting is keyed on `_trusted_client_ip()` (nginx-set `X-Real-IP`), never 
 
 **Threshold gotcha (found in test):** the "finished" tail and "too early to resume" floor are clamped to a fraction of runtime (10% / 5%) rather than flat 90 s / 30 s. With flat values, every position in a sub-90 s clip counted as finished and nothing short was ever resumable. Feature-length content keeps the flat numbers.
 
+## v2.3 — shipped
+
+| What | Status | Notes |
+|---|---|---|
+| Subtitle controls (VOD + live) | shipped | **VOD is genuinely per-viewer** — `GET /api/user/library/subtitles` lists burnable text tracks, the `CC` button in the `/library` player sends `subtitle_idx` to `/api/vod/start`, and switching restarts that user's own session at the current position. **Live is necessarily broadcast-wide** — `GET/POST {/admin,/api/control}/subtitles` switches the track for the current source by restarting ffmpeg in place (~2 s blip, `EXT-X-DISCONTINUITY`); the UI says so rather than implying a private toggle. |
+| Self-service password change | shipped | `POST /api/auth/password {current_password, new_password}` on `/home`. Revokes every **other** session and re-issues the caller's, so it doubles as "sign out my other devices" without logging you out of the device in your hand. Wrong current-password charges the login rate bucket — the endpoint is an online guessing oracle otherwise. |
+| `invited_by` in admin Users panel | shipped | Rendered as a chip per row. This is the field you need to clean up after a leaked friend code: find every account a token minted, delete the token, then delete those users. |
+
+**Off-switch gotcha (found in test):** `_start_stream` deliberately re-picks a default English track whenever `subtitle_idx is None`, which made "off" instantly undo itself and left it *unreachable*. Needed an explicit `subtitles_off` sentinel on the source dict — scoped to the current source, so the next queue item auto-picks again.
+
+**First-play delay is by design, not a bug:** the first play of any file+track runs *without* subtitles while a background job extracts the track to a small cached `.srt` (see #32); the next play burns them in. Both UIs now say this out loud instead of looking broken.
+
+## v2.4 — UI verification pass (shipped)
+
+Everything from v2 through v2.3 was built and tested headlessly, and the theme refresh (`62bd6c7`) landed underneath it — so no v2 page had ever been *looked at* in a browser. This pass drove every page through a real browser (local Flask + real ffmpeg + a generated fixture carrying English/French subtitle tracks) at 1280 / 390 / 360 px.
+
+**Verified working:** home screen, `/login`, `/home` hub, `/library` browse + drill-down, the VOD player (duration probed, CC menu listing both tracks with the burn-in caveat), `/controls`, `/admin` (invite-provenance chip, Active VOD panel), and the viewer page — including the live subtitle round-trip against real ffmpeg: **off sticks** (the `subtitles_off` sentinel survives the restart), track switching applies, and each restart resumes at the live position rather than from zero.
+
+Four defects found, all CSS — no backend change. Three fixed here; the fourth was fixed in parallel by the mobile-polish commit `576c8bc`:
+
+| Bug | Cause |
+|---|---|
+| `<main>` painted pure black on all four v2 pages | `jetstream-theme.css` had an unscoped `main` in `#player, #player-wrap, main { background:#000 !important }` — written when jetstream was one page. v2 made it multi-page, so it reached `/home`, `/library`, `/login` and the home screen. Scoped to `body.viewer-page main`, matching the convention the sheet already uses further down. (The viewer was always winning `#020408` from that later rule, so this fix is viewer-neutral.) |
+| Live subtitle menu opened off the top of the screen — "Off" and the first track unreachable | `#subs-menu` was anchored `bottom: calc(100% + …)`, copied from the VOD player's CC menu where the trigger sits in a *bottom* control bar. On `/controls` the trigger is in the top seek row. Now anchors `top:`. |
+| Player control cluster pushed ~16 px past the right edge at 360 px (horizontal scrollbar on phones) | The mobile rule centred `#vol-controls` with `transform: translateX(-50%)`, but the theme's chrome-fade rules set `transform: translateY(6px)` at higher specificity. `transform` is one property, not a set — the centring was replaced, never combined, so the cluster hung off `left:50%` and was never actually centred. **Fixed independently by `576c8bc`**, which pins it `right: 0.7rem; transform: none !important` under `@media (max-width: 760px)` — right-anchoring can't overflow, and `transform:none` removes the collision at its source. Recorded here because the diagnosis is the durable part: *don't use `transform` for layout on an element whose `transform` is also animated.* |
+| Chat empty-state ghosted through the sticky chat header | `#chat-header` is `position: sticky` but its gradient was 0.94–0.96 alpha, so anything scrolling under it showed through. Same gradient, now opaque. |
+
+The last two are pre-existing viewer chrome rather than v2 work, found incidentally.
+
+**Testing note:** bash `grep` silently returns nothing on `static/viewer.html` — it briefly looked like the 34 `body.viewer-page` theme rules were dead code, when line 1038 does carry `<body class="viewer-page">`. Use python/`rg` when searching that file.
+
+**Still not verified — needs the GPU/deploy host, can't be done from a dev box:** NVENC session count under live + preroll + 2 concurrent VOD (`VOD_FORCE_CPU=1` is the escape hatch), an HDR source through the VOD path, and confirming the deploy actually created the `jetstream-vod` volume (`docker volume ls | grep vod`).
+
 ## Open
 
 - **Jetstream watcher agent (automation)** — the report queue (#34) already persists agent-readable JSON at `/data/reports.json`, exposes `GET /admin/api/reports`, and now accepts triage write-back at `POST /admin/api/reports/<id>/triage` (sets the reserved `triage` field under `reports_lock` — a direct file edit would be clobbered by Flask's in-memory rewrite). The admin reports panel renders the verdict when present. Still to build: the watcher loop itself — polls the queue, gathers nearby app/ffmpeg/browser context, triages likely causes, writes back, and either adds a roadmap note or drafts a fix for admin review. Design + failure-taxonomy playbook captured in `apps/watcher/DESIGN.md`; only the agent runner is outstanding.
@@ -47,13 +80,7 @@ Rate limiting is keyed on `_trusted_client_ip()` (nginx-set `X-Real-IP`), never 
 
   Also needs: a `mod` tier (a third invite/account level between friend and admin), per-room authorization, room lifecycle/reaping, and a concurrency cap — each room is another ffmpeg competing for the same NVENC slots the live stream and VOD already share.
 
-- **Per-viewer live subtitles (WebVTT sidecar)** — the live encode burns subtitles into the shared video, so the shipped toggle is necessarily broadcast-wide (everyone sees the change). A true per-viewer CC toggle needs subs extracted to WebVTT, served alongside, referenced via `EXT-X-MEDIA`, and the composer taught to carry a subtitle rendition across run boundaries. Previously marked won't-do; re-listed because the question keeps coming up.
-
-- **Users can't change their own password** — only an admin can reset it (`POST /admin/api/users/<id>/password`). A gap now that people self-register and the host may never have known the password.
-
-- **Admin Users panel doesn't surface `invited_by`** — the field is stored on every self-registered account but isn't rendered, which is exactly the data you'd need to clean up after a leaked friend code.
-
-- **VOD subtitle picker** — `/api/vod/start` accepts `subtitle_idx` but `library.html` never sends it, so VOD always uses the auto-picked English track (or none).
+- **Per-viewer live subtitles (WebVTT sidecar)** — the live encode burns subtitles into the shared video, so the shipped v2.3 toggle is necessarily broadcast-wide (everyone sees the change). A true per-viewer CC toggle needs subs extracted to WebVTT, served alongside, referenced via `EXT-X-MEDIA`, and the composer taught to carry a subtitle rendition across run boundaries. Previously marked won't-do; re-listed because the question keeps coming up.
 
 - **`app.py` split (6,162 lines, 237 functions, 109 routes, 6 threads)** — *analysed, deliberately not yet done.* The measurements, so the next attempt doesn't have to redo them:
 

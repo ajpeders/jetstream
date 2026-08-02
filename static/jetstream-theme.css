@@ -243,9 +243,15 @@ input[type="range"] {
   accent-color: var(--js-accent) !important;
 }
 
+/* Scoped to the viewer page on purpose: this paints the letterbox around the
+   video, so it must NOT reach the v2 pages (/home, /library, /login, the home
+   screen), which are ordinary content pages that also use <main>. An unscoped
+   `main` here painted their whole content area pure black over the page
+   gradient. Matches the scoping used by the `body.viewer-page main` rule
+   further down. */
 #player,
 #player-wrap,
-main {
+body.viewer-page main {
   background: #000 !important;
 }
 
@@ -1729,7 +1735,11 @@ body.admin-page #vod-panel {
 #request-head,
 #reactions-head,
 #chat-header {
-  background: linear-gradient(180deg, rgba(22, 32, 43, 0.96), rgba(15, 22, 31, 0.94)) !important;
+  /* Fully opaque on purpose: these headers are `position: sticky`, so
+     anything in the scroll area passes UNDER them. At the previous
+     0.96/0.94 alpha the chat empty-state (and any message scrolled to the
+     top) ghosted through as faint text. Same gradient, no translucency. */
+  background: linear-gradient(180deg, rgb(22, 32, 43), rgb(15, 22, 31)) !important;
   border-bottom: 1px solid var(--js-line) !important;
 }
 
