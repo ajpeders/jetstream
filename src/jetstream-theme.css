@@ -1,0 +1,7 @@
+@import "tailwindcss" source("../static");
+@plugin "daisyui" {
+  prefix: "du-";
+  themes: dark --default;
+}
+
+@import "../static/jetstream-custom.css";

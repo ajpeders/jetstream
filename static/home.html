@@ -191,7 +191,7 @@
 <link rel="stylesheet" href="/jetstream-theme.css">
 </head>
 <body class="front-door-page">
-<div class="card">
+<div class="card du-card">
   <h1>jetstream</h1>
 
   <!-- ── State A: the front door ─────────────────────────────────────── -->
@@ -199,10 +199,10 @@
     <p class="sub">A private stream for friends. Enter the code you were sent to start watching.</p>
     <form id="code-form">
       <label for="code">Friend code</label>
-      <input id="code" name="code" type="text" autocomplete="one-time-code"
+      <input class="du-input" id="code" name="code" type="text" autocomplete="one-time-code"
              autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
       <p id="code-error" class="error" role="alert"></p>
-      <button id="code-btn" type="submit">Watch</button>
+      <button class="du-btn du-btn-primary" id="code-btn" type="submit">Watch</button>
     </form>
     <p class="divider">Already have an account? <a href="/login">Sign in</a></p>
   </section>
@@ -211,8 +211,8 @@
   <section id="state-choice" hidden>
     <p class="ok">Code accepted.</p>
     <p class="sub">You're in. Head straight to the stream, or make an account first — it's optional, and you can always do it later.</p>
-    <a class="action" id="go-watch" href="/">Watch the live stream →</a>
-    <button class="quiet" id="go-register" type="button">Create an account — unlocks the on-demand library</button>
+    <a class="action du-btn du-btn-primary" id="go-watch" href="/">Watch the live stream →</a>
+    <button class="quiet du-btn" id="go-register" type="button">Create an account — unlocks the on-demand library</button>
   </section>
 
   <!-- ── State C: invite-gated registration ───────────────────────────── -->

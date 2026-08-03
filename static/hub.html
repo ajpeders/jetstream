@@ -264,20 +264,20 @@
 <header>
   <h1>jetstream</h1>
   <span id="who"></span>
-  <button id="logout-btn" type="button">Sign out</button>
+  <button class="du-btn du-btn-sm" id="logout-btn" type="button">Sign out</button>
 </header>
 
 <main>
   <p class="lead">Two ways to watch.</p>
   <div class="choices">
-    <a class="choice" href="/">
+    <a class="choice du-card" href="/">
       <span class="kicker">Live</span>
       <h2>Live stream</h2>
       <p>Watch what everyone's watching, together.</p>
       <span class="now" id="now-playing">&nbsp;</span>
       <span class="go">Join the stream →</span>
     </a>
-    <a class="choice" href="/library">
+    <a class="choice du-card" href="/library">
       <span class="kicker">On demand</span>
       <h2>My library</h2>
       <p>Browse everything and watch on demand, privately.</p>
@@ -286,20 +286,20 @@
   </div>
 
   <section class="account">
-    <button id="pw-toggle" type="button" aria-expanded="false" aria-controls="pw-form">Change password</button>
+    <button class="du-btn" id="pw-toggle" type="button" aria-expanded="false" aria-controls="pw-form">Change password</button>
     <p class="pw-msg ok" id="pw-ok" role="status"></p>
     <form id="pw-form" novalidate autocomplete="on">
       <label for="pw-current">Current password
-        <input id="pw-current" name="current_password" type="password" autocomplete="current-password">
+        <input class="du-input" id="pw-current" name="current_password" type="password" autocomplete="current-password">
       </label>
       <label for="pw-new">New password
-        <input id="pw-new" name="new_password" type="password" autocomplete="new-password">
+        <input class="du-input" id="pw-new" name="new_password" type="password" autocomplete="new-password">
       </label>
       <label for="pw-confirm">Confirm new password
-        <input id="pw-confirm" name="confirm_password" type="password" autocomplete="new-password">
+        <input class="du-input" id="pw-confirm" name="confirm_password" type="password" autocomplete="new-password">
       </label>
       <p class="pw-msg error" id="pw-error" role="alert"></p>
-      <button id="pw-submit" type="submit">Update password</button>
+      <button class="du-btn du-btn-primary" id="pw-submit" type="submit">Update password</button>
     </form>
   </section>
 </main>

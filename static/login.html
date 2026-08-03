@@ -109,18 +109,18 @@
 </style>
 <link rel="stylesheet" href="/jetstream-theme.css">
 </head>
-<body>
-<div class="card">
+<body class="front-door-page">
+<div class="card du-card">
   <h1>jetstream</h1>
   <p class="sub">Sign in to browse the library and watch on demand.</p>
   <form id="login-form">
     <label for="username">Username</label>
-    <input id="username" name="username" type="text" autocomplete="username"
+    <input class="du-input" id="username" name="username" type="text" autocomplete="username"
            autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <input class="du-input" id="password" name="password" type="password" autocomplete="current-password" required>
     <p id="error" role="alert"></p>
-    <button id="submit-btn" type="submit">Sign in</button>
+    <button class="du-btn du-btn-primary" id="submit-btn" type="submit">Sign in</button>
   </form>
   <!-- Reciprocal of the viewer header's Sign-in link: someone who landed here
        by accident, or who holds only an invite and no account, needs a way

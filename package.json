@@ -3,12 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "tailwindcss -i ./src/jetstream-theme.css -o ./static/jetstream-theme.css --minify && vite build",
+    "build:theme": "tailwindcss -i ./src/jetstream-theme.css -o ./static/jetstream-theme.css --minify",
     "dev": "vite --host 0.0.0.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tailwindcss/cli": "^4.3.3",
+    "daisyui": "^5.7.14",
     "svelte": "^5.0.0",
+    "tailwindcss": "^4.3.3",
     "vite": "^6.0.0"
   }
 }
