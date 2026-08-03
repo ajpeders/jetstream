@@ -871,6 +871,8 @@ let scrubbing = false;
 let seeking = false;  // an out-of-window /api/vod/seek round-trip in flight
 let beaconDone = false;
 let currentItem = null;   // item backing the active session (needed to restart it)
+let preparing = false;    // waiting on ffmpeg to write the playlist
+let nativeRetries = 0;    // native-HLS (iOS) reattach budget; Hls.js self-heals
 
 const savedVol = parseFloat(localStorage.getItem("jetstream_volume"));
 if (isFinite(savedVol) && savedVol >= 0 && savedVol <= 1) {
@@ -887,16 +889,61 @@ function playWithFallback() {
   if (p && typeof p.catch === "function") p.catch(() => {});
 }
 
+// A 4K HDR source can take a long time to produce its first segment, and a
+// black box with "tap to play" on it reads as broken. Say what's happening.
+function setPreparing(on) {
+  preparing = on;
+  playOverlay.textContent = on ? "preparing…" : "tap to play";
+  playOverlay.classList.toggle("hidden", !on && (!video.paused || !sess));
+  if (on) playOverlay.classList.remove("hidden");
+}
+
 function hardTeardown() {
   if (hls) { hls.destroy(); hls = null; }
+}
+
+// /api/vod/start returns as soon as ffmpeg is SPAWNED, not once it has
+// written anything — so the playlist 404s for a while (~1.5 s on a small
+// file, far longer for a 4K HDR source that has to decode + tonemap before
+// the first segment). Attaching a player to a URL that isn't there yet is
+// only survivable if something retries.
+//
+// Hls.js does (see the ERROR handler below), which is why this never showed
+// up on desktop. iOS Safari takes the native branch, where a 404 is a plain
+// media error with nothing watching for it — the player just sat dead on
+// "tap to play" forever. Hence: wait for the playlist before attaching,
+// whichever engine we're about to use.
+const PLAYLIST_WAIT_MS = 120000;  // 4K HDR first-segment can be very slow
+async function waitForPlaylist(url, gen) {
+  const deadline = Date.now() + PLAYLIST_WAIT_MS;
+  let delay = 200;
+  for (;;) {
+    if (gen !== sessGen) return false;         // superseded — abandon quietly
+    try {
+      const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+      if (r.ok) return true;
+      if (r.status === 401) { location.href = "/login?next=%2Flibrary"; return false; }
+    } catch { /* network hiccup — treated the same as not-ready-yet */ }
+    if (Date.now() > deadline) return false;
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(delay * 1.5, 2000);
+  }
 }
 
 // Same engine-selection order as viewer.html: prefer native HLS where
 // canPlayType says so (iOS Safari), else Hls.js, with fatal-error →
 // destroy + re-create retry. No live-edge/sync logic — this is VOD.
-function attachPlayer(url) {
+async function attachPlayer(url) {
   const gen = sessGen;
   hardTeardown();
+  setPreparing(true);
+  const ready = await waitForPlaylist(url, gen);
+  if (gen !== sessGen) return;                 // user moved on while we waited
+  setPreparing(false);
+  if (!ready) {
+    toast("This one is taking too long to start — try again.");
+    return;
+  }
   if (video.canPlayType("application/vnd.apple.mpegurl")) {
     video.src = url;
     video.load();
@@ -1370,7 +1417,9 @@ ccWrap.addEventListener("focusout", () => {
 // ---- Play / pause / volume / fullscreen --------------------------------
 function syncPlayUI() {
   playBtn.textContent = video.paused ? "▶" : "⏸";
-  playOverlay.classList.toggle("hidden", !video.paused || !sess);
+  // While preparing, the overlay is showing "preparing…" and must stay up —
+  // this runs on every timeupdate/pause and would otherwise hide it.
+  playOverlay.classList.toggle("hidden", !preparing && (!video.paused || !sess));
   muteBtn.textContent = video.muted || video.volume === 0 ? "🔇" : "🔊";
   const shown = video.muted ? 0 : video.volume;
   if (parseFloat(volSlider.value) !== shown) volSlider.value = String(shown);
@@ -1381,6 +1430,7 @@ playBtn.addEventListener("click", () => {
   else video.pause();
 });
 playOverlay.addEventListener("click", () => {
+  if (preparing) return;   // nothing to play yet; the wait will attach for us
   // A tap on the overlay is a real gesture — safe to unmute and play() here
   // (covers autoplay-policy rejections from the non-gesture start path).
   video.muted = false;
@@ -1391,6 +1441,30 @@ playOverlay.addEventListener("click", () => {
 video.addEventListener("click", () => {
   if (video.paused) playWithFallback();
   else video.pause();
+});
+
+// Frames are actually moving — the retry budget has done its job. Reset here
+// rather than in attachPlayer: resetting on every *attach* would let a
+// segment that always fails loop forever (attach → reset → error → attach…).
+video.addEventListener("playing", () => { nativeRetries = 0; });
+
+// Native-HLS recovery (iOS Safari). Hls.js has its own fatal-error retry; the
+// native path had none at all, so any transient 404 — the playlist not written
+// yet, or a segment the encoder hasn't reached — killed playback permanently
+// with no way back except reloading the page. Bounded so a genuinely broken
+// source doesn't spin forever.
+video.addEventListener("error", () => {
+  if (!sess || hls) return;                    // Hls.js handles its own errors
+  if (preparing) return;                       // already waiting on the playlist
+  if (nativeRetries >= 5) {
+    toast("Playback failed — try again.");
+    return;
+  }
+  nativeRetries++;
+  const gen = sessGen;
+  setTimeout(() => {
+    if (sess && sessGen === gen) attachPlayer(sess.url);
+  }, 1000 * nativeRetries);
 });
 muteBtn.addEventListener("click", () => {
   video.muted = !video.muted;

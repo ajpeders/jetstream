@@ -79,6 +79,23 @@ The last two are pre-existing viewer chrome rather than v2 work, found incidenta
 
 A third is worth knowing generally: **lavfi sources emit frames with unspecified colour properties**, so `-color_trc`/`-color_primaries` output options are silently dropped and the file probes as SDR. HDR fixtures must be tagged with the `setparams` filter, and the script now verifies `color_transfer=smpte2084` after encoding rather than assuming it.
 
+## v2.5 — VOD playback on iOS (shipped)
+
+**Symptom:** on-demand playback did nothing on an iPhone — player chrome drawn, duration correct, permanently stuck on "tap to play". Desktop was fine.
+
+**Cause:** `/api/vod/start` returns as soon as ffmpeg is *spawned*, not once it has written anything, so `idx.m3u8` 404s for a while after the URL is handed out — measured at ~1.4–1.6 s on a 640×360 fixture, and far longer for a 2160p HDR source that must decode + tonemap before the first segment. The client attached a player to that URL immediately. Hls.js has a fatal-error → destroy/re-attach retry and rode straight through it, which is why desktop never showed the bug. iOS Safari takes the **native** `canPlayType("application/vnd.apple.mpegurl")` branch, which had **no error handling whatsoever** — one 404 and playback was dead until a page reload.
+
+**Fix (client-side, `library.html`):**
+- `waitForPlaylist()` HEAD-polls the playlist (200 ms, ×1.5 backoff, capped 2 s, 120 s ceiling) before either engine attaches. Engine-agnostic, so it fixes the root cause rather than the iOS symptom.
+- A "preparing…" overlay replaces the dead black box, so a slow 4K HDR start reads as working rather than broken.
+- A `video` `error` listener finally gives the native path a bounded reattach (5 tries, linear backoff) — the counter resets on `playing`, **not** on attach, or a permanently-failing segment would loop forever.
+
+**Not done server-side on purpose:** having `/api/vod/start` block until the playlist exists would fix every client at once, but it holds a gunicorn thread for as long as the first segment takes — fine at 1.5 s, not fine for a 4K HDR file. The waiting belongs on the client.
+
+**Caveat — this fixes "nothing ever plays", not "plays smoothly".** If the VOD encode runs slower than realtime (4K HDR tonemap on CPU is ~0.5×; check whether `VOD_FORCE_CPU=1` is set in the compose `.env`), playback will start and then stall as the player catches up to the encoder. The new retry recovers from those stalls instead of dying, but the real remedy is NVENC for VOD or a lower `TARGET_HEIGHT`.
+
+**Verified:** the wait logic under unit test against the shipped function text (appears-after-404s, transient network errors, 401→login, superseded-session abort), and end-to-end against a live server — HEAD 200 after 5 polls / 1.64 s. **Not verified on a real iPhone** — no iOS device or browser automation available here.
+
 ## Open
 
 - **Jetstream watcher agent (automation)** — the report queue (#34) already persists agent-readable JSON at `/data/reports.json`, exposes `GET /admin/api/reports`, and now accepts triage write-back at `POST /admin/api/reports/<id>/triage` (sets the reserved `triage` field under `reports_lock` — a direct file edit would be clobbered by Flask's in-memory rewrite). The admin reports panel renders the verdict when present. Still to build: the watcher loop itself — polls the queue, gathers nearby app/ffmpeg/browser context, triages likely causes, writes back, and either adds a roadmap note or drafts a fix for admin review. Design + failure-taxonomy playbook captured in `apps/watcher/DESIGN.md`; only the agent runner is outstanding.
