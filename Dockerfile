@@ -22,6 +22,19 @@ ENV LIBVA_DRIVER_NAME=iHD
 
 RUN pip install --no-cache-dir flask==3.0.3 yt-dlp gunicorn==23.0.0
 
+# LLM provider seam for the auto_fill content gate. Separate layer from the
+# pinned core deps so a companion change rebuilds only this step, and because
+# it is the one dependency fetched over the network from our own Forgejo —
+# keeping it last means a Forgejo outage can't invalidate the layers above.
+#
+# app.py imports this behind a try/except: if the install is ever removed or
+# fails at runtime-import, the content gate degrades to "never judges" (and,
+# being fail-closed, auto_fill just stays quiet) instead of the container
+# crashing on boot.
+ARG COMPANION_REF=main
+RUN pip install --no-cache-dir \
+      "git+https://git.thelunadog.com/alex/companion.git@${COMPANION_REF}"
+
 WORKDIR /app
 COPY app.py /app/app.py
 COPY static /app/static

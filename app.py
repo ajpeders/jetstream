@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import ipaddress
@@ -253,11 +254,42 @@ ARR_REFRESH_SECS = 30 * 60
 # never inline. _pick_random_from_library() runs inside the watcher loop on
 # the source-transition path, so a synchronous ~6 s model call there would be
 # ~6 s of dead air on the live stream at every single transition.
+# The model call goes through the `companion` package's provider seam
+# (git.thelunadog.com/alex/companion) rather than a hand-rolled HTTP call:
+# its OllamaProvider uses Ollama's NATIVE structured outputs, so the verdict
+# arrives as schema-validated JSON instead of something we regex out of a
+# ```json fence, and build_provider() makes the backend swappable
+# (ollama / llm-router / openai-compatible / anthropic) via env alone.
+#
+# The import is GUARDED on purpose. jetstream's image installs a very short
+# list of packages; if companion is ever missing, the content gate must
+# degrade to "never judges" — which, being fail-closed, means auto_fill
+# simply stays quiet — rather than take the whole app down at import time.
+try:
+    from companion.factory import build_provider as _build_provider
+    from companion.provider import ProviderError as _ProviderError
+    COMPANION_AVAILABLE = True
+except Exception as _companion_exc:   # pragma: no cover - dependency missing
+    _build_provider = None
+
+    class _ProviderError(Exception):
+        pass
+
+    COMPANION_AVAILABLE = False
+    print(f"[content] companion not importable ({_companion_exc}); "
+          f"the LLM content gate is unavailable", file=sys.stderr)
+
 CONTENT_VERDICTS_FILE = Path(os.environ.get("CONTENT_VERDICTS_FILE",
                                             "/data/content_verdicts.json"))
+# `kind` selects the companion provider: ollama | openai | openai-compatible |
+# anthropic. The OLLAMA_* names are kept as the defaults for the ollama case
+# so existing config keeps working.
+CONTENT_PROVIDER_KIND = os.environ.get("CONTENT_PROVIDER_KIND", "ollama")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:27b")
-OLLAMA_TIMEOUT_S = float(os.environ.get("OLLAMA_TIMEOUT_S", "90"))
+CONTENT_PROVIDER_BASE_URL = os.environ.get("CONTENT_PROVIDER_BASE_URL", OLLAMA_URL)
+CONTENT_MODEL = os.environ.get("CONTENT_MODEL",
+                               os.environ.get("OLLAMA_MODEL", "gemma3:27b"))
+CONTENT_PROVIDER_API_KEY = os.environ.get("CONTENT_PROVIDER_API_KEY", "")
 # Pause between judgements so a library sweep doesn't monopolise the GPU that
 # NVENC is also using for the live encode.
 CONTENT_JUDGE_INTERVAL_S = float(os.environ.get("CONTENT_JUDGE_INTERVAL_S", "2"))
@@ -3168,58 +3200,75 @@ def _arr_meta_for_title(key: str) -> str:
     return "\n".join(bits)
 
 
-def _ollama_judge(title: str, extra: str, policy: str) -> dict | None:
-    """Ask the model whether `title` violates `policy`. Returns
-    {"blocked": bool, "reason": str} or None if the call/parse failed.
+VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "blocked": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["blocked", "reason"],
+}
 
-    Never raises: a judge failure must leave the verdict absent (and so, with
-    fail-closed semantics, the title simply stays ineligible) rather than
-    propagate into the caller."""
-    prompt = (
-        "You are a content filter for a private movie/TV stream shared with "
-        "friends. Decide whether the title below must be BLOCKED under the "
-        "host's policy.\n\n"
-        f"HOST POLICY:\n{policy.strip()}\n\n"
-        f"TITLE: {title}\n"
-        f"{extra}\n\n"
-        'Reply with ONLY a JSON object, no prose, no code fences: '
-        '{"blocked": true or false, "reason": "<max 10 words>"}'
-    )
-    body = json.dumps({
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0, "num_predict": 80},
-    }).encode()
-    try:
-        req = urllib.request.Request(
-            f"{OLLAMA_URL.rstrip('/')}/api/generate", data=body,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT_S) as r:
-            raw = json.loads(r.read()).get("response", "")
-    except Exception as e:
-        print(f"[content] judge call failed for {title!r}: {e}", file=sys.stderr)
+_content_provider = None
+_content_provider_lock = threading.Lock()
+
+
+def _get_content_provider():
+    """Build (once) the companion Provider used for judging. Returns None when
+    companion isn't installed or the config is bad — callers treat that as
+    "cannot judge", never as an error to propagate."""
+    global _content_provider
+    if not COMPANION_AVAILABLE:
         return None
-    return _parse_judge_reply(raw)
-
-
-def _parse_judge_reply(raw: str) -> dict | None:
-    """Pull the verdict JSON out of a model reply. Models reliably wrap the
-    object in ```json fences despite being told not to, so strip fences and
-    fall back to the first {...} span."""
-    text = (raw or "").strip()
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I | re.S).strip()
-    obj = None
-    try:
-        obj = json.loads(text)
-    except Exception:
-        m = re.search(r"\{.*?\}", text, re.S)
-        if m:
+    with _content_provider_lock:
+        if _content_provider is None:
+            cfg = {
+                "kind": CONTENT_PROVIDER_KIND,
+                "model": CONTENT_MODEL,
+                "base_url": CONTENT_PROVIDER_BASE_URL,
+            }
+            if CONTENT_PROVIDER_API_KEY:
+                cfg["api_key"] = CONTENT_PROVIDER_API_KEY
             try:
-                obj = json.loads(m.group(0))
-            except Exception:
-                obj = None
+                _content_provider = _build_provider(cfg)
+            except Exception as e:
+                print(f"[content] provider config rejected: {e}", file=sys.stderr)
+                return None
+        return _content_provider
+
+
+def _judge_title(title: str, extra: str, policy: str) -> dict | None:
+    """Ask the model whether `title` violates `policy`. Returns
+    {"blocked": bool, "reason": str}, or None if it couldn't be judged.
+
+    Never raises: a judge failure must leave the verdict absent — which, being
+    fail-closed, just leaves the title ineligible — rather than propagate into
+    the judge loop.
+
+    companion's provider API is async while jetstream is sync Flask + threads,
+    so this bridges with asyncio.run(). That is safe precisely because it is
+    only ever called from the dedicated judge thread, one title at a time —
+    never from a request handler or the watcher."""
+    provider = _get_content_provider()
+    if provider is None:
+        return None
+    system = (
+        "You are a content filter for a private movie/TV stream shared with "
+        "friends. Decide whether the title must be BLOCKED under the host's "
+        "policy. Judge the work itself, not the filename's formatting. "
+        "Keep `reason` under 10 words."
+    )
+    user = f"HOST POLICY:\n{policy.strip()}\n\nTITLE: {title}\n{extra}".strip()
+    try:
+        obj = asyncio.run(
+            provider.complete_json(system=system, user=user, schema=VERDICT_SCHEMA)
+        )
+    except _ProviderError as e:
+        print(f"[content] judge failed for {title!r}: {e}", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"[content] judge error for {title!r}: {e}", file=sys.stderr)
+        return None
     if not isinstance(obj, dict) or "blocked" not in obj:
         return None
     return {
@@ -3238,6 +3287,12 @@ def _content_judge_loop():
             if not enabled:
                 time.sleep(15)
                 continue
+            if _get_content_provider() is None:
+                # No judge available (companion missing / bad config). Idle
+                # slowly instead of spinning through the library logging a
+                # failure per title.
+                time.sleep(60)
+                continue
             ph = _policy_hash(policy)
             pending = [k for k in _library_titles() if _verdict_for(k, ph) is None]
             if not pending:
@@ -3245,7 +3300,7 @@ def _content_judge_loop():
                 continue
             key = pending[0]
             name = _title_display_name(key)
-            verdict = _ollama_judge(name, _arr_meta_for_title(key), policy)
+            verdict = _judge_title(name, _arr_meta_for_title(key), policy)
             if verdict is None:
                 # Endpoint down or unparseable — back off rather than spin
                 # through the whole library logging one failure per title.
@@ -5532,8 +5587,13 @@ def api_content_list():
             "judged": (v or {}).get("judged"),
         })
     return jsonify({
-        "enabled": enabled, "policy": policy, "model": OLLAMA_MODEL,
-        "endpoint": OLLAMA_URL,
+        "enabled": enabled, "policy": policy,
+        "model": CONTENT_MODEL, "endpoint": CONTENT_PROVIDER_BASE_URL,
+        "provider": CONTENT_PROVIDER_KIND,
+        # False means companion isn't installed — the gate can never clear a
+        # title, so with fail-closed semantics auto_fill will stay silent.
+        # Surfaced so that's diagnosable from the admin UI rather than a mystery.
+        "judge_available": COMPANION_AVAILABLE,
         "counts": {"allowed": allowed, "blocked": blocked,
                    "pending": pending, "titles": len(titles)},
         "titles": rows,

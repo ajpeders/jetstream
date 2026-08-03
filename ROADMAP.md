@@ -114,7 +114,13 @@ Titles are judged on arr metadata (genres / certification / overview) when avail
 
 **Default OFF on purpose:** enabling it with an empty cache means auto_fill has nothing to play until the judge sweeps the library (~6 s × title count).
 
-**Open:** the model call is hand-rolled `urllib` + regex fence-stripping, which duplicates the `companion` project's provider seam (`~/projects/companion`). companion's `OllamaProvider.complete_json` uses Ollama's **native structured outputs** (`body["format"] = schema`) — strictly better than parsing fences — and `build_provider()` would make the backend swappable. Blockers: `complete_json` is async (jetstream is sync Flask + threads, so the judge thread needs `asyncio.run` per call), and it adds `httpx` + an unpublished local-path package to a Dockerfile that installs three packages and copies exactly one Python file. The seam is deliberately narrow — `_ollama_judge()` and `_parse_judge_reply()` — so the swap stays a contained edit.
+**Provider:** the model call goes through the [`companion`](https://git.thelunadog.com/alex/companion) package's provider seam, not a hand-rolled HTTP call. `OllamaProvider.complete_json` uses Ollama's **native structured outputs** (`body["format"] = schema`), so the verdict arrives schema-validated rather than regexed out of a ```json fence, and `build_provider()` makes the backend swappable by env alone (`CONTENT_PROVIDER_KIND`: ollama | openai | openai-compatible | anthropic).
+
+  companion's API is async while jetstream is sync Flask + threads, so `_judge_title()` bridges with `asyncio.run()` — safe only because it is called exclusively from the dedicated judge thread, one title at a time, never from a request handler or the watcher.
+
+  **The import is guarded, and that is load-bearing.** The Dockerfile installs companion from Forgejo over HTTPS (last layer, so a Forgejo outage can't invalidate the pinned layers above), but if it is ever missing `app.py` catches the ImportError and the gate degrades to "never judges" instead of the container dying on boot. Verified both ways: with companion broken the app imports fine and `judge_available` reports false; and cold-start fail-closed still holds (empty cache + no judge => auto_fill correctly returns nothing).
+
+  Note fail-closed applies to *unjudged* titles, not to a judge outage: already-cleared verdicts stay valid, so if ollama goes down the stream keeps playing the titles it had already cleared.
 
 ## Open
 
