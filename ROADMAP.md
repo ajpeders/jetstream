@@ -96,6 +96,26 @@ A third is worth knowing generally: **lavfi sources emit frames with unspecified
 
 **Verified:** the wait logic under unit test against the shipped function text (appears-after-404s, transient network errors, 401→login, superseded-session abort), and end-to-end against a live server — HEAD 200 after 5 polls / 1.64 s. **Not verified on a real iPhone** — no iOS device or browser automation available here.
 
+## v2.6 — auto_fill variety + LLM content gate (shipped, filter default-OFF)
+
+**Variety.** `auto_fill` picked uniformly over *files*, which is uniform over the wrong thing: a 200-episode show was 200× likelier than a movie, so the stream drowned in whichever series was longest. It also never consulted `recent_items`, so it could replay what just finished. Now it picks a **title** uniformly (`_title_key` collapses `tv/Show/Season N/…` to `tv/Show`), then an episode within it, skipping the last `AUTOFILL_RECENT_TITLES` (12) titles played. Measured over 1200 picks across 4 titles: ~300 each, with the 2-file show at 319 rather than the ~480 that file-weighting gave.
+
+**Content gate.** A host-written policy (plain English, editable in settings) is judged per title by an Ollama-compatible endpoint; `auto_fill` only picks titles with an "allowed" verdict. **Fail-closed** — unjudged means ineligible.
+
+Three constraints shaped the design:
+
+1. **The model can never be called inline.** `_pick_random_from_library()` runs inside the watcher's source-transition path. A measured ~6 s `gemma3:27b` call there would be ~6 s of dead air on the live stream at *every* transition. So a background thread judges titles and writes a disk cache; the picker only ever reads it.
+2. **The policy text is part of the cache key** (`_policy_hash`). Without that, editing the rule silently keeps every verdict made under the old one. Verified: changing the policy invalidated 4/4 verdicts and the picker correctly went silent.
+3. **Verdicts must load before the watcher starts.** They didn't at first — the watcher's first tick saw an empty cache and skipped an auto_fill pick the on-disk verdicts would have allowed.
+
+Manual overrides (`POST /admin/api/content/<key>` `{blocked}` / `{clear}`) are marked `manual` and **survive policy edits** — a human decision outranks the model's and shouldn't be silently re-judged away. `GET /admin/api/content` lists every title with state + reason + judge progress; without it, a title vanishing from auto_fill would be unexplainable.
+
+Titles are judged on arr metadata (genres / certification / overview) when available — the arr poll now indexes it alongside the cover map at no extra request — falling back to the prettified title. New env: `OLLAMA_URL` (default `host.docker.internal:11434`), `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_S`, `CONTENT_JUDGE_INTERVAL_S`, `CONTENT_VERDICTS_FILE`, `AUTOFILL_RECENT_TITLES`.
+
+**Default OFF on purpose:** enabling it with an empty cache means auto_fill has nothing to play until the judge sweeps the library (~6 s × title count).
+
+**Open:** the model call is hand-rolled `urllib` + regex fence-stripping, which duplicates the `companion` project's provider seam (`~/projects/companion`). companion's `OllamaProvider.complete_json` uses Ollama's **native structured outputs** (`body["format"] = schema`) — strictly better than parsing fences — and `build_provider()` would make the backend swappable. Blockers: `complete_json` is async (jetstream is sync Flask + threads, so the judge thread needs `asyncio.run` per call), and it adds `httpx` + an unpublished local-path package to a Dockerfile that installs three packages and copies exactly one Python file. The seam is deliberately narrow — `_ollama_judge()` and `_parse_judge_reply()` — so the swap stays a contained edit.
+
 ## Open
 
 - **Jetstream watcher agent (automation)** — the report queue (#34) already persists agent-readable JSON at `/data/reports.json`, exposes `GET /admin/api/reports`, and now accepts triage write-back at `POST /admin/api/reports/<id>/triage` (sets the reserved `triage` field under `reports_lock` — a direct file edit would be clobbered by Flask's in-memory rewrite). The admin reports panel renders the verdict when present. Still to build: the watcher loop itself — polls the queue, gathers nearby app/ffmpeg/browser context, triages likely causes, writes back, and either adds a roadmap note or drafts a fix for admin review. Design + failure-taxonomy playbook captured in `apps/watcher/DESIGN.md`; only the agent runner is outstanding.

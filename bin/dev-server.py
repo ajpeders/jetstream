@@ -82,6 +82,11 @@ os.environ.update({
     # something to do — the fixtures carry eng + fre tracks.
     "USE_SUBTITLES": "1",
     "VIEWER_LIBRARY_ROOTS": "Movies=movies,TV Shows=tv",
+    "CONTENT_VERDICTS_FILE": str(DATA / "content_verdicts.json"),
+    # Prod default is host.docker.internal (the app runs in a container);
+    # locally ollama is just on the loopback.
+    "OLLAMA_URL": os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),
+    "CONTENT_JUDGE_INTERVAL_S": os.environ.get("CONTENT_JUDGE_INTERVAL_S", "0.5"),
 })
 
 sys.path.insert(0, str(ROOT))

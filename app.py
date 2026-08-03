@@ -246,6 +246,30 @@ RADARR_CONFIG = Path(os.environ.get("RADARR_CONFIG", "/etc/radarr_config.xml"))
 # Picks up newly-added shows / movies without a restart.
 ARR_REFRESH_SECS = 30 * 60
 
+# ---- LLM content gate (auto_fill only) ------------------------------------
+# An Ollama-compatible endpoint judges each library TITLE against a
+# host-written policy, and auto_fill will only pick from titles judged
+# allowed. Verdicts are cached to disk and produced by a background thread —
+# never inline. _pick_random_from_library() runs inside the watcher loop on
+# the source-transition path, so a synchronous ~6 s model call there would be
+# ~6 s of dead air on the live stream at every single transition.
+CONTENT_VERDICTS_FILE = Path(os.environ.get("CONTENT_VERDICTS_FILE",
+                                            "/data/content_verdicts.json"))
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:27b")
+OLLAMA_TIMEOUT_S = float(os.environ.get("OLLAMA_TIMEOUT_S", "90"))
+# Pause between judgements so a library sweep doesn't monopolise the GPU that
+# NVENC is also using for the live encode.
+CONTENT_JUDGE_INTERVAL_S = float(os.environ.get("CONTENT_JUDGE_INTERVAL_S", "2"))
+# How many recently-played titles auto_fill avoids repeating. Falls back to
+# the full pool automatically when the library is smaller than this.
+AUTOFILL_RECENT_TITLES = int(os.environ.get("AUTOFILL_RECENT_TITLES", "12"))
+CONTENT_POLICY_DEFAULT = (
+    "Block anything pornographic or sexually explicit. "
+    "Block extreme gore or torture. "
+    "Allow ordinary action violence, swearing, and horror that is not extreme."
+)
+
 # Each ffmpeg "run" writes its segments + init segment + per-run index playlist
 # into its own subdir under /hls/run/<run_id>/. The composer thread stitches a
 # unified /hls/stream.m3u8 from all active+recent runs, with EXT-X-DISCONTINUITY
@@ -1035,6 +1059,12 @@ settings: dict = {
     "viewer_public": False,
     "auto_fill": True,
     "stream_quality": "default",
+    # LLM content gate for auto_fill picks. Default OFF: it is fail-closed, so
+    # switching it on with an empty verdict cache leaves auto_fill nothing to
+    # play until the judge thread has swept the library. Enabling is a
+    # deliberate act, never the default.
+    "content_filter": False,
+    "content_policy": CONTENT_POLICY_DEFAULT,
 }
 
 
@@ -2166,6 +2196,11 @@ def _start_sub_extract(input_path: str, sub_idx: int) -> None:
 # so we don't depend on TMDB or any external CDN.
 _arr_cover_map_lock = threading.Lock()
 _arr_cover_map: dict[str, tuple[str, str, str]] = {}
+# Same keying as _arr_cover_map (arr folder basename), but carrying the
+# metadata the content judge wants: genres / certification / overview. Kept
+# separate rather than widening the cover tuple, which /poster unpacks by
+# arity. Populated by the same poll, so it costs no extra requests.
+_arr_meta_map: dict[str, dict] = {}
 
 
 def _read_arr_api_key(path: Path) -> str | None:
@@ -2185,6 +2220,7 @@ def _arr_fetch_inventory() -> None:
     map. Errors log to stderr; we never raise — a missing arr just means
     that branch's covers are blank, not that the page breaks."""
     new_map: dict[str, tuple[str, str, str]] = {}
+    new_meta: dict[str, dict] = {}
     for base, cfg, endpoint in [
         (SONARR_URL, SONARR_CONFIG, "/api/v3/series"),
         (RADARR_URL, RADARR_CONFIG, "/api/v3/movie"),
@@ -2205,6 +2241,17 @@ def _arr_fetch_inventory() -> None:
             folder = Path(item.get("path", "") or "").name
             if not folder:
                 continue
+            # Metadata for the content judge. Recorded even when the item has
+            # no poster — the two maps are independent.
+            meta = {
+                "title": item.get("title"),
+                "year": item.get("year"),
+                "genres": item.get("genres") or [],
+                "certification": item.get("certification"),
+                "overview": item.get("overview"),
+            }
+            if any(meta[k] for k in ("genres", "certification", "overview")):
+                new_meta[folder] = meta
             poster = next(
                 (i for i in (item.get("images") or [])
                  if i.get("coverType") == "poster"),
@@ -2231,6 +2278,8 @@ def _arr_fetch_inventory() -> None:
     with _arr_cover_map_lock:
         _arr_cover_map.clear()
         _arr_cover_map.update(new_map)
+        _arr_meta_map.clear()
+        _arr_meta_map.update(new_meta)
 
 
 def _arr_refresh_loop() -> None:
@@ -3007,17 +3056,275 @@ def _scan_library() -> list[Path]:
     return list(files)
 
 
+# ---- title grouping -------------------------------------------------------
+# auto_fill used to pick uniformly over FILES, which is uniform over the wrong
+# thing: a show with 200 episodes was 200x likelier than a movie, so the
+# stream drowned in whichever series had the most episodes. Grouping by title
+# first makes "random" mean "random title", which is what a viewer perceives
+# as variety. It is also the right unit for the content gate — you judge a
+# show once, not once per episode.
+
+def _title_key(path: Path) -> str:
+    """Stable identifier for the *work* a file belongs to, relative to
+    MEDIA_ROOT. `tv/Severance/Season 1/S01E02.mkv` -> `tv/Severance`;
+    `movies/The Matrix (1999).mkv` -> `movies/The Matrix (1999).mkv`.
+
+    Everything below the first directory under a viewer root is treated as
+    one title, which collapses Season folders without needing to parse them."""
+    try:
+        rel = path.relative_to(MEDIA_ROOT)
+    except ValueError:
+        return str(path)
+    parts = rel.parts
+    # <root>/<title>/... -> the title dir; <root>/<file> -> the file itself.
+    return str(Path(*parts[:2])) if len(parts) > 2 else str(rel)
+
+
+def _library_titles() -> dict[str, list[Path]]:
+    """Every playable file grouped by _title_key."""
+    groups: dict[str, list[Path]] = {}
+    for f in _scan_library():
+        groups.setdefault(_title_key(f), []).append(f)
+    return groups
+
+
+def _title_display_name(key: str) -> str:
+    """Human-ish name for a title key, for prompts and the admin UI."""
+    return _display_title(Path(key).name)
+
+
+# ---- LLM content gate -----------------------------------------------------
+content_lock = threading.Lock()
+# title_key -> {"blocked": bool, "reason": str, "policy": <hash>, "judged": ts,
+#               "manual": bool}
+content_verdicts: dict[str, dict] = {}
+
+
+def _policy_hash(policy: str) -> str:
+    """Verdicts are only valid for the policy they were judged under, so the
+    policy text is part of the cache identity. Without this, editing the rule
+    would silently keep every stale verdict."""
+    return hashlib.sha256(policy.strip().encode()).hexdigest()[:16]
+
+
+def _load_content_verdicts():
+    global content_verdicts
+    if CONTENT_VERDICTS_FILE.exists():
+        try:
+            loaded = json.loads(CONTENT_VERDICTS_FILE.read_text())
+            content_verdicts = loaded if isinstance(loaded, dict) else {}
+            return
+        except Exception as e:
+            print(f"content verdicts load failed: {e}", file=sys.stderr)
+    content_verdicts = {}
+
+
+def _save_content_verdicts():
+    """Caller must hold content_lock."""
+    _atomic_write_json(CONTENT_VERDICTS_FILE, content_verdicts)
+
+
+def _content_settings() -> tuple[bool, str]:
+    with settings_lock:
+        return (bool(settings.get("content_filter")),
+                str(settings.get("content_policy") or CONTENT_POLICY_DEFAULT))
+
+
+def _verdict_for(key: str, policy_hash: str) -> dict | None:
+    """Current-policy verdict for a title, or None if absent/stale. Manual
+    overrides survive a policy change — a human decision outranks the model's
+    and shouldn't be silently re-judged away."""
+    with content_lock:
+        v = content_verdicts.get(key)
+        if not v:
+            return None
+        if v.get("manual") or v.get("policy") == policy_hash:
+            return dict(v)
+        return None
+
+
+def _arr_meta_for_title(key: str) -> str:
+    """Genres / rating / overview from the arr inventory, if we have them.
+    A scene-release filename is thin evidence; arr already knows the real
+    metadata, so feed the model that instead when it exists. Walks the path
+    leaf-to-root exactly like _arr_cover_for_path."""
+    meta = None
+    parts = [p for p in str(key).split("/") if p]
+    with _arr_cover_map_lock:
+        for i in range(len(parts) - 1, -1, -1):
+            hit = _arr_meta_map.get(parts[i]) or _arr_meta_map.get(Path(parts[i]).stem)
+            if hit:
+                meta = dict(hit)
+                break
+    if not meta:
+        return ""
+    bits = []
+    if meta.get("genres"):
+        bits.append("Genres: " + ", ".join(meta["genres"][:6]))
+    if meta.get("certification"):
+        bits.append("Rated: " + str(meta["certification"]))
+    if meta.get("overview"):
+        bits.append("Overview: " + str(meta["overview"])[:400])
+    return "\n".join(bits)
+
+
+def _ollama_judge(title: str, extra: str, policy: str) -> dict | None:
+    """Ask the model whether `title` violates `policy`. Returns
+    {"blocked": bool, "reason": str} or None if the call/parse failed.
+
+    Never raises: a judge failure must leave the verdict absent (and so, with
+    fail-closed semantics, the title simply stays ineligible) rather than
+    propagate into the caller."""
+    prompt = (
+        "You are a content filter for a private movie/TV stream shared with "
+        "friends. Decide whether the title below must be BLOCKED under the "
+        "host's policy.\n\n"
+        f"HOST POLICY:\n{policy.strip()}\n\n"
+        f"TITLE: {title}\n"
+        f"{extra}\n\n"
+        'Reply with ONLY a JSON object, no prose, no code fences: '
+        '{"blocked": true or false, "reason": "<max 10 words>"}'
+    )
+    body = json.dumps({
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0, "num_predict": 80},
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            f"{OLLAMA_URL.rstrip('/')}/api/generate", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT_S) as r:
+            raw = json.loads(r.read()).get("response", "")
+    except Exception as e:
+        print(f"[content] judge call failed for {title!r}: {e}", file=sys.stderr)
+        return None
+    return _parse_judge_reply(raw)
+
+
+def _parse_judge_reply(raw: str) -> dict | None:
+    """Pull the verdict JSON out of a model reply. Models reliably wrap the
+    object in ```json fences despite being told not to, so strip fences and
+    fall back to the first {...} span."""
+    text = (raw or "").strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I | re.S).strip()
+    obj = None
+    try:
+        obj = json.loads(text)
+    except Exception:
+        m = re.search(r"\{.*?\}", text, re.S)
+        if m:
+            try:
+                obj = json.loads(m.group(0))
+            except Exception:
+                obj = None
+    if not isinstance(obj, dict) or "blocked" not in obj:
+        return None
+    return {
+        "blocked": bool(obj.get("blocked")),
+        "reason": str(obj.get("reason") or "")[:120],
+    }
+
+
+def _content_judge_loop():
+    """Judge un-verdicted titles one at a time, forever. Idles cheaply while
+    the filter is off so enabling it doesn't need a restart."""
+    time.sleep(8)  # let the app finish booting before touching the GPU
+    while True:
+        try:
+            enabled, policy = _content_settings()
+            if not enabled:
+                time.sleep(15)
+                continue
+            ph = _policy_hash(policy)
+            pending = [k for k in _library_titles() if _verdict_for(k, ph) is None]
+            if not pending:
+                time.sleep(30)
+                continue
+            key = pending[0]
+            name = _title_display_name(key)
+            verdict = _ollama_judge(name, _arr_meta_for_title(key), policy)
+            if verdict is None:
+                # Endpoint down or unparseable — back off rather than spin
+                # through the whole library logging one failure per title.
+                time.sleep(30)
+                continue
+            with content_lock:
+                content_verdicts[key] = {
+                    **verdict, "policy": ph, "judged": time.time(), "manual": False,
+                }
+                _save_content_verdicts()
+            print(f"[content] {'BLOCK' if verdict['blocked'] else 'allow'} "
+                  f"{name} — {verdict['reason']} ({len(pending) - 1} left)",
+                  file=sys.stderr)
+            time.sleep(CONTENT_JUDGE_INTERVAL_S)
+        except Exception as e:
+            print(f"[content] judge loop error: {e}", file=sys.stderr)
+            time.sleep(30)
+
+
+def _recent_title_keys(limit: int) -> set[str]:
+    """Title keys of the last `limit` things played, for variety exclusion."""
+    keys: set[str] = set()
+    with recent_lock:
+        for entry in recent_items[:limit]:
+            src = entry.get("source") or {}
+            if src.get("type") != "file":
+                continue
+            ref = src.get("ref")
+            if ref:
+                keys.add(_title_key(MEDIA_ROOT / ref))
+    return keys
+
+
 def _pick_random_from_library() -> dict | None:
-    """Return a random playable file as a source dict, or None if the library
-    has no playable videos.
+    """Return a random playable file as a source dict, or None if nothing is
+    eligible.
+
+    Picks a TITLE uniformly, then an episode within it — not a file uniformly.
+    Uniform-over-files made a 200-episode show 200x likelier than a movie, so
+    the stream drowned in whichever series was longest. Recently-played titles
+    are skipped so auto_fill stops serving the same show back to back.
+
+    When the content filter is on this is FAIL-CLOSED: only titles with a
+    current-policy "allowed" verdict are eligible. Reads the cache only —
+    never calls the model. This runs in the watcher's transition path, and a
+    ~6 s model call here would be ~6 s of dead air on every source change.
 
     Auto-pick has no UI for choosing a subtitle track, so subtitle_idx is
     set to None — _start_stream sees the key present and skips its legacy
     auto-pick fallback. (If you want subs on auto-fill picks, change this.)"""
-    candidates = _scan_library()
-    if not candidates:
+    groups = _library_titles()
+    if not groups:
         return None
-    pick = random.choice(candidates)
+
+    enabled, policy = _content_settings()
+    if enabled:
+        ph = _policy_hash(policy)
+        eligible = {}
+        for k, files in groups.items():
+            v = _verdict_for(k, ph)
+            if v is not None and not v.get("blocked"):
+                eligible[k] = files
+        if not eligible:
+            # Nothing cleared yet (cold start) or everything blocked. Staying
+            # silent is the point of fail-closed — say so once so it isn't a
+            # mystery in the logs.
+            print("[content] auto_fill has no cleared titles yet — waiting on "
+                  "the judge (filter is fail-closed)", file=sys.stderr)
+            return None
+        groups = eligible
+
+    # Prefer titles we haven't played lately; fall back to the full set once
+    # the library is smaller than the exclusion window.
+    recent = _recent_title_keys(AUTOFILL_RECENT_TITLES)
+    fresh = {k: v for k, v in groups.items() if k not in recent}
+    pool = fresh or groups
+
+    title = random.choice(sorted(pool))       # sorted() so the choice is
+    pick = random.choice(sorted(pool[title]))  # reproducible under a seed
     return {
         "type": "file",
         "ref": str(pick.relative_to(MEDIA_ROOT)),
@@ -3539,9 +3846,15 @@ def _restore_state_on_startup():
 # orphaned run dirs + composer state would otherwise show up in the master.
 _cleanup_hls()
 _restore_state_on_startup()
+# Must load BEFORE the watcher starts: the watcher calls
+# _pick_random_from_library() on its first tick, and with the filter on and an
+# empty cache that reads as "nothing cleared" — skipping an auto_fill pick
+# that the on-disk verdicts would have allowed.
+_load_content_verdicts()
 threading.Thread(target=_composer_thread, daemon=True, name="jetstream-composer").start()
 threading.Thread(target=_watcher, daemon=True, name="jetstream-watcher").start()
 threading.Thread(target=_arr_refresh_loop, daemon=True, name="arr-refresh").start()
+threading.Thread(target=_content_judge_loop, daemon=True, name="content-judge").start()
 
 
 @app.before_request
@@ -5188,6 +5501,71 @@ def api_report_delete(rid: int):
     return jsonify({"ok": True})
 
 
+@app.route("/admin/api/content", methods=["GET"])
+def api_content_list():
+    """Content-gate state: every library title with its verdict, plus enough
+    counters to see whether the judge has caught up. This is the only view of
+    what the filter is actually doing — without it a title silently vanishing
+    from auto_fill is unexplainable."""
+    enabled, policy = _content_settings()
+    ph = _policy_hash(policy)
+    titles = _library_titles()
+    rows, blocked, allowed, pending = [], 0, 0, 0
+    for key in sorted(titles):
+        v = _verdict_for(key, ph)
+        if v is None:
+            pending += 1
+            state = "pending"
+        elif v.get("blocked"):
+            blocked += 1
+            state = "blocked"
+        else:
+            allowed += 1
+            state = "allowed"
+        rows.append({
+            "key": key,
+            "name": _title_display_name(key),
+            "files": len(titles[key]),
+            "state": state,
+            "reason": (v or {}).get("reason"),
+            "manual": bool((v or {}).get("manual")),
+            "judged": (v or {}).get("judged"),
+        })
+    return jsonify({
+        "enabled": enabled, "policy": policy, "model": OLLAMA_MODEL,
+        "endpoint": OLLAMA_URL,
+        "counts": {"allowed": allowed, "blocked": blocked,
+                   "pending": pending, "titles": len(titles)},
+        "titles": rows,
+    })
+
+
+@app.route("/admin/api/content/<path:key>", methods=["POST"])
+def api_content_override(key: str):
+    """Manually set or clear a title's verdict. `{"blocked": true|false}` sets
+    a MANUAL verdict (which survives policy edits — a human decision outranks
+    the model's); `{"clear": true}` drops it so the judge re-rates it."""
+    data = request.get_json(silent=True) or {}
+    if key not in _library_titles():
+        return jsonify({"error": "unknown title"}), 404
+    with content_lock:
+        if data.get("clear"):
+            content_verdicts.pop(key, None)
+        elif "blocked" in data:
+            _, policy = _content_settings()
+            content_verdicts[key] = {
+                "blocked": bool(data["blocked"]),
+                "reason": "set by host",
+                "policy": _policy_hash(policy),
+                "judged": time.time(),
+                "manual": True,
+            }
+        else:
+            return jsonify({"error": "blocked or clear required"}), 400
+        _save_content_verdicts()
+    return jsonify({"ok": True})
+
+
 @app.route("/admin/api/queue/<int:idx>", methods=["DELETE"])
 @app.route("/api/control/queue/<int:idx>", methods=["DELETE"])
 def api_queue_remove(idx: int):
@@ -5231,8 +5609,8 @@ def api_settings_get():
     return jsonify(out)
 
 
-BOOL_SETTINGS = {"viewer_public", "auto_fill"}
-SETTABLE_SETTINGS = BOOL_SETTINGS | {"stream_quality"}
+BOOL_SETTINGS = {"viewer_public", "auto_fill", "content_filter"}
+SETTABLE_SETTINGS = BOOL_SETTINGS | {"stream_quality", "content_policy"}
 
 
 @app.route("/admin/api/settings", methods=["POST"])
@@ -5250,6 +5628,13 @@ def api_settings_set():
                 if quality not in STREAM_QUALITY_PRESETS:
                     return jsonify({"error": "invalid stream_quality"}), 400
                 settings[k] = quality
+            elif k == "content_policy":
+                policy = str(data[k]).strip()
+                if not policy:
+                    return jsonify({"error": "content_policy cannot be empty"}), 400
+                if len(policy) > 2000:
+                    return jsonify({"error": "content_policy too long"}), 400
+                settings[k] = policy
         _save_settings()
         out = dict(settings)
     out["stream_quality_options"] = [
