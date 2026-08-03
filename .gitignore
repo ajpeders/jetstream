@@ -11,5 +11,6 @@ state/
 .env
 .codex
 .claude/
+.devenv/
 .ui-shots/
 .playwright-mcp/

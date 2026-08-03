@@ -16,6 +16,25 @@ docker compose up -d --build jetstream nginx-jetstream
 
 `nginx-default.conf.template` changes ride the same rebuild (envsubst runs at container start). Env-only changes (compose `.env`): `docker compose up -d` without `--build`.
 
+## Run it locally (no Docker, no prod)
+
+```sh
+bin/dev-setup.sh      # once: venv + frontend bundle + generated fixtures
+bin/dev-server.py     # serves on http://127.0.0.1:8099
+```
+
+The server prints every way in before it starts listening — friend code `devfriend`, viewer code `devviewer`, account `dev` / `devpassword`, and `/admin` (unauthenticated locally, since Traefik isn't in front of it).
+
+Nothing plays until you pick a source on `/controls` or `/admin` — `auto_fill` is seeded off so the watcher doesn't loop a fixture at you while you work.
+
+Useful properties of the generated fixtures:
+
+- Each carries **English + French subtitle tracks**, so both CC pickers list real tracks and you can tell "off" apart from "track 0".
+- `Arrival (2016) 2160p HDR WEB-DL.mkv` is genuinely tagged **BT.2020/PQ**, so `_probe_video_info` reports `is_hdr` and the zscale tonemap chain runs. This is the only way to exercise the HDR path without the GPU host (on CPU, and slowly — it's a 45 s clip for a reason).
+- `The Matrix …` is 30 s, so it *ends* while you watch — that's how you exercise the source-transition / pre-roll hand-off. `Spirited Away …` is 10 min for when you need it to just keep running.
+
+State is all under `.devenv/` — `rm -rf .devenv` resets everything including the fixtures. See README for exactly what local doesn't cover (nginx auth_request, the LAN bypass, hardware encode).
+
 ## Mint an invite link (live stream)
 
 Admin UI → Invites panel → label + level → Create. Or:

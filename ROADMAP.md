@@ -66,7 +66,18 @@ The last two are pre-existing viewer chrome rather than v2 work, found incidenta
 
 **Testing note:** bash `grep` silently returns nothing on `static/viewer.html` — it briefly looked like the 34 `body.viewer-page` theme rules were dead code, when line 1038 does carry `<body class="viewer-page">`. Use python/`rg` when searching that file.
 
-**Still not verified — needs the GPU/deploy host, can't be done from a dev box:** NVENC session count under live + preroll + 2 concurrent VOD (`VOD_FORCE_CPU=1` is the escape hatch), an HDR source through the VOD path, and confirming the deploy actually created the `jetstream-vod` volume (`docker volume ls | grep vod`).
+**Still not verified — needs the GPU/deploy host:** NVENC session count under live + preroll + 2 concurrent VOD (`VOD_FORCE_CPU=1` is the escape hatch), and confirming the deploy actually created the `jetstream-vod` volume (`docker volume ls | grep vod`).
+
+**HDR through the VOD path** is no longer completely untested: `bin/dev-setup.sh` generates a genuinely BT.2020/PQ-tagged fixture, and an end-to-end CPU run produced 22 segments with an empty ffmpeg log and the full zscale tonemap chain in both `live` and `vod` modes. What remains unverified is HDR *on the GPU* — NVDEC/NVENC tonemapping is a different branch of `_build_ffmpeg_cmd` than the CPU one this exercises.
+
+## Local dev environment (shipped)
+
+`bin/dev-setup.sh` + `bin/dev-server.py` — run the app outside Docker against `.devenv/`, with generated fixtures. Added because the harness for the v2.4 UI pass had to be hand-rebuilt from scratch, and three of its bugs were pure setup errors rather than app bugs. Two are encoded in the scripts so they can't recur:
+
+- Token records key on **`id`**, not `token`. Seeding the wrong key makes `_valid_token` raise `KeyError` *inside the `before_request` gate*, so every route 500s — it reads like the app is broken rather than like bad fixture data.
+- Fixture generation must never clobber existing files. An earlier harness rewrote its placeholders empty on each boot, silently replacing real video with 0 bytes; every playback test then failed with `EBML header parsing failed`.
+
+A third is worth knowing generally: **lavfi sources emit frames with unspecified colour properties**, so `-color_trc`/`-color_primaries` output options are silently dropped and the file probes as SDR. HDR fixtures must be tagged with the `setparams` filter, and the script now verifies `color_transfer=smpte2084` after encoding rather than assuming it.
 
 ## Open
 
@@ -89,7 +100,7 @@ The last two are pre-existing viewer chrome rather than v2 work, found incidenta
   **The usual refactor landmine is mostly absent.** Cross-module breakage comes from *rebinding* module-level globals, not mutating them. The vod functions use `global` **zero** times; the auth ones use it twice (`_load_users`, `_load_user_sessions`), and both rebind globals that would move into the same module. Dict/list mutation (`vod_sessions`, `watch_progress`) is shared correctly through an imported reference.
 
   **Two real blockers, both must be handled first:**
-  1. **The Dockerfile copies only `app.py`** (`COPY app.py /app/app.py`). Any new module must be added there or the container crashes on import at boot — prod down, for a change with no user-facing benefit. Verify by actually building the image, not by reading the diff.
+  1. **The Dockerfile copies exactly one Python file** (`COPY app.py /app/app.py`; `static/` is copied separately, no other `.py` is). Any new module must be added there or the container crashes on import at boot — prod down, for a change with no user-facing benefit. Verify by actually building the image, not by reading the diff.
   2. **No safety net on the live pipeline.** The test suites cover auth and VOD thoroughly, but the composer, watcher, pre-roll, chat, reactions, requests and reports have no characterisation tests — and those are exactly what a bad move would break. `_build_ffmpeg_cmd` is the exception: the 192-variant byte-identity harness used for the VOD-mode change covers it.
 
   **Suggested order:** characterisation tests for the live pipeline → Dockerfile + an image-boots smoke test → extract `vod` (zero globals, best-covered) → extract `auth` → only then consider splitting the live pipeline itself. Do it in its own session, not appended to a feature batch.

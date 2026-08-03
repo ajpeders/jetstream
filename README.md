@@ -52,6 +52,28 @@ docker compose up -d --build jetstream nginx-jetstream
 
 Don't rely on `docker cp` for `app.py` on prod — it survives until the next `docker compose up -d`, then gets clobbered by the image-baked copy. Always rebuild for app changes that need to stick.
 
+## Local development (no Docker)
+
+```sh
+bin/dev-setup.sh      # once — venv, frontend bundle, generated media fixtures
+bin/dev-server.py     # every time — prints the seeded codes/login, then serves
+```
+
+Everything lands in `.devenv/` (gitignored); delete that directory for a clean slate. Re-running setup is cheap — existing fixtures are left alone rather than re-encoded.
+
+Seeded on every boot so there's always a known way in: friend code `devfriend`, viewer code `devviewer`, and account `dev` / `devpassword`. The generated fixtures each carry **English + French subtitle tracks** (so the CC pickers on `/library` and `/controls` have real tracks to list, and "off" is distinguishable from "track 0"), and one is tagged **BT.2020 / PQ** so the HDR tonemap branch actually fires.
+
+What local differs from prod on, and why it's survivable:
+
+| | Local | Prod |
+|---|---|---|
+| `/hls/*` | Flask's own `/hls/<path>` fallback route | nginx off the shared tmpfs |
+| WSGI | Werkzeug, threaded | gunicorn, 1 worker × 16 threads |
+| Encode | libx264 only (`VOD_FORCE_CPU=1`) | NVENC/VAAPI per the GPU overlay |
+| Admin auth | none — `/admin` is open | Traefik basicauth |
+
+So local **does not** cover the nginx `auth_request` path, the `/hls/` LAN bypass, or the hardware-encode branches of `_build_ffmpeg_cmd`. It covers everything else: both auth tiers, VOD, subtitles, the composer, and real transcodes.
+
 ## Endpoints
 
 Four access tiers. **Viewer** and **friend** are both invite tokens (the `lt` cookie, minted from the admin page, no password); **user** is an account (username + password at `/login`, `js_user` session cookie — distinct from `lt`); **admin** is Traefik basicauth. A token's tier is its `level` field in `tokens.json` (`viewer` | `friend`; tokens predating the field default to `viewer`). The admin token (`_admin_`) is the implicit top tier.
