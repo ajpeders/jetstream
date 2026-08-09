@@ -4,10 +4,21 @@ WORKDIR /ui
 COPY package.json package-lock.json vite.config.js /ui/
 COPY src /ui/src
 RUN npm ci
+# `static/` must be present before the build: src/jetstream-theme.css does
+# `@import "../static/jetstream-custom.css"`, so Tailwind cannot resolve its
+# own entrypoint without it. CI never caught this because CI runs the same
+# `npm run build` against a full checkout, where static/ is simply there —
+# only the container build, which copies just `src`, was missing it.
+# Placed AFTER `npm ci` so editing a stylesheet doesn't invalidate that layer.
+COPY static /ui/static
 RUN npm run build
 
 FROM python:3.12-slim
 
+# `git` is here for the `pip install git+https://…/companion.git` step below:
+# pip shells out to the git binary for VCS URLs and python:3.12-slim does not
+# ship one, so without it the image build dies with "Cannot find command
+# 'git'" — which is exactly what blocked every deploy from 2026-08-04 onward.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ffmpeg \
@@ -16,6 +27,7 @@ RUN apt-get update \
       i965-va-driver \
       libva2 \
       libva-drm2 \
+      git \
  && rm -rf /var/lib/apt/lists/*
 
 ENV LIBVA_DRIVER_NAME=iHD
