@@ -44,8 +44,13 @@ RUN pip install --no-cache-dir flask==3.0.3 yt-dlp gunicorn==23.0.0
 # being fail-closed, auto_fill just stays quiet) instead of the container
 # crashing on boot.
 ARG COMPANION_REF=main
-RUN pip install --no-cache-dir \
-      "git+https://git.thelunadog.com/alex/companion.git@${COMPANION_REF}"
+# Parameterised because CI cannot use the public hostname: Forgejo Actions jobs
+# run on the `ci-jobs` network, which has no hairpin route back to
+# git.thelunadog.com (verified — it times out, while http://forgejo:3000
+# answers). The default is unchanged, so host builds behave exactly as before;
+# the CI image-build job overrides it with the internal URL.
+ARG COMPANION_URL=https://git.thelunadog.com/alex/companion.git
+RUN pip install --no-cache-dir "git+${COMPANION_URL}@${COMPANION_REF}"
 
 WORKDIR /app
 COPY app.py /app/app.py

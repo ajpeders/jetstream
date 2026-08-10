@@ -19,3 +19,38 @@ jobs:
         run: |
           npm ci
           npm run build
+
+  # The checks above run against a full checkout, so they cannot see Dockerfile
+  # faults — a missing apt package, or a COPY that doesn't bring in a file the
+  # build needs. Both of those shipped on 2026-08-04 and broke every deploy for
+  # five days before anyone noticed (see 03c4b52). This job actually builds the
+  # image so that class of bug fails here instead of at deploy time.
+  #
+  # Kaniko rather than `docker build`: CI job containers deliberately get no
+  # docker socket (docker_host: "-"), no privileges, and run under gVisor. Kaniko
+  # builds in userspace and needs none of that, so the sandbox is unchanged.
+  # (Rootless buildah was tried first and cannot work here — its user-namespace
+  # setup wants /proc/<pid>/setgroups, which gVisor's procfs does not implement.)
+  image:
+    runs-on: ubuntu-latest
+    container:
+      image: gcr.io/kaniko-project/executor:debug
+    # TODO: drop once this job has proven itself green a few times. Until then a
+    # teething failure here must not turn CI red — REQUIRE_CI=1 means red CI
+    # blocks deploys, and this job exists to *unblock* deploys, not gate them.
+    continue-on-error: true
+    steps:
+      - name: build the container image
+        env:
+          # jetstream is private; kaniko clones the context itself (the image has
+          # no git or node, so actions/checkout cannot run here).
+          GIT_USERNAME: ${{ github.actor }}
+          GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          /kaniko/executor \
+            --context "git://forgejo:3000/${{ github.repository }}.git#${{ github.ref }}" \
+            --dockerfile Dockerfile \
+            --build-arg COMPANION_URL=http://forgejo:3000/alex/companion.git \
+            --no-push \
+            --single-snapshot \
+            --cleanup
