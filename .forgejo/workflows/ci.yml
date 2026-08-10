@@ -35,10 +35,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: gcr.io/kaniko-project/executor:debug
-    # TODO: drop once this job has proven itself green a few times. Until then a
-    # teething failure here must not turn CI red — REQUIRE_CI=1 means red CI
-    # blocks deploys, and this job exists to *unblock* deploys, not gate them.
-    continue-on-error: true
+    # NOTE: `continue-on-error` was tried here and is useless for this purpose —
+    # Forgejo still publishes the job's commit status as failure, so the
+    # combined status goes red and REQUIRE_CI blocks the deploy regardless. This
+    # job therefore genuinely gates deploys. That is the intent; just know that
+    # a flake here stops deploys until the next push.
     steps:
       - name: build the container image
         env:
@@ -46,6 +47,9 @@ jobs:
           # no git or node, so actions/checkout cannot run here).
           GIT_USERNAME: ${{ github.actor }}
           GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          # forgejo:3000 is plain HTTP. Kaniko's git context defaults to HTTPS
+          # and fails with "server gave HTTP response to HTTPS client".
+          GIT_PULL_METHOD: http
         run: |
           /kaniko/executor \
             --context "git://forgejo:3000/${{ github.repository }}.git#${{ github.ref }}" \
