@@ -3916,7 +3916,28 @@ threading.Thread(target=_content_judge_loop, daemon=True, name="content-judge").
 def _gate_viewer_routes():
     p = request.path
     if p.startswith("/admin"):
-        return None  # Traefik handles admin auth
+        # Traefik basicauth gates the BROWSER path, but it is not the only path:
+        # jetstream sits on the shared `web` docker network, so any container on
+        # it can POST /admin/api/users directly and create, disable or reset any
+        # streaming account, bypassing basicauth entirely. (Demonstrated
+        # 2026-08-03 — two accounts were created exactly that way.) Segmenting
+        # jetstream off `web` is not an option here: Traefik must reach it.
+        #
+        # So require a secret only Traefik can supply — the admin router injects
+        # it via customRequestHeaders, and a direct container-to-container call
+        # carries no such header.
+        #
+        # Deliberately fails OPEN when the secret is unset, so this code can
+        # deploy before the Traefik header exists without locking the admin UI
+        # out. It enforces as soon as ADMIN_PROXY_SECRET is set.
+        _want = os.environ.get("ADMIN_PROXY_SECRET", "")
+        if _want and request.headers.get("X-Admin-Proxy", "") != _want:
+            app.logger.warning(
+                "rejected direct /admin request (missing/bad proxy header) path=%s from=%s",
+                p, request.headers.get("X-Forwarded-For") or request.remote_addr,
+            )
+            return jsonify({"error": "forbidden"}), 403
+        return None
     if p == "/api/_authcheck":
         return None  # nginx subrequest endpoint — has its own logic below
     if p == "/api/now-playing":

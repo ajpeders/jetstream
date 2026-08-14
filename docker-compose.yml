@@ -13,6 +13,12 @@ services:
     environment:
       MEDIA_ROOT: /media
       HLS_DIR: /hls
+      # Shared secret the Traefik admin router stamps as X-Admin-Proxy; the app
+      # requires it on /admin/* so a direct call on the `web` network (which
+      # bypasses Traefik, and so bypasses basicauth) is rejected. Leave UNSET to
+      # disable the check — the app fails open by design so this cannot lock the
+      # admin UI out mid-rollout.
+      ADMIN_PROXY_SECRET: ${ADMIN_PROXY_SECRET:-}
       # Hardware-accel toggles. All default OFF — pure libx264 CPU path
       # works on any host. NVENC bits come from docker-compose.gpu.yml,
       # applied via COMPOSE_FILE in services/.env (bin/install writes
@@ -123,9 +129,14 @@ services:
       - traefik.http.routers.jetstream-admin.entrypoints=websecure
       - traefik.http.routers.jetstream-admin.tls=true
       - traefik.http.routers.jetstream-admin.tls.certresolver=letsencrypt
-      - traefik.http.routers.jetstream-admin.middlewares=jetstream-admin-auth
+      # basicauth gates the browser; admin-proxy stamps a secret header that the
+      # app then requires. A direct container-to-container call on the shared
+      # `web` network never passes through Traefik, so it never carries the
+      # header and can no longer reach /admin/api/*. See _gate_viewer_routes().
+      - traefik.http.routers.jetstream-admin.middlewares=jetstream-admin-auth,jetstream-admin-proxy
       - traefik.http.routers.jetstream-admin.service=jetstream
       - traefik.http.middlewares.jetstream-admin-auth.basicauth.users=${JETSTREAM_ADMIN_AUTH}
+      - traefik.http.middlewares.jetstream-admin-proxy.headers.customrequestheaders.X-Admin-Proxy=${ADMIN_PROXY_SECRET}
       # Viewer router — everything else; viewer or admin creds work
       - traefik.http.routers.jetstream-viewer.rule=Host(`${JETSTREAM_DOMAIN}`)
       - traefik.http.routers.jetstream-viewer.entrypoints=websecure
