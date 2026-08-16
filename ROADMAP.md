@@ -126,7 +126,7 @@ Titles are judged on arr metadata (genres / certification / overview) when avail
 
 - **Jetstream watcher agent (automation)** — the report queue (#34) already persists agent-readable JSON at `/data/reports.json`, exposes `GET /admin/api/reports`, and now accepts triage write-back at `POST /admin/api/reports/<id>/triage` (sets the reserved `triage` field under `reports_lock` — a direct file edit would be clobbered by Flask's in-memory rewrite). The admin reports panel renders the verdict when present. Still to build: the watcher loop itself — polls the queue, gathers nearby app/ffmpeg/browser context, triages likely causes, writes back, and either adds a roadmap note or drafts a fix for admin review. Design + failure-taxonomy playbook captured in `apps/watcher/DESIGN.md`; only the agent runner is outstanding.
 
-- **Media requests — replace Overseerr** — *designed, not started. Full design in [`DESIGN-media-requests.md`](DESIGN-media-requests.md).* Decided scope: full replacement; requesting requires a **user account**, not an invite token.
+- **Media requests — replace Overseerr** — *phase 1 shipped; phases 2-5 open. Full design in [`DESIGN-media-requests.md`](DESIGN-media-requests.md).* Decided scope: full replacement; requesting requires a **user account**, not an invite token.
 
   The load-bearing distinction: jetstream's existing "request" (#27) means *"play this file we already have"*; this one means *"acquire this thing we don't have"*. Same word, opposite direction — separate store, separate panel, separate route prefix, or both become ambiguous and the admin panel grows two Approve buttons that do wildly different things (one plays a file, one starts a 40 GB download).
 
@@ -134,7 +134,7 @@ Titles are judged on arr metadata (genres / certification / overview) when avail
 
   Useful finding: **search needs no TMDB key** — `/api/v3/{movie,series}/lookup` on Radarr/Sonarr already proxy TMDB/TVDB and return objects that can be POSTed straight back to add. Only *browse/trending* needs a key, so that's phased last and degrades to a hidden tab. (This reverses the closed "TMDB not worth the friction" call, deliberately: that was about enriching the existing library, which is a different requirement.)
 
-  Five phases, each shippable alone: store + admin skeleton (no arr writes) → arr-lookup search + request UI (still no writes) → arr writes → availability tracking → TMDB discovery.
+  Shipped phase 1: separate `/data/media_requests.json`, account-backed create/list/cancel endpoints, admin list/approve/reject status controls, and a host-only admin panel with no arr writes. Next phases: arr-lookup search + request UI (still no writes) → arr writes → availability tracking → TMDB discovery.
 
 - **Stream rooms (a "mod" tier that can run its own live room)** — *next up; needs a design session before any code.* Wanted: a trusted user can spin up their own live room — own queue, own viewers, own chat — instead of everyone sharing the single broadcast.
 

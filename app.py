@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import hmac
@@ -87,6 +89,10 @@ PLAYLIST_FILE = Path(os.environ.get("PLAYLIST_FILE", "/data/playlist.json"))
 RECENT_FILE = Path(os.environ.get("RECENT_FILE", "/data/recent.json"))
 RECENT_LIMIT = int(os.environ.get("RECENT_LIMIT", "50"))
 REQUESTS_FILE = Path(os.environ.get("REQUESTS_FILE", "/data/requests.json"))
+# Account-backed "request us to acquire this" queue. Kept separate from
+# REQUESTS_FILE because viewer queue requests mean "play a file we already
+# have"; these mean "download something missing" and eventually write to arr.
+MEDIA_REQUESTS_FILE = Path(os.environ.get("MEDIA_REQUESTS_FILE", "/data/media_requests.json"))
 # Viewer bug reports. Kept until the host deletes them (no TTL — an unhandled
 # report shouldn't vanish on its own), but the pile is capped to the newest
 # REPORT_MAX so a misbehaving client can't grow it unbounded. Shaped as
@@ -457,6 +463,11 @@ media_requests: list[dict] = []
 request_next_id = 1
 # IP -> [timestamps within REQUEST_RATE_WINDOW]. Pruned lazily on each request.
 request_rate: dict[str, list[float]] = {}
+
+# Account-backed media acquisition requests. Phase 1 is deliberately just the
+# persisted queue + admin status controls; later phases add arr lookup/writes.
+acquisition_requests_lock = threading.Lock()
+acquisition_requests: list[dict] = []
 
 # Viewer bug reports — same persisted-list shape as media_requests.
 reports_lock = threading.Lock()
@@ -973,6 +984,42 @@ def _expire_old_requests() -> int:
     return expired
 
 
+def _load_acquisition_requests():
+    global acquisition_requests
+    if MEDIA_REQUESTS_FILE.exists():
+        try:
+            loaded = json.loads(MEDIA_REQUESTS_FILE.read_text())
+            acquisition_requests = loaded if isinstance(loaded, list) else []
+            return
+        except Exception as e:
+            _warn_state_load_failed("media acquisition requests", MEDIA_REQUESTS_FILE, e)
+    acquisition_requests = []
+
+
+def _save_acquisition_requests():
+    _atomic_write_json(MEDIA_REQUESTS_FILE, acquisition_requests)
+
+
+def _new_media_request_id() -> str:
+    existing = {str(r.get("id")) for r in acquisition_requests}
+    while True:
+        rid = "mr_" + secrets.token_urlsafe(8)
+        if rid not in existing:
+            return rid
+
+
+def _public_acquisition_request(r: dict) -> dict:
+    return {
+        k: r.get(k)
+        for k in (
+            "id", "user_id", "username", "kind", "tmdb_id", "tvdb_id", "title",
+            "year", "poster_url", "status", "requested_at", "decided_at",
+            "decided_by", "reject_reason", "arr_id", "seasons",
+            "quality_profile_id", "last_seen_available"
+        )
+    }
+
+
 def _load_reports():
     global reports, report_next_id
     if REPORTS_FILE.exists():
@@ -1164,6 +1211,7 @@ _load_progress()
 _load_playlist()
 _load_recent()
 _load_requests()
+_load_acquisition_requests()
 _load_reports()
 _load_custom_reactions()
 _load_settings()
@@ -3957,6 +4005,7 @@ def _gate_viewer_routes():
     # user session (never an invite token — invite links stay watch/control
     # only). Pages redirect to login; APIs get JSON 401s.
     if (p in ("/library", "/home") or p.startswith("/api/user/")
+            or p.startswith("/api/media/")
             or p.startswith("/api/vod/")
             or p in ("/api/auth/logout", "/api/auth/me")):
         if _session_user():
@@ -5505,6 +5554,175 @@ def api_request_approve(rid: int):
 def api_request_deny(rid: int):
     """Deny a pending request: drop it without touching the playlist."""
     return _do_deny_request(rid)
+
+
+def _normalise_media_kind(value: str | None) -> str | None:
+    kind = (value or "").strip().lower()
+    return kind if kind in {"movie", "series"} else None
+
+
+@app.route("/api/media/requests", methods=["GET"])
+def api_media_requests_mine():
+    """Account holder's own acquire-this-media requests. This is separate from
+    /api/requests, which is the live "play a file we already have" queue."""
+    user = _session_user()
+    if not user:
+        return jsonify({"error": "auth_required"}), 401
+    with acquisition_requests_lock:
+        mine = [
+            _public_acquisition_request(r)
+            for r in acquisition_requests
+            if r.get("user_id") == user.get("id")
+        ]
+    mine.sort(key=lambda r: r.get("requested_at") or 0, reverse=True)
+    return jsonify({"requests": mine})
+
+
+@app.route("/api/media/request", methods=["POST"])
+def api_media_request_create():
+    """Phase-1 media acquisition request creation: persist a user-attributed
+    pending row, but do not search or write to arr yet. Later phases feed this
+    from arr lookup results and turn admin approval into an arr add."""
+    user = _session_user()
+    if not user:
+        return jsonify({"error": "auth_required"}), 401
+    data = request.get_json(silent=True) or {}
+    kind = _normalise_media_kind(data.get("kind"))
+    if kind is None:
+        return jsonify({"error": "kind must be movie or series"}), 400
+    title = re.sub(r"\s+", " ", str(data.get("title") or "").strip())[:160]
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    tmdb_id = data.get("tmdb_id")
+    tvdb_id = data.get("tvdb_id")
+    if tmdb_id is not None:
+        try:
+            tmdb_id = int(tmdb_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "tmdb_id must be numeric"}), 400
+    if tvdb_id is not None:
+        try:
+            tvdb_id = int(tvdb_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "tvdb_id must be numeric"}), 400
+    if tmdb_id is None and tvdb_id is None:
+        return jsonify({"error": "tmdb_id or tvdb_id required"}), 400
+    year = data.get("year")
+    if year is not None:
+        try:
+            year = int(year)
+        except (TypeError, ValueError):
+            year = None
+    poster_url = str(data.get("poster_url") or "").strip()[:500] or None
+    seasons = data.get("seasons")
+    if kind != "series":
+        seasons = None
+    elif seasons is not None:
+        if not isinstance(seasons, list):
+            return jsonify({"error": "seasons must be a list"}), 400
+        try:
+            seasons = sorted({int(s) for s in seasons if int(s) >= 0})
+        except (TypeError, ValueError):
+            return jsonify({"error": "seasons must be numeric"}), 400
+
+    now = time.time()
+    with acquisition_requests_lock:
+        for existing in acquisition_requests:
+            if existing.get("kind") != kind:
+                continue
+            same_tmdb = tmdb_id is not None and existing.get("tmdb_id") == tmdb_id
+            same_tvdb = tvdb_id is not None and existing.get("tvdb_id") == tvdb_id
+            if same_tmdb or same_tvdb:
+                return jsonify({"error": "already requested", "request": _public_acquisition_request(existing)}), 409
+        rec = {
+            "id": _new_media_request_id(),
+            "user_id": user["id"],
+            "username": user.get("username"),
+            "kind": kind,
+            "tmdb_id": tmdb_id,
+            "tvdb_id": tvdb_id,
+            "title": title,
+            "year": year,
+            "poster_url": poster_url,
+            "status": "pending",
+            "requested_at": now,
+            "decided_at": None,
+            "decided_by": None,
+            "reject_reason": None,
+            "arr_id": None,
+            "seasons": seasons,
+            "quality_profile_id": None,
+            "last_seen_available": None,
+        }
+        acquisition_requests.insert(0, rec)
+        _save_acquisition_requests()
+    return jsonify({"ok": True, "request": _public_acquisition_request(rec)}), 201
+
+
+@app.route("/api/media/requests/<rid>", methods=["DELETE"])
+def api_media_request_cancel(rid: str):
+    """Cancel your own acquisition request while it is still pending."""
+    user = _session_user()
+    if not user:
+        return jsonify({"error": "auth_required"}), 401
+    with acquisition_requests_lock:
+        req = next((r for r in acquisition_requests if r.get("id") == rid), None)
+        if req is None or req.get("user_id") != user.get("id"):
+            return jsonify({"error": "request not found"}), 404
+        if req.get("status") != "pending":
+            return jsonify({"error": "only pending requests can be cancelled"}), 409
+        acquisition_requests.remove(req)
+        _save_acquisition_requests()
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/api/media/requests", methods=["GET"])
+def api_admin_media_requests():
+    """Admin view of account-backed media acquisition requests, newest first."""
+    with acquisition_requests_lock:
+        items = [_public_acquisition_request(r) for r in acquisition_requests]
+    items.sort(key=lambda r: r.get("requested_at") or 0, reverse=True)
+    return jsonify(items)
+
+
+@app.route("/admin/api/media/requests/<rid>/approve", methods=["POST"])
+def api_admin_media_request_approve(rid: str):
+    """Phase-1 approval only marks the request approved. Arr writes come later;
+    this intentionally records admin intent without mutating Radarr/Sonarr."""
+    data = request.get_json(silent=True) or {}
+    with acquisition_requests_lock:
+        req = next((r for r in acquisition_requests if r.get("id") == rid), None)
+        if req is None:
+            return jsonify({"error": "request not found"}), 404
+        if req.get("status") != "pending":
+            return jsonify({"error": "only pending requests can be approved"}), 409
+        req["status"] = "approved"
+        req["decided_at"] = time.time()
+        req["decided_by"] = "admin"
+        req["reject_reason"] = None
+        if data.get("quality_profile_id") is not None:
+            req["quality_profile_id"] = data.get("quality_profile_id")
+        _save_acquisition_requests()
+    return jsonify({"ok": True, "request": _public_acquisition_request(req)})
+
+
+@app.route("/admin/api/media/requests/<rid>/reject", methods=["POST"])
+def api_admin_media_request_reject(rid: str):
+    """Reject an acquisition request with an optional reason."""
+    data = request.get_json(silent=True) or {}
+    reason = re.sub(r"\s+", " ", str(data.get("reason") or "").strip())[:240] or None
+    with acquisition_requests_lock:
+        req = next((r for r in acquisition_requests if r.get("id") == rid), None)
+        if req is None:
+            return jsonify({"error": "request not found"}), 404
+        if req.get("status") != "pending":
+            return jsonify({"error": "only pending requests can be rejected"}), 409
+        req["status"] = "rejected"
+        req["decided_at"] = time.time()
+        req["decided_by"] = "admin"
+        req["reject_reason"] = reason
+        _save_acquisition_requests()
+    return jsonify({"ok": True, "request": _public_acquisition_request(req)})
 
 
 @app.route("/admin/api/reports", methods=["GET"])

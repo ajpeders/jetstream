@@ -1,6 +1,6 @@
 # Design — media requests (replacing Overseerr)
 
-Status: **design only, nothing built.** Decided scope: full Overseerr replacement; requesting requires a **user account** (`js_user`), not an invite token.
+Status: **phase 1 shipped.** Decided scope: full Overseerr replacement; requesting requires a **user account** (`js_user`), not an invite token. Current main has the separate persisted store, account/admin endpoints, and host admin panel skeleton. Discovery/search and arr writes are still later phases.
 
 ## The core distinction
 
@@ -121,7 +121,7 @@ All gated to account holders by `_gate_viewer_routes` (add `/api/media/` to the 
 
 Each phase is independently shippable and useful on its own:
 
-1. **Store + admin panel skeleton.** Data model, lock, atomic writes, `GET/POST/DELETE` for requests, admin list/approve/reject that only changes *status* — no arr writes at all. Fully testable with zero risk to arr.
+1. **Store + admin panel skeleton.** **Shipped.** Data model, lock, persisted `/data/media_requests.json`, `GET/POST/DELETE` for requests, admin list/approve/reject that only changes *status* — no arr writes at all. Fully testable with zero risk to arr.
 2. **arr lookup search + request flow.** `/api/media/search`, the `/library` UI, `already_have` annotation from the extended inventory index. Still no writes.
 3. **arr writes.** `_arr_post()`, approve actually adds to Radarr/Sonarr, quality-profile/root-folder pickers, idempotency.
 4. **Availability tracking.** Extended inventory index, conditional queue polling, `downloading → available`, "ready to watch" notice that deep-links into `/library`.

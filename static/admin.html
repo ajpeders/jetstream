@@ -282,6 +282,42 @@
   #reports-panel .rtriage code { color: #9ab; font-family: ui-monospace, monospace; }
   #reports-panel .rtriage .rtkey { color: #7a6a88; }
   #reports-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
+  /* Media acquisition requests — the Overseerr replacement skeleton. Host-only;
+     this is separate from the live "request to queue" panel above. */
+  #media-requests-panel {
+    margin-top: 1rem; background: #161616; border: 1px solid #262626;
+    border-radius: 6px; padding: 0.8rem 1rem;
+  }
+  #media-requests-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+  #media-requests-panel h2 { margin: 0; font-size: 0.95rem; color: #ddd; }
+  #media-requests-panel .badge {
+    font-size: 0.7rem; background: #222; color: #888; border: 1px solid #333;
+    border-radius: 10px; padding: 0.05rem 0.5rem;
+  }
+  #media-requests-panel .badge.waiting { background: #332615; color: #e8b96c; border-color: #5a4422; }
+  #media-requests-panel ul { list-style: none; padding: 0; margin: 0; }
+  #media-requests-panel li {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.28rem 0.65rem; padding: 0.62rem 0;
+    border-top: 1px solid #1f1f1f; font-size: 0.85rem;
+  }
+  #media-requests-panel li:first-child { border-top: none; }
+  #media-requests-panel li.decided { opacity: 0.62; }
+  #media-requests-panel .mrtop { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
+  #media-requests-panel .mrstatus {
+    font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.03em;
+    border-radius: 10px; padding: 0.05rem 0.45rem; flex-shrink: 0;
+  }
+  #media-requests-panel .mrstatus.pending { background: #332615; color: #e8b96c; border: 1px solid #5a4422; }
+  #media-requests-panel .mrstatus.approved { background: #1f2a20; color: #8fcc9f; border: 1px solid #2c4a37; }
+  #media-requests-panel .mrstatus.rejected { background: #2d1c1c; color: #e7a0a0; border: 1px solid #573131; }
+  #media-requests-panel .mrtitle { color: #e0e0e0; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #media-requests-panel .mrmeta { color: #888; font-size: 0.75rem; line-height: 1.5; grid-column: 1 / -1; }
+  #media-requests-panel .mrmeta .k { color: #666; }
+  #media-requests-panel .mractions { display: flex; gap: 0.4rem; grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+  #media-requests-panel .mractions button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
+  #media-requests-panel .mractions button.approve { background: #1f2a20; color: #8fcc9f; border-color: #2c4a37; }
+  #media-requests-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
   /* Custom-reactions moderation — viewer-uploaded reaction images. Host can
      remove anything abusive. Host-only (hidden on /controls). */
   #reactions-panel {
@@ -818,7 +854,7 @@
     #seek-bar > * { flex-shrink: 0; }
     #seek-bar input[type="number"] { flex: 1; min-width: 0; }
 
-    #friends-panel, #url-panel, #stream-settings-panel, #queue-panel, #requests-panel, #viewers-panel,
+    #friends-panel, #url-panel, #stream-settings-panel, #queue-panel, #requests-panel, #media-requests-panel, #viewers-panel,
     #users-panel, #search-row, #breadcrumb, #search-info { padding: 0.7rem 0.8rem; }
 
     /* Library grid: tighter gutter on a phone + smaller minimum card size
@@ -856,6 +892,7 @@
        full height but flatten horizontal padding so multiple fit on a row. */
     #queue-panel button,
     #requests-panel button,
+    #media-requests-panel button,
     #friends-panel button,
     #users-panel button {
       padding: 0.4rem 0.7rem;
@@ -863,7 +900,7 @@
     }
     /* "Clear all" pinned to the right of the Requests head label needs to be
        finger-sized too. */
-    #requests-clear { min-height: 36px; padding: 0.35rem 0.7rem; }
+    #requests-clear, #media-requests-clear { min-height: 36px; padding: 0.35rem 0.7rem; }
 
     /* Search input: full width, bigger touch surface. */
     #search-row { display: flex; gap: 0.5rem; }
@@ -981,6 +1018,14 @@
     <button id="requests-clear" type="button" style="display:none;margin-left:auto;font-size:0.75rem;padding:0.2rem 0.55rem">Clear all</button>
   </div>
   <ul id="requests-list"><li class="empty-r">No pending requests.</li></ul>
+</div>
+<div id="media-requests-panel">
+  <div class="head">
+    <h2>Media Requests</h2>
+    <span class="badge" id="media-requests-count">0</span>
+    <button id="media-requests-clear" type="button" style="display:none;margin-left:auto;font-size:0.75rem;padding:0.2rem 0.55rem">Hide decided</button>
+  </div>
+  <ul id="media-requests-list"><li class="empty-r">No media requests.</li></ul>
 </div>
 <div id="reports-panel">
   <div class="head">
@@ -2096,7 +2141,7 @@ friendForm.addEventListener("submit", async e => {
 // valid so the rest of the script doesn't need null guards.
 if (!IS_ADMIN) {
   document.body.classList.add("controls-page");
-  for (const id of ["friends-panel", "stream-settings-panel", "viewers-panel", "requests-panel", "reports-panel", "reactions-panel", "users-panel", "vod-panel"]) {
+  for (const id of ["friends-panel", "stream-settings-panel", "viewers-panel", "requests-panel", "media-requests-panel", "reports-panel", "reactions-panel", "users-panel", "vod-panel"]) {
     const el = document.getElementById(id);
     if (el) el.style.display = "none";
   }
@@ -2275,6 +2320,100 @@ requestsClear.addEventListener("click", async () => {
 if (IS_ADMIN) {
   setInterval(refreshRequests, 5000);
   refreshRequests();
+}
+
+// ---- Media Requests panel (host-only) ---------------------------------
+// Account-backed requests for media we do not have yet. Phase 1 records host
+// approval/rejection only; later phases turn approval into Radarr/Sonarr work.
+const mediaRequestsList = document.getElementById("media-requests-list");
+const mediaRequestsCount = document.getElementById("media-requests-count");
+const mediaRequestsClear = document.getElementById("media-requests-clear");
+let mediaRequestsHideDecided = false;
+
+function mediaRequestMeta(r) {
+  const bits = [];
+  bits.push(`<span class="k">by</span> ${escapeHtml(r.username || "unknown")}`);
+  if (r.kind) bits.push(`<span class="k">kind</span> ${escapeHtml(r.kind)}`);
+  if (r.year) bits.push(`<span class="k">year</span> ${escapeHtml(String(r.year))}`);
+  if (r.tmdb_id != null) bits.push(`<span class="k">tmdb</span> ${escapeHtml(String(r.tmdb_id))}`);
+  if (r.tvdb_id != null) bits.push(`<span class="k">tvdb</span> ${escapeHtml(String(r.tvdb_id))}`);
+  if (Array.isArray(r.seasons) && r.seasons.length) bits.push(`<span class="k">seasons</span> ${escapeHtml(r.seasons.join(", "))}`);
+  if (r.reject_reason) bits.push(`<span class="k">reason</span> ${escapeHtml(r.reject_reason)}`);
+  if (r.requested_at) bits.push(`<span class="k">requested</span> ${reportAgo(r.requested_at)}`);
+  return bits.join(" &nbsp;·&nbsp; ");
+}
+
+async function refreshMediaRequests() {
+  try {
+    const res = await fetch("/admin/api/media/requests");
+    if (!res.ok) return;
+    const all = await res.json();
+    const pending = all.filter(r => r.status === "pending").length;
+    mediaRequestsCount.textContent = pending;
+    mediaRequestsCount.classList.toggle("waiting", pending > 0);
+    mediaRequestsClear.style.display = all.some(r => r.status !== "pending") ? "" : "none";
+    mediaRequestsClear.textContent = mediaRequestsHideDecided ? "Show decided" : "Hide decided";
+    const reqs = mediaRequestsHideDecided ? all.filter(r => r.status === "pending") : all;
+    if (!reqs.length) {
+      mediaRequestsList.innerHTML = `<li class="empty-r">${mediaRequestsHideDecided ? "No pending media requests." : "No media requests."}</li>`;
+      return;
+    }
+    mediaRequestsList.innerHTML = "";
+    for (const r of reqs) {
+      const li = document.createElement("li");
+      const status = r.status || "pending";
+      if (status !== "pending") li.classList.add("decided");
+      const actions = status === "pending"
+        ? `<button class="approve" type="button" data-action="approve" data-id="${r.id}">Approve</button>
+           <button type="button" data-action="reject" data-id="${r.id}">Reject</button>`
+        : "";
+      li.innerHTML = `
+        <div class="mrtop">
+          <span class="mrstatus ${escapeHtml(status)}">${escapeHtml(status)}</span>
+          <span class="mrtitle"></span>
+        </div>
+        <div class="mrmeta">${mediaRequestMeta(r)}</div>
+        <div class="mractions">${actions}</div>`;
+      li.querySelector(".mrtitle").textContent = r.title || "(untitled)";
+      mediaRequestsList.appendChild(li);
+    }
+  } catch {}
+}
+
+mediaRequestsList.addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-action]");
+  if (!btn) return;
+  const id = btn.dataset.id;
+  const action = btn.dataset.action;
+  btn.disabled = true;
+  try {
+    if (action === "approve") {
+      const r = await fetch(`/admin/api/media/requests/${encodeURIComponent(id)}/approve`, { method: "POST" });
+      showToast(r.ok ? "Media request approved" : "Approve failed");
+    } else {
+      const reason = prompt("Reject reason (optional)") || "";
+      const r = await fetch(`/admin/api/media/requests/${encodeURIComponent(id)}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      showToast(r.ok ? "Media request rejected" : "Reject failed");
+    }
+    refreshMediaRequests();
+  } catch (err) {
+    showToast("Failed: " + err.message);
+    btn.disabled = false;
+  }
+});
+
+mediaRequestsClear.addEventListener("click", () => {
+  mediaRequestsHideDecided = !mediaRequestsHideDecided;
+  refreshMediaRequests();
+});
+
+if (IS_ADMIN) {
+  setInterval(refreshMediaRequests, 5000);
+  refreshMediaRequests();
 }
 
 // ---- Reports panel (host-only) ----------------------------------------

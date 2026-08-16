@@ -421,6 +421,7 @@ video {
 #queue-panel,
 #recent-panel,
 #requests-panel,
+#media-requests-panel,
 #viewers-panel,
 #request-panel,
 #chat,
@@ -440,6 +441,7 @@ body.admin-page #stream-settings-panel,
 body.admin-page #queue-panel,
 body.admin-page #recent-panel,
 body.admin-page #requests-panel,
+body.admin-page #media-requests-panel,
 body.admin-page #viewers-panel,
 body.admin-page #chat-panel,
 body.admin-page #search-row,
@@ -455,6 +457,7 @@ body.admin-page #stream-settings-panel,
 body.admin-page #queue-panel,
 body.admin-page #recent-panel,
 body.admin-page #requests-panel,
+body.admin-page #media-requests-panel,
 body.admin-page #viewers-panel,
 body.admin-page #chat-panel {
   padding: 0.9rem 1rem !important;
@@ -466,6 +469,7 @@ body.admin-page #chat-panel {
 #queue-panel h2,
 #recent-panel h2,
 #requests-panel h2,
+#media-requests-panel h2,
 #viewers-panel h2,
 #chat-header h2,
 #queue-head h2,
@@ -967,14 +971,19 @@ body.viewer-page #request-tools #request-search {
     grid-row: 5;
   }
 
-  body.admin-page #friends-panel {
+  body.admin-page #media-requests-panel {
     grid-column: 2;
     grid-row: 6;
   }
 
-  body.admin-page #viewers-panel {
+  body.admin-page #friends-panel {
     grid-column: 2;
     grid-row: 7;
+  }
+
+  body.admin-page #viewers-panel {
+    grid-column: 2;
+    grid-row: 8;
   }
 
   body.admin-page #search-row {
@@ -1010,6 +1019,7 @@ body.viewer-page #request-tools #request-search {
   body.admin-page #queue-panel,
   body.admin-page #recent-panel,
   body.admin-page #requests-panel,
+  body.admin-page #media-requests-panel,
   body.admin-page #viewers-panel,
   body.admin-page #chat-panel,
   body.admin-page #search-row,
@@ -1682,6 +1692,7 @@ body.admin-page #stream-settings-panel,
 body.admin-page #queue-panel,
 body.admin-page #recent-panel,
 body.admin-page #requests-panel,
+body.admin-page #media-requests-panel,
 body.admin-page #reports-panel,
 body.admin-page #reactions-panel,
 body.admin-page #viewers-panel,
@@ -1706,6 +1717,7 @@ body.viewer-page #chat,
 }
 
 body.admin-page #reports-panel,
+body.admin-page #media-requests-panel,
 body.admin-page #reactions-panel,
 body.admin-page #users-panel,
 body.admin-page #vod-panel {
@@ -1720,6 +1732,7 @@ body.admin-page #vod-panel {
 #queue-panel .head,
 #recent-panel .head,
 #requests-panel .head,
+#media-requests-panel .head,
 #reports-panel .head,
 #reactions-panel .head,
 #viewers-panel .head,
@@ -1739,6 +1752,7 @@ body.admin-page #vod-panel {
 #queue-panel h2,
 #recent-panel h2,
 #requests-panel h2,
+#media-requests-panel h2,
 #reports-panel h2,
 #reactions-panel h2,
 #viewers-panel h2,
@@ -2013,24 +2027,25 @@ body.hub-page .choice .now strong {
 @media (min-width: 1120px) {
   body.admin-page #reports-panel {
     grid-column: 2;
-    grid-row: 8;
+    grid-row: 9;
   }
 
   body.admin-page #reactions-panel {
     grid-column: 2;
-    grid-row: 9;
+    grid-row: 10;
   }
 
   body.admin-page #users-panel {
     grid-column: 2;
-    grid-row: 10;
+    grid-row: 11;
   }
 
   body.admin-page #vod-panel {
     grid-column: 2;
-    grid-row: 11;
+    grid-row: 12;
   }
 
+  body.admin-page #media-requests-panel,
   body.admin-page #reports-panel,
   body.admin-page #reactions-panel,
   body.admin-page #users-panel,
@@ -2193,6 +2208,7 @@ body.hub-page .choice .now strong {
   body.admin-page #queue-panel,
   body.admin-page #recent-panel,
   body.admin-page #requests-panel,
+  body.admin-page #media-requests-panel,
   body.admin-page #reports-panel,
   body.admin-page #reactions-panel,
   body.admin-page #viewers-panel,
@@ -2223,6 +2239,7 @@ body.hub-page .choice .now strong {
   body.admin-page #queue-panel .head,
   body.admin-page #recent-panel .head,
   body.admin-page #requests-panel .head,
+  body.admin-page #media-requests-panel .head,
   body.admin-page #reports-panel .head,
   body.admin-page #reactions-panel .head,
   body.admin-page #viewers-panel .head,
