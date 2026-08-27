@@ -219,3 +219,10 @@ Plus, off-list:
 - Token-only viewing (settings `viewer_public=false`) durably enabled on prod; bare URL returns the invite page without a valid `?t=` / cookie.
 - Subtitle burn-in disabled globally (`SUBTITLE_BURN_IN`) to stop the `subtitles=`-filter full-file scan; real fix tracked under the Open item.
 - Live-edge sync regression: prod was running 4 s HLS segments but the player's `liveSyncDurationCount: 1` + `TARGET_LAG_S: 2.5` tuning assumed 1 s segments. The drift-correction loop kept seeking into the segment still being written → choppy / desyncing playback on every browser (worst on Firefox where MSE doesn't clamp out-of-buffer seeks). Fixed by dropping `HLS_SEG_TIME` back to 1 s (matches ROADMAP #13's design); env-only change, no rebuild.
+## Make this usable by others (added 2026-08-27)
+
+- [ ] Universalize the README / docs / code for outside users: document setup
+  from scratch on generic infrastructure, replace homelab-specific assumptions
+  (private hostnames, LAN addresses, personal paths and defaults) with
+  env-driven configuration plus examples, and keep the public GitHub mirror
+  directly runnable.
