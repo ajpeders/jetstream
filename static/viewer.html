@@ -1165,7 +1165,10 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.10/dist/hls.min.js"></script>
+<!-- Vendored (was cdn.jsdelivr.net): adblock filter lists block that CDN for
+     some viewers, which silently killed playback — window.Hls never existed,
+     so the player fell through to "HLS not supported in this browser". -->
+<script src="/vendor/hls.min.js"></script>
 <!-- Twemoji: render reaction emoji as images so they show identically on
      devices that lack a color-emoji font (where they'd otherwise be blank
      "tofu" circles). If this CDN is blocked, twemojify() no-ops and the
