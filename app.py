@@ -143,6 +143,26 @@ NVDEC_DECODE_CODECS = {"h264", "hevc", "vp8", "vp9", "mpeg2video", "av1"}
 VIDEO_BITRATE = os.environ.get("VIDEO_BITRATE", "5M")
 VIDEO_QP = os.environ.get("VIDEO_QP", "23")
 AUDIO_BITRATE = os.environ.get("AUDIO_BITRATE", "160k")
+# A/V sync trim (seconds). Positive DELAYS audio (use when voices arrive
+# before lips move), negative advances it. Stopgap for sources whose container
+# audio delay the transcode flattens — e.g. a rip carrying an audio
+# start_time of ~1s that plays in sync in a local player but ~1s audio-early
+# through the HLS pipeline. Global (applies to every source) — reset to 0
+# when the offending file is done.
+AUDIO_SYNC_OFFSET_S = float(os.environ.get("AUDIO_SYNC_OFFSET_S", "0") or 0)
+
+
+def _audio_sync_args() -> list[str]:
+    """Extra ffmpeg audio-filter args implementing AUDIO_SYNC_OFFSET_S.
+    Empty when the offset is 0, so the default pipeline is untouched."""
+    if AUDIO_SYNC_OFFSET_S > 0:
+        # adelay pads the audio head, shifting content later in time.
+        return ["-af", f"adelay={int(AUDIO_SYNC_OFFSET_S * 1000)}:all=1"]
+    if AUDIO_SYNC_OFFSET_S < 0:
+        # Trim the head and rebase timestamps, shifting content earlier.
+        return ["-af",
+                f"atrim=start={-AUDIO_SYNC_OFFSET_S:.3f},asetpts=PTS-STARTPTS"]
+    return []
 # Output cap. 1080p is the default — fits a 5 Mbps target comfortably and
 # keeps the encode cheap on CPU. Set to 2160 for 4K passthrough on capable
 # hardware; output still shrinks to source height when source is smaller.
@@ -2775,6 +2795,7 @@ def _build_ffmpeg_cmd(
         "-c:a", "aac",
         "-b:a", AUDIO_BITRATE,
         "-ac", "2",
+        *_audio_sync_args(),
         "-f", "hls",
         "-hls_time", HLS_SEG_TIME,
     ]
@@ -3060,6 +3081,7 @@ def _build_ffmpeg_abr_cmd(
     for _ in range(nv):
         cmd += ["-map", audio_map]
     cmd += ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ac", "2"]
+    cmd += _audio_sync_args()
 
     var_stream_map = " ".join(f"v:{i},a:{i}" for i in range(nv))
     cmd += [
