@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jetstream — admin</title>
-<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230b0f14"/><path d="M18 44V18l26 13-26 13z" fill="%2338bdf8"/></svg>'>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%2310100f"/><path d="M18 44V18l26 13-26 13z" fill="%23dfdedd"/></svg>'>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -159,7 +159,7 @@
   /* Source-being-dragged: dim it slightly so the user can track what's moving. */
   #queue-panel li.dragging { opacity: 0.35; }
   /* Drop target line — a thin highlighted top border when an item is hovering. */
-  #queue-panel li.drag-over { border-top: 2px solid #6cb6ff; padding-top: calc(0.4rem - 1px); }
+  #queue-panel li.drag-over { border-top: 2px solid #dfdedd; padding-top: calc(0.4rem - 1px); }
   #queue-panel .pos { color: #555; font-variant-numeric: tabular-nums; min-width: 1.5em; text-align: right; }
   /* Mini poster on each queue row — only the FILE rows actually paint one
      (URL/yt-dlp sources don't map to arr inventory). Keep slim (32×48) so a
@@ -178,10 +178,10 @@
   #queue-panel .qchip {
     flex-shrink: 0; font-size: 0.65rem; letter-spacing: 0.04em; font-weight: 600;
     padding: 0.08rem 0.4rem; border-radius: 3px;
-    background: #1a3050; color: #6cb6ff; border: 1px solid #244266;
+    background: #383632; color: #dfdedd; border: 1px solid #494641;
   }
   #queue-panel .qchip.yt { background: #3a1818; color: #ff7676; border-color: #5a2424; }
-  #queue-panel .qchip.url { background: #2a2030; color: #c693e8; border-color: #3e2e50; }
+  #queue-panel .qchip.url { background: #2a2030; color: #c693e8; border-color: #43403b; }
   /* CC badge — flagged on items whose subtitle_idx is set, so admin can see
      at a glance which queue entries will have burned-in subs. */
   #queue-panel .qcc {
@@ -276,7 +276,7 @@
   #reports-panel .ractions button.handle { background: #1f2a20; color: #8fcc9f; border-color: #2c4a37; }
   #reports-panel .rtriage {
     margin-top: 0.1rem; padding: 0.4rem 0.6rem; font-size: 0.78rem; line-height: 1.5;
-    color: #c7b3d6; background: #1c1626; border-left: 2px solid #4a3556; border-radius: 0 4px 4px 0;
+    color: #c7b3d6; background: #201f1c; border-left: 2px solid #4a3556; border-radius: 0 4px 4px 0;
   }
   #reports-panel .rtriage strong { color: #e0cdee; }
   #reports-panel .rtriage code { color: #9ab; font-family: ui-monospace, monospace; }
@@ -333,7 +333,7 @@
   #reactions-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
   #reactions-grid .rx {
     position: relative; width: 48px; height: 48px; border-radius: 6px;
-    background: #0d1117; border: 1px solid #2a3340;
+    background: #131211; border: 1px solid #383632;
     display: flex; align-items: center; justify-content: center;
   }
   #reactions-grid .rx img { max-width: 38px; max-height: 38px; }
@@ -382,7 +382,7 @@
   #users-panel .uvia {
     flex-shrink: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: 0.65rem; padding: 0.08rem 0.4rem; border-radius: 3px;
-    background: #18202c; color: #7f97b5; border: 1px solid #26364a;
+    background: #242320; color: #a09c94; border: 1px solid #3b3935;
   }
   #users-panel .umeta { flex: 1; color: #555; font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #users-panel button { padding: 0.25rem 0.6rem; font-size: 0.75rem; }
@@ -443,7 +443,7 @@
     overflow-x: auto;
     white-space: nowrap;
   }
-  #breadcrumb a { color: #6cb6ff; text-decoration: none; cursor: pointer; }
+  #breadcrumb a { color: #dfdedd; text-decoration: none; cursor: pointer; }
   #breadcrumb a:hover { text-decoration: underline; }
   #breadcrumb .sep { color: #444; padding: 0 0.4em; }
   /* Library is a poster grid backed by the Sonarr/Radarr cover proxy at
@@ -493,7 +493,7 @@
     transition: opacity 0.18s ease;
   }
   ul#list .card .poster img.loaded { opacity: 1; }
-  ul#list .card.dir .ph { color: #345366; }
+  ul#list .card.dir .ph { color: #524f48; }
   ul#list .card.now .ph { color: #6c6; }
   ul#list .card .body {
     padding: 0.55rem 0.65rem 0.7rem;
@@ -512,7 +512,7 @@
   ul#list .card .meta { color: #666; font-size: 0.72rem; }
   ul#list .card .badge {
     position: absolute; top: 6px; left: 6px;
-    background: rgba(0,0,0,0.65); color: #6cb6ff;
+    background: rgba(0,0,0,0.65); color: #dfdedd;
     padding: 0.15rem 0.45rem; border-radius: 3px;
     font-size: 0.62rem; letter-spacing: 0.05em; font-weight: 600;
   }
@@ -1941,7 +1941,7 @@ function renderTokens(items) {
     const isFriend = t.level === "friend";
     li.innerHTML = `
       <span class="label"></span>
-      <span class="tlevel" style="flex-shrink:0;font-size:0.65rem;letter-spacing:0.04em;font-weight:600;padding:0.08rem 0.4rem;border-radius:3px;${isFriend ? 'background:#1f3326;color:#7dcc99;border:1px solid #2c4a37' : 'background:#1a3050;color:#6cb6ff;border:1px solid #244266'}"></span>
+      <span class="tlevel" style="flex-shrink:0;font-size:0.65rem;letter-spacing:0.04em;font-weight:600;padding:0.08rem 0.4rem;border-radius:3px;${isFriend ? 'background:#1f3326;color:#7dcc99;border:1px solid #2c4a37' : 'background:#383632;color:#dfdedd;border:1px solid #494641'}"></span>
       <span class="url"></span>
       <button data-action="copy">Copy</button>
       <button data-action="revoke" class="danger">Revoke</button>

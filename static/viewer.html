@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jetstream</title>
-<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230b0f14"/><path d="M18 44V18l26 13-26 13z" fill="%2338bdf8"/></svg>'>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%2310100f"/><path d="M18 44V18l26 13-26 13z" fill="%23dfdedd"/></svg>'>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -200,9 +200,9 @@
     font-weight: 700;
   }
   #stability-btn.stable {
-    background: rgba(56, 189, 248, 0.18) !important;
-    border: 1px solid rgba(56, 189, 248, 0.34) !important;
-    color: #7dd3fc !important;
+    background: rgba(223, 222, 221, 0.18) !important;
+    border: 1px solid rgba(223, 222, 221, 0.34) !important;
+    color: #dfdedd !important;
   }
   .placeholder {
     color: #555;
@@ -255,8 +255,8 @@
   }
   .req-vote .req-arrow { font-size: 0.65rem; opacity: 0.8; }
   .req-vote .req-n { font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .req-vote:hover { border-color: #3a4a5a; }
-  .req-vote.voted { background: #16242f; border-color: #2c5a7a; color: #7dd3fc; }
+  .req-vote:hover { border-color: #4e4b46; }
+  .req-vote.voted { background: #252320; border-color: #58554e; color: #dfdedd; }
   .req-meta { flex: 1; min-width: 0; }
   .req-title { color: #ddd; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .req-by { color: #666; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -369,7 +369,7 @@
   .emoji-btn.emoji-custom:hover { transform: none; }
   .emoji-custom-del {
     position: absolute; top: -5px; right: -5px;
-    width: 15px; height: 15px; border-radius: 999px;
+    width: 15px; height: 15px; border-radius: var(--js-radius);
     background: #3a1f1f; color: #ff9b9b; border: 1px solid #6a3030;
     font-size: 11px; line-height: 13px; text-align: center;
     cursor: pointer; z-index: 2;
@@ -405,7 +405,7 @@
     color: #777; font-size: 0.78rem;
   }
   #library-back {
-    background: #202833; color: #d7dee8; border: 1px solid #303a48;
+    background: #2c2a27; color: #e1e0de; border: 1px solid #403d38;
     border-radius: 4px; cursor: pointer; flex-shrink: 0;
     font-family: inherit; font-size: 0.78rem; min-height: 30px;
     padding: 0.25rem 0.55rem;
@@ -427,8 +427,8 @@
   }
   #request-results.library-grid li {
     align-items: stretch;
-    background: #111820;
-    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: #1a1917;
+    border: 1px solid rgba(171, 168, 161, 0.16);
     border-radius: 8px;
     cursor: default;
     display: grid;
@@ -439,8 +439,8 @@
     padding: 0.55rem;
   }
   #request-results.library-grid li:hover {
-    background: #151e29;
-    border-color: rgba(148, 163, 184, 0.3);
+    background: #21201d;
+    border-color: rgba(171, 168, 161, 0.3);
   }
   #request-results .rthumb {
     flex-shrink: 0; width: 30px; height: 45px;
@@ -448,8 +448,8 @@
   }
   #request-results.library-grid .rthumb {
     aspect-ratio: 2 / 3;
-    background: #0d131b;
-    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: #151413;
+    border: 1px solid rgba(171, 168, 161, 0.14);
     border-radius: 6px;
     width: 100%;
     height: auto;
@@ -457,13 +457,13 @@
   #request-results .rthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
   #request-results .rthumb img.loaded { opacity: 1; }
   #request-results .rthumb.folder {
-    align-items: center; color: #8ca3ba; display: inline-flex;
+    align-items: center; color: #a9a59d; display: inline-flex;
     font-size: 1.05rem; justify-content: center;
   }
   #request-results.library-grid .rthumb.folder {
     aspect-ratio: 2 / 3;
-    background: linear-gradient(180deg, #172131, #101821);
-    color: #9ec7e8;
+    background: linear-gradient(180deg, #262522, #1a1917);
+    color: #dfdedd;
     font-size: 0.9rem;
     font-weight: 850;
     letter-spacing: 0;
@@ -585,16 +585,16 @@
 
   :root {
     color-scheme: dark;
-    --bg: #080b10;
-    --surface: #10151d;
-    --surface-2: #151b25;
-    --surface-3: #1b2430;
-    --line: rgba(148, 163, 184, 0.16);
-    --line-strong: rgba(148, 163, 184, 0.26);
-    --text: #e6edf5;
-    --muted: #91a0b3;
-    --dim: #637083;
-    --brand: #38bdf8;
+    --bg: #0d0c0b;
+    --surface: #181715;
+    --surface-2: #1f1e1b;
+    --surface-3: #282623;
+    --line: rgba(171, 168, 161, 0.16);
+    --line-strong: rgba(171, 168, 161, 0.26);
+    --text: #efeeec;
+    --muted: #a8a49c;
+    --dim: #7a756c;
+    --brand: #dfdedd;
     --brand-2: #22c55e;
     --warn: #f59e0b;
     --danger: #ef4444;
@@ -603,8 +603,8 @@
 
   body {
     background:
-      radial-gradient(circle at 20% -10%, rgba(56, 189, 248, 0.16), transparent 30rem),
-      linear-gradient(180deg, #0c1118 0%, var(--bg) 42%);
+      radial-gradient(circle at 20% -10%, rgba(223, 222, 221, 0.16), transparent 30rem),
+      linear-gradient(180deg, #131211 0%, var(--bg) 42%);
     color: var(--text);
   }
 
@@ -614,7 +614,7 @@
     z-index: 20;
     min-height: 62px;
     padding: 0.75rem clamp(0.85rem, 2vw, 1.5rem);
-    background: rgba(11, 15, 21, 0.88);
+    background: rgba(17, 16, 15, 0.88);
     border-bottom: 1px solid var(--line);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
     backdrop-filter: blur(18px);
@@ -630,15 +630,15 @@
     width: 0.7rem;
     height: 0.7rem;
     margin-right: 0.5rem;
-    border-radius: 999px;
+    border-radius: var(--js-radius);
     background: var(--brand);
-    box-shadow: 0 0 0 5px rgba(56, 189, 248, 0.12), 0 0 22px rgba(56, 189, 248, 0.7);
+    box-shadow: 0 0 0 5px rgba(223, 222, 221, 0.12), 0 0 22px rgba(223, 222, 221, 0.7);
     vertical-align: 0.02em;
   }
   #status, #viewers, #position { color: var(--muted) !important; }
   #status .live {
     background: linear-gradient(135deg, #ef4444, #f97316);
-    border-radius: 999px;
+    border-radius: var(--js-radius);
     box-shadow: 0 0 0 1px rgba(255,255,255,0.08) inset;
   }
   #now-thumb {
@@ -652,7 +652,7 @@
   main,
   #player-wrap {
     background:
-      linear-gradient(180deg, rgba(15, 23, 42, 0.45), transparent 26%),
+      linear-gradient(180deg, rgba(30, 29, 27, 0.45), transparent 26%),
       #000;
   }
   video {
@@ -660,7 +660,7 @@
     box-shadow: var(--shadow);
   }
   #unmute-overlay {
-    background: radial-gradient(circle, rgba(8, 13, 20, 0.26), rgba(0, 0, 0, 0.64));
+    background: radial-gradient(circle, rgba(15, 14, 13, 0.26), rgba(0, 0, 0, 0.64));
     font-weight: 700;
     text-transform: uppercase;
     font-size: 0.78rem;
@@ -668,15 +668,15 @@
   }
 
   #vol-controls {
-    background: rgba(10, 15, 22, 0.76);
-    border: 1px solid rgba(226, 232, 240, 0.13);
-    border-radius: 999px;
+    background: rgba(17, 16, 15, 0.76);
+    border: 1px solid rgba(234, 233, 232, 0.13);
+    border-radius: var(--js-radius);
     box-shadow: 0 12px 34px rgba(0,0,0,0.36);
     backdrop-filter: blur(14px);
     opacity: 0.88;
   }
   #vol-controls button {
-    border-radius: 999px;
+    border-radius: var(--js-radius);
   }
   #vol-controls button:hover {
     background: rgba(255,255,255,0.1);
@@ -690,7 +690,7 @@
   #request-panel,
   #chat-app,
   #chat {
-    background: rgba(13, 18, 26, 0.96);
+    background: rgba(21, 20, 18, 0.96);
     border-top: 1px solid var(--line);
   }
   #queue-head,
@@ -699,7 +699,7 @@
   #chat-header {
     min-height: 2.7rem;
     padding: 0.58rem clamp(0.85rem, 2vw, 1.25rem);
-    background: linear-gradient(180deg, rgba(21, 27, 37, 0.96), rgba(13, 18, 26, 0.96));
+    background: linear-gradient(180deg, rgba(31, 30, 27, 0.96), rgba(21, 20, 18, 0.96));
     border-bottom: 1px solid var(--line);
   }
   #queue-head h2,
@@ -732,7 +732,7 @@
   }
   #queue-list li:hover,
   #request-results li:hover {
-    background: rgba(148, 163, 184, 0.06);
+    background: rgba(171, 168, 161, 0.06);
   }
   #queue-list .qthumb,
   #request-results .rthumb {
@@ -765,8 +765,8 @@
   #request-search:focus,
   #chat-name-input:focus,
   #chat-input:focus {
-    border-color: rgba(56, 189, 248, 0.72);
-    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+    border-color: rgba(223, 222, 221, 0.72);
+    box-shadow: 0 0 0 3px rgba(223, 222, 221, 0.14);
     outline: none;
   }
   #request-results button,
@@ -775,7 +775,7 @@
   #controls-link,
   #library-link,
   #signin-link {
-    border-radius: 999px !important;
+    border-radius: var(--js-radius) !important;
     border: 1px solid var(--line-strong) !important;
     min-height: 34px;
     font-weight: 700;
@@ -783,12 +783,12 @@
   }
   #request-results button,
   #chat-send {
-    background: linear-gradient(180deg, #263241, #1b2531);
+    background: linear-gradient(180deg, #373530, #282724);
     color: var(--text);
   }
   #request-results button:hover,
   #chat-send:hover {
-    background: linear-gradient(180deg, #304052, #243244);
+    background: linear-gradient(180deg, #45423d, #373531);
     transform: translateY(-1px);
   }
   #request-results button.done {
@@ -798,15 +798,15 @@
   }
   #controls-link,
   #library-link {
-    background: rgba(56, 189, 248, 0.13) !important;
-    color: #7dd3fc !important;
+    background: rgba(223, 222, 221, 0.13) !important;
+    color: #dfdedd !important;
     text-decoration: none !important;
   }
   /* Sign-in is the quietest thing in the header — most viewers arrive on an
      invite link and have no account. */
   #signin-link {
-    background: rgba(148, 163, 184, 0.1) !important;
-    color: var(--text-dim, #94a3b8) !important;
+    background: rgba(171, 168, 161, 0.1) !important;
+    color: var(--text-dim, #aba8a1) !important;
     text-decoration: none !important;
   }
   #voteskip-btn {
@@ -825,7 +825,7 @@
     box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
   }
   .chat-name {
-    color: #cbd5e1;
+    color: #d8d7d4;
   }
   .chat-text {
     color: var(--text);
@@ -833,7 +833,7 @@
   #chat-form {
     padding: 0.65rem clamp(0.85rem, 2vw, 1.25rem);
     border-top: 1px solid var(--line);
-    background: rgba(8, 13, 20, 0.36);
+    background: rgba(15, 14, 13, 0.36);
   }
 
   @media (max-width: 700px) {
@@ -855,8 +855,8 @@
     #reaction-fab {
       display: inline-flex; align-items: center; justify-content: center;
       position: absolute; bottom: 12px; left: 12px; z-index: 6;
-      width: 44px; height: 44px; padding: 0; border-radius: 999px;
-      background: rgba(13, 18, 25, 0.86); border: 1px solid rgba(226, 232, 240, 0.14);
+      width: 44px; height: 44px; padding: 0; border-radius: var(--js-radius);
+      background: rgba(20, 19, 18, 0.86); border: 1px solid rgba(234, 233, 232, 0.14);
       color: #fff; font-size: 1.35rem; line-height: 1; cursor: pointer;
       opacity: 0.92; transition: opacity 0.18s ease, transform 0.18s ease;
     }
@@ -986,28 +986,28 @@
   #report-modal.hidden { display: none; }
   #report-card {
     width: 100%; max-width: 420px;
-    background: #14181f; border: 1px solid #2a3340; border-radius: 10px;
+    background: #1b1a18; border: 1px solid #383632; border-radius: 10px;
     padding: 1.1rem 1.2rem; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
   }
   #report-card h2 { margin: 0 0 0.3rem; font-size: 1.05rem; color: #eee; }
-  #report-sub { margin: 0 0 0.8rem; font-size: 0.82rem; color: #8b96a5; line-height: 1.4; }
+  #report-sub { margin: 0 0 0.8rem; font-size: 0.82rem; color: #9e9a92; line-height: 1.4; }
   #report-message {
     width: 100%; box-sizing: border-box; resize: vertical;
-    background: #0d1117; color: #e6e6e6;
-    border: 1px solid #2a3340; border-radius: 6px;
+    background: #131211; color: #e6e6e6;
+    border: 1px solid #383632; border-radius: 6px;
     padding: 0.5rem 0.6rem; font-family: inherit; font-size: 0.9rem;
   }
   #report-message:focus { outline: none; border-color: #4a3556; }
   #report-actions {
     display: flex; align-items: center; gap: 0.5rem; margin-top: 0.8rem;
   }
-  #report-feedback { flex: 1; font-size: 0.8rem; color: #8b96a5; }
+  #report-feedback { flex: 1; font-size: 0.8rem; color: #9e9a92; }
   #report-actions button {
     font-family: inherit; font-size: 0.85rem; cursor: pointer;
-    padding: 0.4rem 0.8rem; border-radius: 6px; border: 1px solid #2a3340;
-    background: #1c2330; color: #cfd6df;
+    padding: 0.4rem 0.8rem; border-radius: 6px; border: 1px solid #383632;
+    background: #282724; color: #d9d8d5;
   }
-  #report-actions button:hover { background: #232b3a; }
+  #report-actions button:hover { background: #312f2c; }
   #report-send {
     border-color: #4a3556 !important; background: #2a1f30 !important; color: #d9b8e6 !important;
   }
@@ -1024,13 +1024,13 @@
   #session-overlay.hidden { display: none; }
   #session-overlay > div { display: flex; flex-direction: column; gap: 0.6rem; align-items: center; max-width: 22rem; }
   #session-overlay strong { font-size: 1.1rem; }
-  #session-overlay span { color: #9aa6b2; font-size: 0.9rem; line-height: 1.4; }
+  #session-overlay span { color: #aba8a1; font-size: 0.9rem; line-height: 1.4; }
   #session-continue {
     margin-top: 0.3rem; font-family: inherit; font-size: 0.95rem; cursor: pointer;
     padding: 0.55rem 1.3rem; border-radius: 8px;
-    background: #1a3050; color: #cfe2ff; border: 1px solid #244266;
+    background: #383632; color: #e8e7e6; border: 1px solid #494641;
   }
-  #session-continue:hover { background: #224066; }
+  #session-continue:hover { background: #484540; }
   #session-continue:disabled { opacity: 0.5; cursor: default; }
 </style>
 <link rel="stylesheet" href="/jetstream-theme.css">
@@ -1048,12 +1048,12 @@
             style="display:none;font-size:0.85rem;color:#e8b96c;background:#332615;border:1px solid #5a4422;padding:0.25rem 0.6rem;border-radius:4px;cursor:pointer">⏭ Vote skip <span id="voteskip-tally"></span></button>
     <!-- Shown only for friend/admin tokens (see can_control in /api/status). -->
     <a id="controls-link" href="/controls"
-       style="display:none;font-size:0.85rem;color:#6cb6ff;text-decoration:none;border:1px solid #244266;background:#1a3050;padding:0.25rem 0.6rem;border-radius:4px">🎛 Controls</a>
+       style="display:none;font-size:0.85rem;color:#dfdedd;text-decoration:none;border:1px solid #494641;background:#383632;padding:0.25rem 0.6rem;border-radius:4px">🎛 Controls</a>
     <!-- v2 account tier. Logged in (status.user) → their private library;
          logged out → the sign-in door. Exactly one is ever visible; both
          start hidden so no link flashes before /api/status answers. -->
     <a id="library-link" href="/library"
-       style="display:none;font-size:0.85rem;color:#38bdf8;text-decoration:none;border:1px solid #1d4c66;background:#12303f;padding:0.25rem 0.6rem;border-radius:4px">🎬 My library</a>
+       style="display:none;font-size:0.85rem;color:#dfdedd;text-decoration:none;border:1px solid #45433e;background:#2b2926;padding:0.25rem 0.6rem;border-radius:4px">🎬 My library</a>
     <a id="signin-link" href="/login"
        style="display:none;font-size:0.85rem;color:#8a8a8a;text-decoration:none;border:1px solid #2a2a2a;background:#181818;padding:0.25rem 0.6rem;border-radius:4px">Sign in</a>
     <!-- Always available: lets a viewer flag a playback issue to the host. -->

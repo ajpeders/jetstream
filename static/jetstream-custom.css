@@ -1,9 +1,9 @@
 :root {
   color-scheme: dark;
   --js-bg: #0c0c0b;
-  --js-surface: #171717;
-  --js-surface-2: #20201f;
-  --js-surface-3: #292827;
+  --js-surface: #181716;
+  --js-surface-2: #21201e;
+  --js-surface-3: #2a2926;
   --js-text: #f4f3f1;
   --js-muted: #9e9c98;
   --js-faint: #6b6966;
@@ -40,7 +40,7 @@ body {
 
 header {
   align-items: center;
-  background: #131313 !important;
+  background: #141312 !important;
   border-bottom: 1px solid var(--js-line) !important;
   box-shadow: none !important;
   gap: 0.75rem !important;
@@ -63,7 +63,7 @@ header h1 {
 
 header h1::before {
   background: var(--js-accent);
-  border-radius: 999px;
+  border-radius: var(--js-radius);
   content: "";
   height: 0.58rem;
   width: 0.58rem;
@@ -89,7 +89,7 @@ header h1 span {
 #status .live {
   background: rgba(239, 68, 68, 0.15) !important;
   border: 1px solid rgba(239, 68, 68, 0.35);
-  border-radius: 999px !important;
+  border-radius: var(--js-radius) !important;
   color: #fecaca !important;
   padding: 0.12rem 0.46rem !important;
   text-transform: uppercase;
@@ -100,9 +100,9 @@ header h1 span {
 #queue-count,
 #requests-count,
 #viewers-count {
-  background: #222221 !important;
+  background: #24221f !important;
   border: 1px solid var(--js-line) !important;
-  border-radius: 999px !important;
+  border-radius: var(--js-radius) !important;
   color: var(--js-muted) !important;
   font-size: 0.72rem !important;
   font-weight: 750 !important;
@@ -179,7 +179,7 @@ a[id$="-link"] {
 button:hover:not(:disabled),
 a[id$="-link"]:hover {
   background: var(--js-surface-3) !important;
-  border-color: rgba(168, 167, 164, 0.42) !important;
+  border-color: rgba(171, 168, 161, 0.42) !important;
   transform: none !important;
 }
 
@@ -221,7 +221,7 @@ input[type="text"],
 input[type="url"],
 input[type="search"],
 select {
-  background: #141414 !important;
+  background: #151413 !important;
   border: 1px solid var(--js-line-strong) !important;
   border-radius: 6px !important;
   box-shadow: none !important;
@@ -256,8 +256,8 @@ video {
 
 #vol-controls,
 #reaction-bar {
-  background: rgba(19, 19, 19, 0.86) !important;
-  border: 1px solid rgba(233, 233, 233, 0.14) !important;
+  background: rgba(20, 19, 18, 0.86) !important;
+  border: 1px solid rgba(234, 233, 232, 0.14) !important;
   border-radius: 8px !important;
   box-shadow: none !important;
   backdrop-filter: none !important;
@@ -317,9 +317,9 @@ video {
   max-width: min(70%, 34rem);
   padding: 0.3rem 0.65rem;
   border-radius: 8px;
-  background: rgba(19, 19, 19, 0.86);
-  border: 1px solid rgba(233, 233, 233, 0.14);
-  color: #eeeeed;
+  background: rgba(20, 19, 18, 0.86);
+  border: 1px solid rgba(234, 233, 232, 0.14);
+  color: #efeeec;
   font-size: 0.82rem;
   font-weight: 600;
   line-height: 1.3;
@@ -412,7 +412,7 @@ video {
 
 #broadcast-bar,
 #seek-bar {
-  background: #131313 !important;
+  background: #141312 !important;
   border-bottom: 1px solid var(--js-line) !important;
 }
 
@@ -516,7 +516,7 @@ body.admin-page #chat-panel {
 #viewers-list li,
 #request-results li,
 #recent-list .recent-row {
-  background: #151515 !important;
+  background: #161514 !important;
   border: 1px solid var(--js-line) !important;
   border-radius: 6px !important;
   min-height: 44px;
@@ -528,7 +528,7 @@ body.admin-page #chat-panel {
 #tokens-list li:hover,
 #request-results li:hover,
 #recent-list .recent-row:hover {
-  background: #1c1b1a !important;
+  background: #1d1c19 !important;
 }
 
 #queue-list li:focus-within,
@@ -561,9 +561,9 @@ body.admin-page #chat-panel {
 
 #queue-panel .qchip,
 #queue-list .qchip {
-  background: #222221 !important;
+  background: #24221f !important;
   border: 1px solid var(--js-line) !important;
-  border-radius: 999px !important;
+  border-radius: var(--js-radius) !important;
   color: var(--js-muted) !important;
 }
 
@@ -736,13 +736,13 @@ ul#list .card {
 }
 
 ul#list .card:hover {
-  background: #1e1d1c !important;
+  background: #1f1e1b !important;
   border-color: rgba(var(--js-accent-rgb), 0.42) !important;
   transform: none !important;
 }
 
 ul#list .card .poster {
-  background: #141414 !important;
+  background: #151413 !important;
 }
 
 ul#list .card .title {
@@ -759,8 +759,8 @@ ul#list .card .badge {
 }
 
 ul#list .card .queue-btn {
-  background: rgba(19, 19, 19, 0.88) !important;
-  border-color: rgba(233, 233, 233, 0.2) !important;
+  background: rgba(20, 19, 18, 0.88) !important;
+  border-color: rgba(234, 233, 232, 0.2) !important;
   backdrop-filter: none !important;
 }
 
@@ -772,7 +772,7 @@ ul#list .card .queue-btn {
 #chat-header,
 #queue-head,
 #request-head {
-  background: #171717 !important;
+  background: #181716 !important;
   border-bottom: 1px solid var(--js-line) !important;
 }
 
@@ -786,7 +786,7 @@ ul#list .card .queue-btn {
 }
 
 .chat-name {
-  color: #d7d6d5 !important;
+  color: #d8d7d4 !important;
 }
 
 .chat-dot {
@@ -794,12 +794,12 @@ ul#list .card .queue-btn {
 }
 
 #chat-form {
-  background: #151515 !important;
+  background: #161514 !important;
   border-top: 1px solid var(--js-line) !important;
 }
 
 #toast {
-  background: #1d1c1b !important;
+  background: #1e1d1a !important;
   border: 1px solid var(--js-line-strong) !important;
   border-radius: 8px !important;
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
@@ -1150,7 +1150,7 @@ body.viewer-page #request-tools #request-search {
   }
 
   body.controls-page #mobile-control-dock {
-    background: #131313;
+    background: #141312;
     border: 1px solid var(--js-line);
     border-radius: 12px;
     bottom: max(0.55rem, env(safe-area-inset-bottom));
@@ -1252,7 +1252,7 @@ body.viewer-page #request-tools #request-search {
   justify-content: center;
   width: 1.55rem;
   height: 1.55rem;
-  border-radius: 999px;
+  border-radius: var(--js-radius);
   border: 1px solid var(--js-line);
   background: var(--js-surface-2);
   color: var(--js-muted) !important;
@@ -1503,11 +1503,11 @@ body.viewer-page #request-tools #request-search {
    a little more warmth than the original all-slate treatment. */
 :root {
   --js-bg: #0c0c0b;
-  --js-page: #0f0f0f;
-  --js-surface: #171717;
-  --js-surface-2: #20201f;
-  --js-surface-3: #292827;
-  --js-panel-top: #20201f;
+  --js-page: #100f0e;
+  --js-surface: #181716;
+  --js-surface-2: #21201e;
+  --js-surface-3: #2a2926;
+  --js-panel-top: #21201e;
   --js-text: #f4f3f1;
   --js-muted: #9e9c98;
   --js-faint: #6b6966;
@@ -1548,7 +1548,7 @@ body::before {
 
 header {
   background: rgba(15, 15, 14, 0.94) !important;
-  border-bottom-color: rgba(233, 233, 233, 0.12) !important;
+  border-bottom-color: rgba(234, 233, 232, 0.12) !important;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24) !important;
 }
 
@@ -1577,14 +1577,14 @@ video {
 
 button,
 a[id$="-link"] {
-  background: linear-gradient(180deg, #282726, #1f1e1d) !important;
+  background: linear-gradient(180deg, #292825, #201f1c) !important;
   border-color: rgba(223, 223, 222, 0.22) !important;
   color: var(--js-text) !important;
 }
 
 button:hover:not(:disabled),
 a[id$="-link"]:hover {
-  background: linear-gradient(180deg, #343331, #282726) !important;
+  background: linear-gradient(180deg, #36342f, #292825) !important;
   border-color: rgba(var(--js-accent-rgb), 0.42) !important;
 }
 
@@ -1606,7 +1606,7 @@ input[type="number"],
 select,
 textarea,
 #report-message {
-  background: #121212 !important;
+  background: #131211 !important;
   border-color: rgba(223, 223, 222, 0.22) !important;
   border-radius: 7px !important;
   color: var(--js-text) !important;
@@ -1614,7 +1614,7 @@ textarea,
 
 input::placeholder,
 textarea::placeholder {
-  color: #83817e !important;
+  color: #888379 !important;
 }
 
 #status .live,
@@ -1632,8 +1632,8 @@ textarea::placeholder {
 #reactions-count,
 #vod-count,
 #reqlist-count {
-  background: rgba(182, 181, 179, 0.08) !important;
-  border-color: rgba(182, 181, 179, 0.18) !important;
+  background: rgba(185, 182, 176, 0.08) !important;
+  border-color: rgba(185, 182, 176, 0.18) !important;
   color: var(--js-muted) !important;
 }
 
@@ -1712,7 +1712,7 @@ body.viewer-page #chat,
 #library-nav,
 #player-title-row,
 .card {
-  background: rgba(24, 24, 24, 0.94) !important;
+  background: rgba(25, 24, 23, 0.94) !important;
   border: 1px solid var(--js-line) !important;
   border-radius: var(--js-radius) !important;
   box-shadow: var(--js-shadow-soft) !important;
@@ -1744,7 +1744,7 @@ body.admin-page #vod-panel {
 #request-head,
 #reactions-head,
 #chat-header {
-  background: linear-gradient(180deg, rgba(33, 33, 32, 0.96), rgba(23, 23, 23, 0.94)) !important;
+  background: linear-gradient(180deg, rgba(34, 33, 31, 0.96), rgba(24, 23, 22, 0.94)) !important;
   border-bottom: 1px solid var(--js-line) !important;
 }
 
@@ -1793,7 +1793,7 @@ body.admin-page #vod-panel {
 #recent-list .recent-row,
 #vod-panel tr {
   background: rgba(15, 15, 14, 0.56) !important;
-  border: 1px solid rgba(182, 181, 179, 0.12) !important;
+  border: 1px solid rgba(185, 182, 176, 0.12) !important;
   border-radius: 7px !important;
 }
 
@@ -1805,7 +1805,7 @@ body.admin-page #vod-panel {
 #users-list li:hover,
 #reqlist li:hover,
 #recent-list .recent-row:hover {
-  background: rgba(33, 33, 32, 0.9) !important;
+  background: rgba(34, 33, 31, 0.9) !important;
   border-color: rgba(var(--js-accent-rgb), 0.26) !important;
 }
 
@@ -1826,13 +1826,13 @@ body.admin-page #vod-panel {
 #player,
 body.viewer-page main,
 #player-wrap {
-  background: #dfdedd !important;
+  background: #050505 !important;
 }
 
 body.viewer-page main,
 body.admin-page #player,
 #player-view #player-wrap {
-  border: 1px solid rgba(233, 233, 233, 0.12) !important;
+  border: 1px solid rgba(234, 233, 232, 0.12) !important;
   box-shadow: var(--js-shadow) !important;
 }
 
@@ -1845,8 +1845,8 @@ body.admin-page #player,
 #vol-controls,
 #reaction-bar,
 #player-wrap #now-playing {
-  background: rgba(14, 14, 14, 0.82) !important;
-  border-color: rgba(233, 233, 233, 0.16) !important;
+  background: rgba(15, 14, 13, 0.82) !important;
+  border-color: rgba(234, 233, 232, 0.16) !important;
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.32) !important;
 }
 
@@ -1870,8 +1870,8 @@ ul#list,
 #results li,
 ul#list .card,
 #request-results.library-grid li {
-  background: linear-gradient(180deg, rgba(30, 30, 29, 0.98), rgba(19, 19, 19, 0.98)) !important;
-  border-color: rgba(182, 181, 179, 0.15) !important;
+  background: linear-gradient(180deg, rgba(31, 30, 28, 0.98), rgba(20, 19, 18, 0.98)) !important;
+  border-color: rgba(185, 182, 176, 0.15) !important;
   border-radius: 8px !important;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22) !important;
 }
@@ -1890,15 +1890,15 @@ ul#list .card .poster,
 #queue-panel .qthumb,
 #request-results .rthumb,
 #recent-list .recent-thumb {
-  background: linear-gradient(160deg, #292827, #121212) !important;
-  border: 1px solid rgba(182, 181, 179, 0.13) !important;
+  background: linear-gradient(160deg, #2a2926, #131211) !important;
+  border: 1px solid rgba(185, 182, 176, 0.13) !important;
 }
 
 #results .rthumb.folder,
 #request-results.library-grid .rthumb.folder {
   background:
     linear-gradient(160deg, rgba(var(--js-accent-rgb), 0.18), transparent 58%),
-    linear-gradient(180deg, #292827, #151514) !important;
+    linear-gradient(180deg, #2a2926, #161513) !important;
   color: var(--js-accent-text) !important;
 }
 
@@ -1910,7 +1910,7 @@ ul#list .card .poster,
 
 #show-view .banner,
 #show-view .season {
-  background: rgba(24, 24, 24, 0.94) !important;
+  background: rgba(25, 24, 23, 0.94) !important;
   border: 1px solid var(--js-line) !important;
   border-radius: var(--js-radius) !important;
 }
@@ -1920,21 +1920,21 @@ ul#list .card .poster,
 }
 
 #show-view .season-head {
-  background: linear-gradient(180deg, rgba(33, 33, 32, 0.96), rgba(23, 23, 23, 0.94)) !important;
+  background: linear-gradient(180deg, rgba(34, 33, 31, 0.96), rgba(24, 23, 22, 0.94)) !important;
 }
 
 #show-view .episodes li {
-  border-color: rgba(182, 181, 179, 0.12) !important;
+  border-color: rgba(185, 182, 176, 0.12) !important;
 }
 
 #show-view .episodes li:hover {
-  background: rgba(33, 33, 32, 0.82) !important;
+  background: rgba(34, 33, 31, 0.82) !important;
 }
 
 #toast,
 #report-card,
 #session-overlay > div {
-  background: rgba(24, 24, 24, 0.97) !important;
+  background: rgba(25, 24, 23, 0.97) !important;
   border: 1px solid var(--js-line-strong) !important;
   border-radius: var(--js-radius) !important;
   box-shadow: var(--js-shadow) !important;
@@ -2006,8 +2006,8 @@ body.hub-page .choices {
 }
 
 body.hub-page .choice {
-  background: linear-gradient(180deg, rgba(30, 30, 29, 0.98), rgba(19, 19, 19, 0.98)) !important;
-  border: 1px solid rgba(182, 181, 179, 0.15) !important;
+  background: linear-gradient(180deg, rgba(31, 30, 28, 0.98), rgba(20, 19, 18, 0.98)) !important;
+  border: 1px solid rgba(185, 182, 176, 0.15) !important;
   border-radius: 14px !important;
   box-shadow: var(--js-shadow-soft) !important;
 }
@@ -2073,7 +2073,7 @@ body.hub-page .choice .now strong {
   body.controls-page,
   body.hub-page {
     background:
-      linear-gradient(180deg, #181817 0, #dfdedd 15rem, #0a0a09 100%) !important;
+      linear-gradient(180deg, #191816 0, #111110 15rem, #0a0a09 100%) !important;
     display: flex !important;
     flex-direction: column !important;
     gap: 0.65rem !important;
@@ -2183,7 +2183,7 @@ body.hub-page .choice .now strong {
 
   body.viewer-page #vol-controls,
   body.viewer-page #reaction-fab {
-    background: rgba(21, 21, 20, 0.92) !important;
+    background: rgba(22, 21, 19, 0.92) !important;
     border-radius: 14px !important;
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38) !important;
   }
@@ -2266,9 +2266,9 @@ body.hub-page .choice .now strong {
   #reactions-head .toggle,
   #chat-header .toggle {
     align-items: center;
-    background: rgba(182, 181, 179, 0.08);
-    border: 1px solid rgba(182, 181, 179, 0.12);
-    border-radius: 999px;
+    background: rgba(185, 182, 176, 0.08);
+    border: 1px solid rgba(185, 182, 176, 0.12);
+    border-radius: var(--js-radius);
     display: inline-flex;
     height: 28px;
     justify-content: center;
@@ -2405,7 +2405,7 @@ body.hub-page .choice .now strong {
 
   #public-toggle-wrap {
     background: rgba(15, 15, 14, 0.5);
-    border: 1px solid rgba(182, 181, 179, 0.12);
+    border: 1px solid rgba(185, 182, 176, 0.12);
     border-radius: 12px;
     display: grid !important;
     grid-template-columns: auto minmax(0, 1fr);
@@ -2465,8 +2465,8 @@ body.hub-page .choice .now strong {
   }
 
   body.hub-page .account {
-    background: rgba(22, 22, 22, 0.78) !important;
-    border: 1px solid rgba(182, 181, 179, 0.14) !important;
+    background: rgba(23, 22, 21, 0.78) !important;
+    border: 1px solid rgba(185, 182, 176, 0.14) !important;
     border-radius: 16px !important;
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22) !important;
     display: grid !important;
@@ -2475,8 +2475,8 @@ body.hub-page .choice .now strong {
   }
 
   body.hub-page #pw-toggle {
-    background: rgba(182, 181, 179, 0.08) !important;
-    border: 1px solid rgba(182, 181, 179, 0.16) !important;
+    background: rgba(185, 182, 176, 0.08) !important;
+    border: 1px solid rgba(185, 182, 176, 0.16) !important;
     border-radius: 12px !important;
     color: var(--js-text) !important;
     justify-content: center !important;
