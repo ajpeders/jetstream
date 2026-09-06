@@ -134,7 +134,7 @@ Titles are judged on arr metadata (genres / certification / overview) when avail
 
   Useful finding: **search needs no TMDB key** — `/api/v3/{movie,series}/lookup` on Radarr/Sonarr already proxy TMDB/TVDB and return objects that can be POSTed straight back to add. Only *browse/trending* needs a key, so that's phased last and degrades to a hidden tab. (This reverses the closed "TMDB not worth the friction" call, deliberately: that was about enriching the existing library, which is a different requirement.)
 
-  Shipped phase 1: separate `/data/media_requests.json`, account-backed create/list/cancel endpoints, admin list/approve/reject status controls, and a host-only admin panel with no arr writes. Next phases: arr-lookup search + request UI (still no writes) → arr writes → availability tracking → TMDB discovery.
+  Shipped phase 1: separate `/data/media_requests.json`, account-backed create/list/cancel endpoints, admin list/approve/reject status controls, and a host-only admin panel with no arr writes. Shipped phase 2: `/api/media/search` uses read-only Radarr/Sonarr lookup, annotates already-in-library/already-requested state, and `/library` now has a mobile-friendly request panel. Next phases: arr writes → availability tracking → TMDB discovery.
 
 - **Stream rooms (a "mod" tier that can run its own live room)** — *next up; needs a design session before any code.* Wanted: a trusted user can spin up their own live room — own queue, own viewers, own chat — instead of everyone sharing the single broadcast.
 

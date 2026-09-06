@@ -2301,6 +2301,9 @@ _arr_cover_map: dict[str, tuple[str, str, str]] = {}
 # separate rather than widening the cover tuple, which /poster unpacks by
 # arity. Populated by the same poll, so it costs no extra requests.
 _arr_meta_map: dict[str, dict] = {}
+# id-keyed inventory for acquisition requests. Search results use this to
+# disable "request" for media already present locally.
+_arr_inventory_by_id: dict[tuple[str, int], dict] = {}
 
 
 def _read_arr_api_key(path: Path) -> str | None:
@@ -2315,29 +2318,75 @@ def _read_arr_api_key(path: Path) -> str | None:
     return m.group(1) if m else None
 
 
+def _arr_get_json(base: str, cfg: Path, endpoint: str, params: dict | None = None):
+    key = _read_arr_api_key(cfg)
+    if not key:
+        raise RuntimeError("arr_api_key_missing")
+    url = f"{base}{endpoint}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"X-Api-Key": key})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read())
+
+
+def _arr_has_file(kind: str, item: dict) -> bool:
+    if kind == "movie":
+        return bool(item.get("hasFile") or item.get("movieFile") or (item.get("sizeOnDisk") or 0) > 0)
+    stats = item.get("statistics") or {}
+    return bool(
+        (stats.get("episodeFileCount") or 0) > 0
+        or item.get("hasFile")
+        or (item.get("sizeOnDisk") or 0) > 0
+    )
+
+
+def _arr_index_inventory_item(kind: str, item: dict) -> dict:
+    return {
+        "kind": kind,
+        "title": item.get("title"),
+        "year": item.get("year"),
+        "arr_id": item.get("id"),
+        "path": item.get("path"),
+        "has_file": _arr_has_file(kind, item),
+        "size_on_disk": item.get("sizeOnDisk"),
+        "statistics": item.get("statistics") or {},
+    }
+
+
 def _arr_fetch_inventory() -> None:
     """Pull series + movie lists from Sonarr and Radarr, update the cover
     map. Errors log to stderr; we never raise — a missing arr just means
     that branch's covers are blank, not that the page breaks."""
     new_map: dict[str, tuple[str, str, str]] = {}
     new_meta: dict[str, dict] = {}
-    for base, cfg, endpoint in [
-        (SONARR_URL, SONARR_CONFIG, "/api/v3/series"),
-        (RADARR_URL, RADARR_CONFIG, "/api/v3/movie"),
+    new_inventory: dict[tuple[str, int], dict] = {}
+    for base, cfg, endpoint, kind in [
+        (SONARR_URL, SONARR_CONFIG, "/api/v3/series", "series"),
+        (RADARR_URL, RADARR_CONFIG, "/api/v3/movie", "movie"),
     ]:
-        key = _read_arr_api_key(cfg)
-        if not key:
-            continue
         try:
-            req = urllib.request.Request(
-                f"{base}{endpoint}", headers={"X-Api-Key": key}
-            )
-            with urllib.request.urlopen(req, timeout=10) as r:
-                items = json.loads(r.read())
+            key = _read_arr_api_key(cfg)
+            if not key:
+                continue
+            items = _arr_get_json(base, cfg, endpoint)
         except Exception as e:
             print(f"arr inventory fetch failed for {base}: {e}", file=sys.stderr)
             continue
         for item in items:
+            indexed = _arr_index_inventory_item(kind, item)
+            tmdb = item.get("tmdbId")
+            tvdb = item.get("tvdbId")
+            if tmdb:
+                try:
+                    new_inventory[(kind, int(tmdb))] = indexed
+                except (TypeError, ValueError):
+                    pass
+            if tvdb:
+                try:
+                    new_inventory[(kind, int(tvdb))] = indexed
+                except (TypeError, ValueError):
+                    pass
             folder = Path(item.get("path", "") or "").name
             if not folder:
                 continue
@@ -2380,6 +2429,8 @@ def _arr_fetch_inventory() -> None:
         _arr_cover_map.update(new_map)
         _arr_meta_map.clear()
         _arr_meta_map.update(new_meta)
+        _arr_inventory_by_id.clear()
+        _arr_inventory_by_id.update(new_inventory)
 
 
 def _arr_refresh_loop() -> None:
@@ -5597,6 +5648,141 @@ def _normalise_media_kind(value: str | None) -> str | None:
     return kind if kind in {"movie", "series"} else None
 
 
+def _media_already_have(kind: str, tmdb_id=None, tvdb_id=None) -> dict | None:
+    keys: list[tuple[str, int]] = []
+    for raw in (tmdb_id, tvdb_id):
+        if raw is None:
+            continue
+        try:
+            keys.append((kind, int(raw)))
+        except (TypeError, ValueError):
+            pass
+    with _arr_cover_map_lock:
+        for key in keys:
+            hit = _arr_inventory_by_id.get(key)
+            if hit and hit.get("has_file"):
+                return dict(hit)
+    return None
+
+
+def _media_already_requested(kind: str, tmdb_id=None, tvdb_id=None) -> dict | None:
+    with acquisition_requests_lock:
+        for existing in acquisition_requests:
+            if existing.get("kind") != kind or existing.get("status") == "rejected":
+                continue
+            same_tmdb = tmdb_id is not None and existing.get("tmdb_id") == tmdb_id
+            same_tvdb = tvdb_id is not None and existing.get("tvdb_id") == tvdb_id
+            if same_tmdb or same_tvdb:
+                return _public_acquisition_request(existing)
+    return None
+
+
+def _arr_lookup_poster_url(base: str, item: dict) -> str | None:
+    images = item.get("images") or []
+    poster = next((i for i in images if i.get("coverType") == "poster"), None)
+    if not poster and images:
+        poster = images[0]
+    if not poster:
+        return None
+    remote = str(poster.get("remoteUrl") or "").strip()
+    if remote:
+        return remote[:500]
+    local = str(poster.get("url") or "").strip()
+    if not local:
+        return None
+    url = local if local.startswith("http") else f"{base}{local}"
+    return url[:500]
+
+
+def _arr_lookup_result(kind: str, base: str, item: dict) -> dict | None:
+    title = re.sub(r"\s+", " ", str(item.get("title") or "").strip())[:160]
+    if not title:
+        return None
+    tmdb_id = item.get("tmdbId")
+    tvdb_id = item.get("tvdbId")
+    try:
+        tmdb_id = int(tmdb_id) if tmdb_id is not None else None
+    except (TypeError, ValueError):
+        tmdb_id = None
+    try:
+        tvdb_id = int(tvdb_id) if tvdb_id is not None else None
+    except (TypeError, ValueError):
+        tvdb_id = None
+    if tmdb_id is None and tvdb_id is None:
+        return None
+    try:
+        year = int(item.get("year")) if item.get("year") is not None else None
+    except (TypeError, ValueError):
+        year = None
+    already_have = _media_already_have(kind, tmdb_id, tvdb_id)
+    already_requested = _media_already_requested(kind, tmdb_id, tvdb_id)
+    seasons = None
+    if kind == "series" and isinstance(item.get("seasons"), list):
+        seasons_set = set()
+        for s in item.get("seasons"):
+            if not isinstance(s, dict) or s.get("seasonNumber") is None:
+                continue
+            try:
+                seasons_set.add(int(s.get("seasonNumber")))
+            except (TypeError, ValueError):
+                pass
+        seasons = sorted(seasons_set)
+    return {
+        "kind": kind,
+        "title": title,
+        "year": year,
+        "tmdb_id": tmdb_id,
+        "tvdb_id": tvdb_id,
+        "overview": str(item.get("overview") or "").strip()[:700] or None,
+        "poster_url": _arr_lookup_poster_url(base, item),
+        "seasons": seasons,
+        "already_have": bool(already_have),
+        "already_requested": bool(already_requested),
+        "existing": already_have,
+        "request": already_requested,
+    }
+
+
+@app.route("/api/media/search", methods=["GET"])
+def api_media_search():
+    """Read-only Radarr/Sonarr lookup for acquire-this-media requests.
+    Missing arr config degrades to an empty result set plus source errors; the
+    library page stays usable even while arr is down."""
+    q = re.sub(r"\s+", " ", (request.args.get("q") or "").strip())[:100]
+    if len(q) < 2:
+        return jsonify({"results": [], "errors": []})
+    sources = [
+        ("movie", RADARR_URL, RADARR_CONFIG, "/api/v3/movie/lookup"),
+        ("series", SONARR_URL, SONARR_CONFIG, "/api/v3/series/lookup"),
+    ]
+    results: list[dict] = []
+    errors: list[dict] = []
+    seen: set[tuple[str, str, int]] = set()
+    for kind, base, cfg, endpoint in sources:
+        try:
+            items = _arr_get_json(base, cfg, endpoint, {"term": q})
+            if not isinstance(items, list):
+                items = []
+        except Exception as e:
+            errors.append({"kind": kind, "error": str(e)})
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            row = _arr_lookup_result(kind, base, item)
+            if not row:
+                continue
+            if row.get("tmdb_id") is not None:
+                dedupe = (kind, "tmdb", row["tmdb_id"])
+            else:
+                dedupe = (kind, "tvdb", row["tvdb_id"])
+            if dedupe in seen:
+                continue
+            seen.add(dedupe)
+            results.append(row)
+    return jsonify({"results": results[:40], "errors": errors})
+
+
 @app.route("/api/media/requests", methods=["GET"])
 def api_media_requests_mine():
     """Account holder's own acquire-this-media requests. This is separate from
@@ -5616,9 +5802,8 @@ def api_media_requests_mine():
 
 @app.route("/api/media/request", methods=["POST"])
 def api_media_request_create():
-    """Phase-1 media acquisition request creation: persist a user-attributed
-    pending row, but do not search or write to arr yet. Later phases feed this
-    from arr lookup results and turn admin approval into an arr add."""
+    """Persist a user-attributed acquisition request. Phase 2 feeds this from
+    arr lookup results; admin approval still does not write to arr yet."""
     user = _session_user()
     if not user:
         return jsonify({"error": "auth_required"}), 401
@@ -5643,6 +5828,9 @@ def api_media_request_create():
             return jsonify({"error": "tvdb_id must be numeric"}), 400
     if tmdb_id is None and tvdb_id is None:
         return jsonify({"error": "tmdb_id or tvdb_id required"}), 400
+    already_have = _media_already_have(kind, tmdb_id, tvdb_id)
+    if already_have:
+        return jsonify({"error": "already in library", "existing": already_have}), 409
     year = data.get("year")
     if year is not None:
         try:
@@ -5665,6 +5853,8 @@ def api_media_request_create():
     with acquisition_requests_lock:
         for existing in acquisition_requests:
             if existing.get("kind") != kind:
+                continue
+            if existing.get("status") == "rejected":
                 continue
             same_tmdb = tmdb_id is not None and existing.get("tmdb_id") == tmdb_id
             same_tvdb = tvdb_id is not None and existing.get("tvdb_id") == tvdb_id

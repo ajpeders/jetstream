@@ -145,6 +145,153 @@
     color: var(--js-faint, #667386); display: flex; align-items: center;
   }
 
+  /* ---- Acquisition requests ------------------------------------------ */
+  #request-section {
+    margin: 0.85rem clamp(0.8rem, 2vw, 1.25rem) 0.2rem;
+    border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(21, 29, 39, 0.96), rgba(13, 18, 25, 0.96));
+    overflow: hidden;
+  }
+  #request-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 0.75rem; padding: 0.8rem 0.9rem 0.65rem;
+  }
+  #request-head h2 {
+    margin: 0;
+    color: var(--js-text, #e7edf5);
+    font-size: 0.98rem; line-height: 1.2; font-weight: 800;
+  }
+  #request-head p {
+    margin: 0.18rem 0 0;
+    color: var(--js-faint, #667386);
+    font-size: 0.74rem; line-height: 1.35;
+  }
+  #request-toggle {
+    flex-shrink: 0;
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 999px;
+    background: rgba(56, 189, 248, 0.13);
+    color: var(--js-accent-text, #7dd3fc);
+    cursor: pointer; font-family: inherit;
+    font-size: 0.78rem; font-weight: 800;
+    min-height: 40px; padding: 0.32rem 0.82rem;
+  }
+  #request-body {
+    border-top: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    padding: 0.75rem 0.9rem 0.9rem;
+  }
+  #request-body[hidden] { display: none; }
+  #request-search-form {
+    display: flex; gap: 0.5rem;
+  }
+  #request-query {
+    flex: 1; min-width: 0; min-height: 42px;
+    background: #0d131b;
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 8px;
+    color: var(--js-text, #e7edf5);
+    font-family: inherit; font-size: 0.9rem;
+    padding: 0.45rem 0.7rem;
+  }
+  #request-query:focus {
+    outline: none;
+    border-color: rgba(56, 189, 248, 0.72);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+  }
+  #request-search-btn {
+    flex-shrink: 0; min-height: 42px;
+    background: var(--js-accent, #38bdf8);
+    border: none; border-radius: 8px;
+    color: #03121c; cursor: pointer;
+    font-family: inherit; font-size: 0.84rem; font-weight: 850;
+    padding: 0.4rem 0.9rem;
+  }
+  #request-search-btn:disabled { cursor: default; opacity: 0.62; }
+  #request-status {
+    display: flex; flex-wrap: wrap; gap: 0.42rem;
+    margin: 0.65rem 0 0; min-height: 0;
+  }
+  #request-status:empty { display: none; }
+  .request-chip {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    max-width: 100%;
+    border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    border-radius: 999px;
+    color: var(--js-muted, #9aa6b5);
+    background: rgba(8, 13, 20, 0.42);
+    font-size: 0.72rem; line-height: 1.2;
+    padding: 0.28rem 0.55rem;
+  }
+  .request-chip strong {
+    color: var(--js-text, #e7edf5);
+    font-weight: 750; max-width: 13rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .request-chip.pending { border-color: rgba(232, 185, 108, 0.34); color: #e8b96c; }
+  .request-chip.approved { border-color: rgba(143, 204, 159, 0.34); color: #8fcc9f; }
+  .request-chip.rejected { border-color: rgba(231, 160, 160, 0.34); color: #e7a0a0; }
+  #request-results {
+    list-style: none; margin: 0.75rem 0 0; padding: 0;
+    display: grid; gap: 0.62rem;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  }
+  #request-results li {
+    display: grid; grid-template-columns: 74px minmax(0, 1fr);
+    gap: 0.7rem;
+    border: 1px solid var(--js-line, rgba(148, 163, 184, 0.18));
+    border-radius: 8px;
+    background: rgba(8, 13, 20, 0.5);
+    padding: 0.5rem;
+    min-width: 0;
+  }
+  #request-results .req-poster {
+    aspect-ratio: 2 / 3; width: 74px;
+    border-radius: 6px; overflow: hidden;
+    background: #111820;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    color: var(--js-faint, #667386);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.68rem; font-weight: 850; text-transform: uppercase;
+  }
+  #request-results .req-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #request-results .req-main { min-width: 0; display: grid; gap: 0.35rem; align-content: start; }
+  #request-results .req-title {
+    color: var(--js-text, #e7edf5);
+    font-size: 0.9rem; line-height: 1.25; font-weight: 800;
+    overflow-wrap: anywhere;
+  }
+  #request-results .req-meta {
+    color: var(--js-faint, #667386);
+    font-size: 0.72rem; line-height: 1.25;
+  }
+  #request-results .req-overview {
+    color: var(--js-muted, #9aa6b5);
+    display: -webkit-box; font-size: 0.75rem; line-height: 1.35;
+    overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  }
+  #request-results .req-action {
+    justify-self: start;
+    border: 1px solid var(--js-line-strong, rgba(148, 163, 184, 0.28));
+    border-radius: 999px;
+    background: rgba(56, 189, 248, 0.13);
+    color: var(--js-accent-text, #7dd3fc);
+    cursor: pointer; font-family: inherit;
+    font-size: 0.75rem; font-weight: 850;
+    min-height: 36px; padding: 0.25rem 0.72rem;
+  }
+  #request-results .req-action:disabled {
+    color: var(--js-faint, #667386);
+    background: rgba(148, 163, 184, 0.08);
+    cursor: default;
+  }
+  #request-results .empty {
+    grid-column: 1 / -1;
+    display: flex; align-items: center;
+    min-height: 3rem; color: var(--js-faint, #667386);
+    background: transparent; border: none; padding: 0.1rem;
+  }
+
   /* ---- Continue watching ---------------------------------------------- */
   /* Horizontally scrolling strip so narrow phones scroll instead of
      squashing the poster tiles down to unreadable slivers. */
@@ -385,6 +532,17 @@
     header h1 { flex: 1; }
     #who { display: none; }
     #search { order: 5; flex-basis: 100%; }
+    #request-section { margin-top: 0.65rem; }
+    #request-head { align-items: flex-start; padding: 0.72rem 0.8rem 0.62rem; }
+    #request-head p { max-width: 14rem; }
+    #request-toggle { padding-inline: 0.7rem; }
+    #request-body { padding: 0.65rem 0.72rem 0.75rem; }
+    #request-search-form { gap: 0.42rem; }
+    #request-search-btn { padding-inline: 0.72rem; }
+    #request-results { grid-template-columns: 1fr; }
+    #request-results li { grid-template-columns: 62px minmax(0, 1fr); gap: 0.6rem; }
+    #request-results .req-poster { width: 62px; }
+    .request-chip strong { max-width: 9rem; }
     #results {
       grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
       gap: 0.5rem; padding: 0.6rem 0.85rem 0.85rem;
@@ -411,6 +569,23 @@
 </header>
 
 <section id="library-view">
+  <section id="request-section" aria-labelledby="request-heading">
+    <div id="request-head">
+      <div>
+        <h2 id="request-heading">Request something new</h2>
+        <p>Search movies and shows that are not in your library yet.</p>
+      </div>
+      <button id="request-toggle" type="button" aria-expanded="false">Open</button>
+    </div>
+    <div id="request-body" hidden>
+      <form id="request-search-form">
+        <input id="request-query" type="search" placeholder="Movie or show title…" autocomplete="off">
+        <button id="request-search-btn" type="submit">Search</button>
+      </form>
+      <div id="request-status" aria-live="polite"></div>
+      <ul id="request-results"></ul>
+    </div>
+  </section>
   <section id="continue-section" hidden aria-labelledby="continue-heading">
     <h2 id="continue-heading">Continue watching</h2>
     <ul id="continue-list"></ul>
@@ -729,6 +904,201 @@ async function doSearch(q) {
     if (seq === browseSeq) setResults(emptyRow("Search failed."));
   }
 }
+
+// ---- Request something new --------------------------------------------
+const requestToggle = document.getElementById("request-toggle");
+const requestBody = document.getElementById("request-body");
+const requestForm = document.getElementById("request-search-form");
+const requestQuery = document.getElementById("request-query");
+const requestSearchBtn = document.getElementById("request-search-btn");
+const requestResults = document.getElementById("request-results");
+const requestStatus = document.getElementById("request-status");
+let requestSeq = 0;
+
+function requestKindLabel(kind) {
+  return kind === "series" ? "Series" : "Movie";
+}
+
+function statusLabel(status) {
+  if (status === "approved") return "approved";
+  if (status === "rejected") return "rejected";
+  if (status === "downloading") return "downloading";
+  if (status === "available") return "available";
+  if (status === "failed") return "failed";
+  return "pending";
+}
+
+function setRequestRows(...nodes) {
+  requestResults.replaceChildren(...nodes);
+}
+
+function renderRequestChip(item) {
+  const chip = document.createElement("span");
+  const status = statusLabel(item.status);
+  chip.className = "request-chip " + status;
+  const strong = document.createElement("strong");
+  strong.textContent = item.title || "(untitled)";
+  const meta = document.createElement("span");
+  meta.textContent = status;
+  chip.appendChild(strong);
+  chip.appendChild(meta);
+  return chip;
+}
+
+async function loadMediaRequests() {
+  try {
+    const r = await fetch("/api/media/requests");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    const items = Array.isArray(j.requests) ? j.requests.slice(0, 5) : [];
+    requestStatus.replaceChildren(...items.map(renderRequestChip));
+  } catch {
+    requestStatus.replaceChildren();
+  }
+}
+
+function requestPayload(item) {
+  return {
+    kind: item.kind,
+    title: item.title,
+    year: item.year,
+    tmdb_id: item.tmdb_id,
+    tvdb_id: item.tvdb_id,
+    poster_url: item.poster_url,
+    seasons: item.seasons,
+  };
+}
+
+async function submitMediaRequest(item, button) {
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = "Requesting…";
+  try {
+    const r = await fetch("/api/media/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestPayload(item)),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) { location.href = "/login?next=%2Flibrary"; return; }
+    if (r.status === 409) {
+      button.textContent = j.error === "already in library" ? "In library" : "Requested";
+      await loadMediaRequests();
+      return;
+    }
+    if (!r.ok) throw new Error(j.error || "request failed");
+    button.textContent = "Requested";
+    toast("Request sent.");
+    await loadMediaRequests();
+  } catch {
+    button.disabled = false;
+    button.textContent = original;
+    toast("Couldn't send that request — try again.");
+  }
+}
+
+function renderMediaSearchResult(item) {
+  const li = document.createElement("li");
+  const poster = document.createElement("span");
+  poster.className = "req-poster";
+  poster.textContent = requestKindLabel(item.kind);
+  if (item.poster_url) {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = "";
+    img.addEventListener("load", () => poster.replaceChildren(img));
+    img.addEventListener("error", () => {
+      poster.textContent = requestKindLabel(item.kind);
+    });
+    img.src = item.poster_url;
+  }
+
+  const main = document.createElement("span");
+  main.className = "req-main";
+  const title = document.createElement("span");
+  title.className = "req-title";
+  title.textContent = item.title || "(untitled)";
+  const meta = document.createElement("span");
+  meta.className = "req-meta";
+  const year = item.year ? " • " + item.year : "";
+  meta.textContent = requestKindLabel(item.kind) + year;
+  const overview = document.createElement("span");
+  overview.className = "req-overview";
+  overview.textContent = item.overview || "No overview available.";
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = "req-action";
+  if (item.already_have) {
+    action.textContent = "In library";
+    action.disabled = true;
+  } else if (item.already_requested) {
+    action.textContent = "Requested";
+    action.disabled = true;
+  } else {
+    action.textContent = "Request";
+    action.addEventListener("click", () => submitMediaRequest(item, action));
+  }
+  main.appendChild(title);
+  main.appendChild(meta);
+  main.appendChild(overview);
+  main.appendChild(action);
+  li.appendChild(poster);
+  li.appendChild(main);
+  return li;
+}
+
+async function searchMediaRequests(q) {
+  const seq = ++requestSeq;
+  requestSearchBtn.disabled = true;
+  requestSearchBtn.textContent = "Searching…";
+  setRequestRows(emptyRow("Searching Radarr and Sonarr…"));
+  try {
+    const r = await fetch("/api/media/search?q=" + encodeURIComponent(q));
+    if (r.status === 401) { location.href = "/login?next=%2Flibrary"; return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (seq !== requestSeq) return;
+    const list = Array.isArray(j.results) ? j.results : [];
+    if (!list.length) {
+      const msg = (j.errors || []).length
+        ? "Search is unavailable right now."
+        : `No request matches for "${q}".`;
+      setRequestRows(emptyRow(msg));
+      return;
+    }
+    setRequestRows(...list.map(renderMediaSearchResult));
+  } catch {
+    if (seq === requestSeq) setRequestRows(emptyRow("Search failed."));
+  } finally {
+    if (seq === requestSeq) {
+      requestSearchBtn.disabled = false;
+      requestSearchBtn.textContent = "Search";
+    }
+  }
+}
+
+requestToggle.addEventListener("click", () => {
+  const open = requestBody.hidden;
+  requestBody.hidden = !open;
+  requestToggle.textContent = open ? "Close" : "Open";
+  requestToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) {
+    loadMediaRequests();
+    setTimeout(() => requestQuery.focus(), 0);
+  }
+});
+
+requestForm.addEventListener("submit", ev => {
+  ev.preventDefault();
+  const q = requestQuery.value.trim();
+  if (q.length < 2) {
+    setRequestRows(emptyRow("Type at least two characters."));
+    return;
+  }
+  searchMediaRequests(q);
+});
+
+loadMediaRequests();
 
 let searchDebounce = null;
 searchInput.addEventListener("input", () => {

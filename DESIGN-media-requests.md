@@ -1,6 +1,6 @@
 # Design — media requests (replacing Overseerr)
 
-Status: **phase 1 shipped.** Decided scope: full Overseerr replacement; requesting requires a **user account** (`js_user`), not an invite token. Current main has the separate persisted store, account/admin endpoints, and host admin panel skeleton. Discovery/search and arr writes are still later phases.
+Status: **phase 2 shipped.** Decided scope: full Overseerr replacement; requesting requires a **user account** (`js_user`), not an invite token. Current main has the separate persisted store, account/admin endpoints, host admin panel skeleton, and read-only Radarr/Sonarr lookup search in `/library`. Arr writes are still a later phase.
 
 ## The core distinction
 
@@ -122,7 +122,7 @@ All gated to account holders by `_gate_viewer_routes` (add `/api/media/` to the 
 Each phase is independently shippable and useful on its own:
 
 1. **Store + admin panel skeleton.** **Shipped.** Data model, lock, persisted `/data/media_requests.json`, `GET/POST/DELETE` for requests, admin list/approve/reject that only changes *status* — no arr writes at all. Fully testable with zero risk to arr.
-2. **arr lookup search + request flow.** `/api/media/search`, the `/library` UI, `already_have` annotation from the extended inventory index. Still no writes.
+2. **arr lookup search + request flow.** **Shipped.** `/api/media/search` merges Radarr movie lookup and Sonarr series lookup, annotates `already_have` from the extended inventory index and `already_requested` from `/data/media_requests.json`, and `/library` now has a mobile-friendly "Request something new" panel. Still no writes.
 3. **arr writes.** `_arr_post()`, approve actually adds to Radarr/Sonarr, quality-profile/root-folder pickers, idempotency.
 4. **Availability tracking.** Extended inventory index, conditional queue polling, `downloading → available`, "ready to watch" notice that deep-links into `/library`.
 5. **TMDB discovery.** Trending/popular/recommendations tabs; hidden entirely when no key is configured.
