@@ -3981,6 +3981,18 @@ threading.Thread(target=_watcher, daemon=True, name="jetstream-watcher").start()
 threading.Thread(target=_arr_refresh_loop, daemon=True, name="arr-refresh").start()
 threading.Thread(target=_content_judge_loop, daemon=True, name="content-judge").start()
 
+# The /admin gate below deliberately fails open when this is unset (so the code
+# could deploy before the Traefik header existed) — which makes silence the
+# dangerous failure mode: a fresh deploy from .env.example without it re-opens
+# the exact web-network bypass used to forge accounts on 2026-08-03. Be loud.
+if not os.environ.get("ADMIN_PROXY_SECRET"):
+    print(
+        "[security] ADMIN_PROXY_SECRET is UNSET — the /admin proxy-header gate "
+        "is DISABLED and any container on the shared docker network can call "
+        "/admin/api/* directly. Set it in .env and inject the matching "
+        "X-Admin-Proxy customRequestHeaders on the Traefik admin router.",
+        file=sys.stderr, flush=True)
+
 
 @app.before_request
 def _gate_viewer_routes():
@@ -4261,8 +4273,10 @@ def api_auth_register():
             "disabled": False,
             # Provenance: which invite minted this account. Lets the host see
             # who vouched for whom, and find every account from a leaked code.
+            # Deliberately the label, NOT the code itself: the code stays a
+            # live credential for further redemptions, and users.json
+            # shouldn't hold a second plaintext copy of it.
             "invited_by": _token_label(code),
-            "invite_token": code,
         }
         users.append(rec)
         _save_users()

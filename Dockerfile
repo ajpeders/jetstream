@@ -32,7 +32,10 @@ RUN apt-get update \
 
 ENV LIBVA_DRIVER_NAME=iHD
 
-RUN pip install --no-cache-dir flask==3.0.3 yt-dlp gunicorn==23.0.0
+# Everything pinned (werkzeug explicitly — it floats behind the flask pin
+# otherwise) so image rebuilds are reproducible; a dep bump is a reviewable
+# diff here, not whatever upstream shipped that day.
+RUN pip install --no-cache-dir flask==3.0.3 werkzeug==3.1.8 yt-dlp==2026.7.4 gunicorn==23.0.0
 
 # LLM provider seam for the auto_fill content gate. Separate layer from the
 # pinned core deps so a companion change rebuilds only this step, and because

@@ -12,13 +12,35 @@ jobs:
       # Backend: byte-compile every python file — catches syntax errors and
       # obvious breakage without needing the full ffmpeg/nvidia runtime.
       - name: python compile check
-        run: python3 -m compileall -q app.py
+        run: python3 -m compileall -q app.py bin tests
       # Frontend: the Svelte/Vite bundle must build; static/build is what the
       # container serves, so a broken build = broken admin/chat UI.
       - name: npm build
         run: |
           npm ci
           npm run build
+
+  # Lint + auth smoke tests in the runtime's python (the checks job runs in
+  # node:20, whose python3 is 3.11 — fine for compileall, wrong for testing).
+  # python:3.12 has no node, so actions/checkout can't run in it — manual
+  # token clone instead (same reasoning as the kaniko job's git context).
+  tests:
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.12-bookworm
+    steps:
+      - name: checkout (manual — no node in this container)
+        run: |
+          git clone -q "http://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@forgejo:3000/${{ github.repository }}.git" src
+          cd src && git checkout -q "${{ github.sha }}"
+      - name: ruff + smoke tests
+        run: |
+          cd src
+          pip install -q flask==3.0.3 werkzeug==3.1.8 pytest ruff
+          # E9/F63/F7/F82: syntax errors + undefined names — real-bug rules
+          # only, so the 6.8k-line app.py doesn't need a style pass first.
+          ruff check --select E9,F63,F7,F82 .
+          pytest -q tests/
 
   # The checks above run against a full checkout, so they cannot see Dockerfile
   # faults — a missing apt package, or a COPY that doesn't bring in a file the

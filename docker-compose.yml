@@ -99,9 +99,12 @@ services:
     # passthrough (gpus: all) is opt-in via docker-compose.gpu.yml.
     devices:
       - /dev/dri:/dev/dri
+    # Host GIDs owning /dev/dri render nodes (VAAPI). These are THIS host's
+    # render/video groups — check `getent group render video` and override in
+    # .env if yours differ, or VAAPI fails silently with EPERM on the device.
     group_add:
-      - "988"
-      - "984"
+      - "${JETSTREAM_RENDER_GID:-988}"
+      - "${JETSTREAM_VIDEO_GID:-984}"
     networks:
       - web
       - jetstream-internal
