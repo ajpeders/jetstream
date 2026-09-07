@@ -430,10 +430,17 @@ chat_rate: dict[str, list[float]] = {}
 # in-memory; mutes are short-term moderation, not durable bans).
 chat_mutes: dict[str, float] = {}
 # Ids the admin deleted from `chat_messages`. Surfaces via /chat/recent so
-# clients that already saw the message hide it on next poll. Kept small by
-# trimming anything older than the oldest live ring entry (clients can't
-# show ids outside that window anyway).
+# clients that already saw the message hide it on next poll.
+#
+# Bounded against `chat_evicted_max_id` below, NOT against the oldest live
+# entry: a deleted id is usually *lower* than the oldest survivor (deleting the
+# oldest message is the common case), so an oldest-live floor pruned each id in
+# the same request that created it and the deletion never reached anyone.
 chat_deleted_ids: set[int] = set()
+# Highest id the ring has pushed out via maxlen. Past this point a message is
+# gone from every catch-up response, so no client can still be painting it and
+# its deletion no longer needs announcing.
+chat_evicted_max_id = 0
 
 # Emoji reactions — ephemeral floaty taps shown over everyone's video. Same
 # ring-buffer + poll shape as chat, but /reactions/recent only returns ones
@@ -4220,10 +4227,13 @@ def _gate_viewer_routes():
     if p == "/api/now-playing":
         return None  # title-only external display feed — deliberately tokenless
     # v2 login surface — reachable logged-out by definition. The theme CSS is
-    # exempt too (login.html links it); nothing else static is opened up —
-    # the /build/ bundles stay token-gated so a private instance doesn't hand
-    # its full client-side route map to anonymous scanners.
+    # exempt too (login.html links it), as are the two page stylesheets for the
+    # logged-out surfaces — /login and the home.html front door served as the
+    # 401 body. Nothing else static is opened up — the /build/ bundles stay
+    # token-gated so a private instance doesn't hand its full client-side
+    # route map to anonymous scanners.
     if p in ("/login", "/api/auth/login", "/jetstream-theme.css",
+             "/css/login.css", "/css/home.css",
              # The home screen's two doors, both necessarily pre-auth:
              # redeem a friend code, or register with one.
              "/api/invite/redeem", "/api/auth/register"):
@@ -4706,13 +4716,13 @@ def api_chat_recent():
         since = 0
     with chat_lock:
         messages = [m for m in chat_messages if m["id"] > since]
-        # Trim deleted-ids to ids still potentially visible to any client:
-        # the live ring's id range. Anything older has been evicted and no
-        # poller will ever ask about it.
-        if chat_messages:
-            oldest = chat_messages[0]["id"]
+        # Trim deleted-ids to ones a client could still be showing. The floor
+        # is the eviction watermark, not the oldest live message: deleting the
+        # oldest message raises the oldest-live id past the id just deleted, so
+        # that floor discarded the announcement before any client polled for it.
+        if chat_evicted_max_id:
             chat_deleted_ids.intersection_update(
-                {i for i in chat_deleted_ids if i >= oldest}
+                {i for i in chat_deleted_ids if i > chat_evicted_max_id}
             )
         deleted = sorted(chat_deleted_ids)
         # Piggyback the chat_rate prune on the poll path: viewers hit this
@@ -4768,7 +4778,7 @@ def api_chat_send():
             del chat_mutes[sid]
     if not _chat_rate_check(_client_ip()):
         return jsonify({"error": "rate limited"}), 429
-    global chat_next_id
+    global chat_next_id, chat_evicted_max_id
     with chat_lock:
         msg = {
             "id": chat_next_id,
@@ -4778,6 +4788,10 @@ def api_chat_send():
             "text": text,
         }
         chat_next_id += 1
+        # deque.append silently drops the leftmost entry at maxlen; note the id
+        # on its way out so deleted-id bookkeeping knows what is unreachable.
+        if len(chat_messages) == CHAT_BUFFER_SIZE:
+            chat_evicted_max_id = max(chat_evicted_max_id, chat_messages[0]["id"])
         chat_messages.append(msg)
     return jsonify({"ok": True, "id": msg["id"]})
 
