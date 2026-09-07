@@ -473,8 +473,9 @@ body.admin-page #chat-panel {
 #media-requests-panel h2,
 #viewers-panel h2,
 #chat-header h2,
-#queue-head h2,
-#request-head h2 {
+#queue-head .qh-label,
+#reqlist-head .rh-label,
+#request-head .lh-label {
   color: var(--js-text) !important;
   font-size: 0.78rem !important;
   font-weight: 820 !important;
@@ -776,8 +777,10 @@ ul#list .card .queue-btn {
   border-bottom: 1px solid var(--js-line) !important;
 }
 
+/* The library header toggles the panel, so it must not advertise itself as
+   inert — it was `cursor: default` back when it was a non-interactive div. */
 #request-head {
-  cursor: default !important;
+  cursor: pointer !important;
 }
 
 #chat-messages,
@@ -1761,9 +1764,9 @@ body.admin-page #vod-panel {
 #users-panel h2,
 #vod-panel h2,
 #chat-header h2,
-#queue-head h2,
-#reqlist-head h2,
-#request-head h2,
+#queue-head .qh-label,
+#reqlist-head .rh-label,
+#request-head .lh-label,
 #reactions-head h2 {
   color: var(--js-text) !important;
   font-size: 0.76rem !important;
@@ -2250,9 +2253,9 @@ body.hub-page .choice .now strong {
     padding: 0.65rem 0.85rem !important;
   }
 
-  #queue-head h2,
-  #reqlist-head h2,
-  #request-head h2,
+  #queue-head .qh-label,
+  #reqlist-head .rh-label,
+  #request-head .lh-label,
   #reactions-head h2,
   #chat-header h2,
   body.admin-page h2 {
@@ -2562,4 +2565,33 @@ body.hub-page .choice .now strong {
   #request-results.library-grid {
     grid-template-columns: repeat(auto-fill, minmax(106px, 1fr)) !important;
   }
+}
+
+/* ---- Panel disclosure buttons -----------------------------------------
+   Every collapsible viewer panel header is a full-width disclosure button, so
+   each opts out of the global `button` chrome (pill background, rounded
+   border, centred inline-flex) and keeps reading as a panel header.
+
+   This MUST list every such header. The global rule sets
+   justify-content:center, so a header missing from here renders with its label
+   floated to the middle of the panel — which is exactly what happened to
+   #reqlist-head when it was ported and only #queue-head was listed. ---- */
+#queue-head,
+#reqlist-head,
+#request-head {
+  border: 0 !important;
+  border-bottom: 1px solid var(--js-line) !important;
+  border-radius: 0 !important;
+  display: flex !important;
+  font-weight: 500;
+  justify-content: flex-start !important;
+  min-height: 2.7rem;
+  text-align: left;
+  width: 100%;
+}
+#queue-head:hover:not(:disabled),
+#reqlist-head:hover:not(:disabled),
+#request-head:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(44, 43, 40, 0.96), rgba(31, 30, 28, 0.94)) !important;
+  border-color: var(--js-line) !important;
 }
