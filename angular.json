@@ -1,0 +1,87 @@
+{
+  "$schema": "./node_modules/@angular/build/src/builders/application/schema.json",
+  "version": 1,
+  "newProjectRoot": "src",
+  "projects": {
+    "admin": {
+      "projectType": "application",
+      "root": "src/admin-app",
+      "sourceRoot": "src/admin-app",
+      "prefix": "jet",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "src/admin-app/main.ts",
+            "tsConfig": "tsconfig.app.json",
+            "outputPath": {
+              "base": "static/build-admin",
+              "browser": ""
+            },
+            "index": false,
+            "polyfills": [],
+            "outputHashing": "none",
+            "sourceMap": false
+          },
+          "configurations": {
+            "production": {
+              "optimization": true,
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "400kB",
+                  "maximumError": "600kB"
+                }
+              ]
+            },
+            "development": {
+              "optimization": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        }
+      }
+    },
+    "viewer": {
+      "projectType": "application",
+      "root": "src/viewer-app",
+      "sourceRoot": "src/viewer-app",
+      "prefix": "jet",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "src/viewer-app/main.ts",
+            "tsConfig": "tsconfig.viewer.json",
+            "outputPath": {
+              "base": "static/build-viewer",
+              "browser": ""
+            },
+            "index": false,
+            "polyfills": [],
+            "outputHashing": "none",
+            "sourceMap": false
+          },
+          "configurations": {
+            "production": {
+              "optimization": true,
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "400kB",
+                  "maximumError": "600kB"
+                }
+              ]
+            },
+            "development": {
+              "optimization": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        }
+      }
+    }
+  }
+}

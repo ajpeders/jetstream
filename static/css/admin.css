@@ -1,0 +1,932 @@
+/* admin page styles — lifted out of admin.html's inline <style> block.
+   Linked from the page BEFORE /jetstream-theme.css, preserving the
+   original cascade order: the shared theme still overrides these. */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  background: #0a0a0a;
+  color: #e8e8e8;
+  min-height: 100vh;
+}
+header {
+  padding: 0.85rem 1.2rem;
+  background: #111;
+  border-bottom: 1px solid #1f1f1f;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+header h1 { margin: 0; font-size: 1rem; font-weight: 500; }
+/* Now-playing poster thumb. Mirrors viewer.html — hidden until a FILE
+   source resolves to an arr cover; URL/yt-dlp sources stay hidden. */
+#now-thumb {
+  flex-shrink: 0;
+  width: 30px; height: 45px;
+  background: #0a0a0a; border-radius: 3px; overflow: hidden;
+  display: none;
+}
+#now-thumb.show { display: block; }
+#now-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+#status {
+  flex: 1;
+  color: #888;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#status .live {
+  display: inline-block;
+  background: #c00;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  margin-right: 0.5rem;
+  letter-spacing: 0.05em;
+}
+button {
+  background: #2a2a2a;
+  color: #eee;
+  border: 1px solid #333;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+button:hover { background: #333; }
+button.danger { background: #4a1818; border-color: #6a2424; }
+button.danger:hover { background: #5a1c1c; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+/* #player is now control-only — broadcast bar + seek-bar live inside.
+   No inline video preview. */
+#player { background: #0a0a0a; width: 100%; }
+#broadcast-bar #pause-btn {
+  padding: 0.3rem 0.7rem; font-size: 0.85rem;
+  min-width: 5em;
+}
+#friends-panel {
+  padding: 1rem 1.2rem;
+  background: #0e0e0e;
+  border-bottom: 1px solid #1f1f1f;
+}
+#friends-panel h2 {
+  margin: 0 0 0.7rem; font-size: 0.9rem; font-weight: 500; color: #ccc;
+  letter-spacing: 0.02em;
+}
+#friends-panel form { display: flex; gap: 0.4rem; margin-bottom: 0.6rem; }
+#friends-panel input[type="text"] {
+  flex: 1; max-width: 18em;
+  background: #1a1a1a; color: #eee;
+  border: 1px solid #333; border-radius: 3px;
+  padding: 0.35rem 0.6rem; font-size: 0.85rem; font-family: inherit;
+}
+#friends-panel ul { list-style: none; padding: 0; margin: 0; }
+#friends-panel li {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.4rem 0; border-top: 1px solid #1a1a1a;
+  font-size: 0.85rem;
+}
+#friends-panel li:first-child { border-top: none; }
+#friends-panel .label { flex: 1; color: #ccc; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#friends-panel .url { color: #555; font-family: ui-monospace, monospace; font-size: 0.75rem; max-width: 22em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#friends-panel button { padding: 0.25rem 0.6rem; font-size: 0.75rem; }
+#url-panel {
+  padding: 0.85rem 1.2rem;
+  background: #0e0e0e;
+  border-bottom: 1px solid #1f1f1f;
+}
+#url-panel h2 {
+  margin: 0 0 0.6rem; font-size: 0.9rem; font-weight: 500; color: #ccc;
+  letter-spacing: 0.02em;
+}
+#url-panel form { display: flex; gap: 0.4rem; }
+#url-panel input[type="url"] {
+  flex: 1;
+  background: #1a1a1a; color: #eee;
+  border: 1px solid #333; border-radius: 3px;
+  padding: 0.4rem 0.6rem; font-size: 0.85rem; font-family: inherit;
+}
+#url-panel .hint { color: #555; font-size: 0.75rem; margin-top: 0.4rem; }
+#stream-settings-panel {
+  padding: 0.85rem 1.2rem;
+  background: #0e0e0e;
+  border-bottom: 1px solid #1f1f1f;
+}
+#stream-settings-panel .head {
+  display: flex; align-items: center; gap: 0.8rem;
+}
+#stream-settings-panel h2 {
+  margin: 0; font-size: 0.9rem; font-weight: 500; color: #ccc;
+  letter-spacing: 0.02em;
+}
+#stream-settings-panel select { min-width: 13rem; }
+#stream-settings-panel .hint { color: #555; font-size: 0.75rem; margin-top: 0.4rem; }
+#queue-panel {
+  padding: 0.85rem 1.2rem;
+  background: #0e0e0e;
+  border-bottom: 1px solid #1f1f1f;
+}
+#queue-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+#queue-panel h2 {
+  margin: 0; font-size: 0.9rem; font-weight: 500; color: #ccc;
+  letter-spacing: 0.02em; flex: 1;
+}
+#queue-panel .badge {
+  background: #1a1a1a; color: #888;
+  border: 1px solid #2a2a2a; border-radius: 3px;
+  padding: 0.05rem 0.4rem; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+}
+#queue-panel ul { list-style: none; padding: 0; margin: 0; }
+#queue-panel li {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.4rem 0; border-top: 1px solid #1a1a1a;
+  font-size: 0.85rem;
+  /* Drag-and-drop visual cues */
+  cursor: grab;
+  transition: background 0.1s, opacity 0.1s;
+}
+#queue-panel li:active { cursor: grabbing; }
+#queue-panel li:first-child { border-top: none; }
+/* Source-being-dragged: dim it slightly so the user can track what's moving. */
+#queue-panel li.dragging { opacity: 0.35; }
+/* Drop target line — a thin highlighted top border when an item is hovering. */
+#queue-panel li.drag-over { border-top: 2px solid #dfdedd; padding-top: calc(0.4rem - 1px); }
+#queue-panel .pos { color: #555; font-variant-numeric: tabular-nums; min-width: 1.5em; text-align: right; }
+/* Mini poster on each queue row — only the FILE rows actually paint one
+   (URL/yt-dlp sources don't map to arr inventory). Keep slim (32×48) so a
+   long queue stays scannable. */
+#queue-panel .qthumb {
+  flex-shrink: 0;
+  width: 30px; height: 45px;
+  background: #0e0e0e; border-radius: 3px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  color: #2a2a2a; font-size: 0.85rem;
+}
+#queue-panel .qthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
+#queue-panel .qthumb img.loaded { opacity: 1; }
+/* Source-type chip. Color-coded per provider (file vs YouTube vs other URL)
+   so admin can scan a long queue and see what's coming from where. */
+#queue-panel .qchip {
+  flex-shrink: 0; font-size: 0.65rem; letter-spacing: 0.04em; font-weight: 600;
+  padding: 0.08rem 0.4rem; border-radius: 3px;
+  background: #383632; color: #dfdedd; border: 1px solid #494641;
+}
+#queue-panel .qchip.yt { background: #3a1818; color: #ff7676; border-color: #5a2424; }
+#queue-panel .qchip.url { background: #2a2030; color: #c693e8; border-color: #43403b; }
+/* CC badge — flagged on items whose subtitle_idx is set, so admin can see
+   at a glance which queue entries will have burned-in subs. */
+#queue-panel .qcc {
+  flex-shrink: 0; font-size: 0.6rem; letter-spacing: 0.05em; font-weight: 700;
+  padding: 0.05rem 0.35rem; border-radius: 2px;
+  background: #1f3326; color: #7dcc99; border: 1px solid #2c4a37;
+}
+#queue-panel .qtitle { flex: 1; color: #ccc; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Duration badge — right-aligned, tabular nums so 1:23:45 doesn't wobble. */
+#queue-panel .qdur {
+  color: #777; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+  flex-shrink: 0; min-width: 3em; text-align: right;
+}
+#queue-panel .qdur.live { color: #c33; font-weight: 600; }
+#queue-panel button {
+  padding: 0.2rem 0.5rem; font-size: 0.75rem;
+}
+#queue-panel .empty-q { color: #555; padding: 0.7rem 0; font-size: 0.85rem; line-height: 1.4; }
+/* Requests panel — pending viewer "request to queue" suggestions. Host-only
+   (hidden on /controls); same chrome as the queue panel. */
+#requests-panel {
+  padding: 0.85rem 1.2rem;
+  background: #0e0e0e;
+  border-bottom: 1px solid #1f1f1f;
+}
+#requests-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+#requests-panel h2 {
+  margin: 0; font-size: 0.9rem; font-weight: 500; color: #ccc;
+  letter-spacing: 0.02em; flex: 1;
+}
+#requests-panel .badge {
+  background: #1a1a1a; color: #888;
+  border: 1px solid #2a2a2a; border-radius: 3px;
+  padding: 0.05rem 0.4rem; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+}
+/* Highlight the badge when something's actually waiting. */
+#requests-panel .badge.waiting { background: #332615; color: #e8b96c; border-color: #5a4422; }
+#requests-panel ul { list-style: none; padding: 0; margin: 0; }
+#requests-panel li {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.4rem 0; border-top: 1px solid #1a1a1a;
+  font-size: 0.85rem;
+}
+#requests-panel li:first-child { border-top: none; }
+#requests-panel .rwho { color: #cda; flex-shrink: 0; max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#requests-panel .rthumb {
+  flex-shrink: 0; width: 28px; height: 42px;
+  background: #0e0e0e; border-radius: 3px; overflow: hidden;
+}
+#requests-panel .rthumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.18s ease; }
+#requests-panel .rthumb img.loaded { opacity: 1; }
+#requests-panel .rtitle { flex: 1; color: #ccc; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#requests-panel button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
+#requests-panel button.approve { background: #1f3326; color: #7dcc99; border-color: #2c4a37; }
+#requests-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
+/* Reports panel — viewer-filed issue reports. Host-only (hidden on
+   /controls); same chrome as requests, but rows carry more context. */
+#reports-panel {
+  margin-top: 1rem; background: #161616; border: 1px solid #262626;
+  border-radius: 6px; padding: 0.8rem 1rem;
+}
+#reports-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+#reports-panel h2 { margin: 0; font-size: 0.95rem; color: #ddd; }
+#reports-panel .badge {
+  font-size: 0.7rem; background: #222; color: #888; border: 1px solid #333;
+  border-radius: 10px; padding: 0.05rem 0.5rem;
+}
+#reports-panel .badge.waiting { background: #2a1f30; color: #c9a0d9; border-color: #4a3556; }
+#reports-panel ul { list-style: none; padding: 0; margin: 0; }
+#reports-panel li {
+  display: flex; flex-direction: column; gap: 0.3rem;
+  padding: 0.6rem 0; border-top: 1px solid #1f1f1f; font-size: 0.85rem;
+}
+#reports-panel li:first-child { border-top: none; }
+#reports-panel li.handled { opacity: 0.5; }
+#reports-panel .rtop { display: flex; align-items: center; gap: 0.5rem; }
+#reports-panel .rstatus {
+  font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.03em;
+  border-radius: 10px; padding: 0.05rem 0.45rem; flex-shrink: 0;
+}
+#reports-panel .rstatus.new { background: #2a1f30; color: #d9b8e6; border: 1px solid #4a3556; }
+#reports-panel .rstatus.handled { background: #1f2a20; color: #8fcc9f; border: 1px solid #2c4a37; }
+#reports-panel .rwho { color: #cda; flex-shrink: 0; max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#reports-panel .rtime { color: #666; font-size: 0.75rem; margin-left: auto; flex-shrink: 0; }
+#reports-panel .rmsg { color: #e0e0e0; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+#reports-panel .rmsg.none { color: #666; font-style: italic; }
+#reports-panel .rmeta { color: #888; font-size: 0.75rem; line-height: 1.5; }
+#reports-panel .rmeta code { color: #9ab; font-family: ui-monospace, monospace; }
+#reports-panel .rmeta .k { color: #666; }
+#reports-panel .ractions { display: flex; gap: 0.4rem; margin-top: 0.15rem; }
+#reports-panel .ractions button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
+#reports-panel .ractions button.handle { background: #1f2a20; color: #8fcc9f; border-color: #2c4a37; }
+#reports-panel .rtriage {
+  margin-top: 0.1rem; padding: 0.4rem 0.6rem; font-size: 0.78rem; line-height: 1.5;
+  color: #c7b3d6; background: #201f1c; border-left: 2px solid #4a3556; border-radius: 0 4px 4px 0;
+}
+#reports-panel .rtriage strong { color: #e0cdee; }
+#reports-panel .rtriage code { color: #9ab; font-family: ui-monospace, monospace; }
+#reports-panel .rtriage .rtkey { color: #7a6a88; }
+#reports-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
+/* Media acquisition requests — the Overseerr replacement skeleton. Host-only;
+   this is separate from the live "request to queue" panel above. */
+#media-requests-panel {
+  margin-top: 1rem; background: #161616; border: 1px solid #262626;
+  border-radius: 6px; padding: 0.8rem 1rem;
+}
+#media-requests-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+#media-requests-panel h2 { margin: 0; font-size: 0.95rem; color: #ddd; }
+#media-requests-panel .badge {
+  font-size: 0.7rem; background: #222; color: #888; border: 1px solid #333;
+  border-radius: 10px; padding: 0.05rem 0.5rem;
+}
+#media-requests-panel .badge.waiting { background: #332615; color: #e8b96c; border-color: #5a4422; }
+#media-requests-panel ul { list-style: none; padding: 0; margin: 0; }
+#media-requests-panel li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.28rem 0.65rem; padding: 0.62rem 0;
+  border-top: 1px solid #1f1f1f; font-size: 0.85rem;
+}
+#media-requests-panel li:first-child { border-top: none; }
+#media-requests-panel li.decided { opacity: 0.62; }
+#media-requests-panel .mrtop { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
+#media-requests-panel .mrstatus {
+  font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.03em;
+  border-radius: 10px; padding: 0.05rem 0.45rem; flex-shrink: 0;
+}
+#media-requests-panel .mrstatus.pending { background: #332615; color: #e8b96c; border: 1px solid #5a4422; }
+#media-requests-panel .mrstatus.approved { background: #1f2a20; color: #8fcc9f; border: 1px solid #2c4a37; }
+#media-requests-panel .mrstatus.rejected { background: #2d1c1c; color: #e7a0a0; border: 1px solid #573131; }
+#media-requests-panel .mrtitle { color: #e0e0e0; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#media-requests-panel .mrmeta { color: #888; font-size: 0.75rem; line-height: 1.5; grid-column: 1 / -1; }
+#media-requests-panel .mrmeta .k { color: #666; }
+#media-requests-panel .mractions { display: flex; gap: 0.4rem; grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+#media-requests-panel .mractions button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
+#media-requests-panel .mractions button.approve { background: #1f2a20; color: #8fcc9f; border-color: #2c4a37; }
+#media-requests-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
+/* Custom-reactions moderation — viewer-uploaded reaction images. Host can
+   remove anything abusive. Host-only (hidden on /controls). */
+#reactions-panel {
+  margin-top: 1rem; background: #161616; border: 1px solid #262626;
+  border-radius: 6px; padding: 0.8rem 1rem;
+}
+#reactions-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+#reactions-panel h2 { margin: 0; font-size: 0.95rem; color: #ddd; }
+#reactions-panel .badge {
+  font-size: 0.7rem; background: #222; color: #888; border: 1px solid #333;
+  border-radius: 10px; padding: 0.05rem 0.5rem;
+}
+#reactions-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+#reactions-grid .rx {
+  position: relative; width: 48px; height: 48px; border-radius: 6px;
+  background: #131211; border: 1px solid #383632;
+  display: flex; align-items: center; justify-content: center;
+}
+#reactions-grid .rx img { max-width: 38px; max-height: 38px; }
+#reactions-grid .rx button {
+  position: absolute; top: -7px; right: -7px;
+  width: 18px; height: 18px; min-height: 0; padding: 0; line-height: 1;
+  border-radius: 50%; font-size: 0.7rem;
+  background: #3a1818; color: #ff8a8a; border: 1px solid #5a2424; cursor: pointer;
+}
+#reactions-panel .empty-r { color: #555; padding: 0.7rem 0; font-size: 0.85rem; }
+/* Users panel — admin-created accounts for private VOD streams. Host-only
+   (hidden on /controls); same chrome as the friends panel. */
+#users-panel {
+  padding: 1rem 1.2rem;
+  background: #0e0e0e;
+  border-bottom: 1px solid #1f1f1f;
+}
+#users-panel h2 {
+  margin: 0 0 0.7rem; font-size: 0.9rem; font-weight: 500; color: #ccc;
+  letter-spacing: 0.02em;
+}
+#users-panel form { display: flex; gap: 0.4rem; margin-bottom: 0.6rem; flex-wrap: wrap; }
+#users-panel input {
+  flex: 1; max-width: 14em;
+  background: #1a1a1a; color: #eee;
+  border: 1px solid #333; border-radius: 3px;
+  padding: 0.35rem 0.6rem; font-size: 0.85rem; font-family: inherit;
+}
+#users-panel .form-err { color: #ff8a8a; font-size: 0.75rem; margin: 0 0 0.5rem; display: none; }
+#users-panel ul { list-style: none; padding: 0; margin: 0; }
+#users-panel li {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.4rem 0; border-top: 1px solid #1a1a1a;
+  font-size: 0.85rem;
+}
+#users-panel li:first-child { border-top: none; }
+#users-panel li.disabled .uname { color: #666; text-decoration: line-through; }
+#users-panel .uname { color: #ccc; flex-shrink: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#users-panel .udot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: #7dcc99; box-shadow: 0 0 4px #7dcc99;
+}
+/* Self-registered accounts carry the invite label that minted them, so a
+   leaked friend code can be traced to every account it created. Secondary
+   to the username: quieter colour, chip weight of the DISABLED badge. */
+#users-panel .uvia {
+  flex-shrink: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 0.65rem; padding: 0.08rem 0.4rem; border-radius: 3px;
+  background: #242320; color: #a09c94; border: 1px solid #3b3935;
+}
+#users-panel .umeta { flex: 1; color: #555; font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#users-panel button { padding: 0.25rem 0.6rem; font-size: 0.75rem; }
+/* Active VOD panel — per-user private streams currently running. Host-only
+   (hidden on /controls); same chrome as the reactions panel. */
+#vod-panel {
+  margin-top: 1rem; background: #161616; border: 1px solid #262626;
+  border-radius: 6px; padding: 0.8rem 1rem;
+}
+#vod-panel .head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+#vod-panel h2 { margin: 0; font-size: 0.95rem; color: #ddd; }
+#vod-panel .badge {
+  font-size: 0.7rem; background: #222; color: #888; border: 1px solid #333;
+  border-radius: 10px; padding: 0.05rem 0.5rem;
+}
+#vod-panel .tbl-wrap { overflow-x: auto; }
+#vod-panel table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+#vod-panel th { text-align: left; color: #666; font-weight: 500; padding: 0.25rem 0.6rem 0.25rem 0; white-space: nowrap; }
+#vod-panel td {
+  color: #ccc; padding: 0.3rem 0.6rem 0.3rem 0; border-top: 1px solid #1f1f1f;
+  max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#vod-panel td.vwho { color: #cda; }
+#vod-panel td.vtime { color: #888; font-variant-numeric: tabular-nums; }
+#vod-panel button { padding: 0.2rem 0.55rem; font-size: 0.75rem; }
+#vod-panel .empty-v { color: #555; padding: 0.7rem 0; font-size: 0.85rem; display: block; }
+/* "Queue" button alongside file rows */
+ul#list li button.queue-btn {
+  padding: 0.2rem 0.55rem; font-size: 0.75rem; flex-shrink: 0;
+}
+ul#list li.dir button.queue-btn { display: none; }
+#search-row {
+  display: flex; gap: 0.5rem; align-items: center;
+  padding: 0.6rem 1.2rem; background: #131313;
+  border-bottom: 1px solid #1f1f1f;
+}
+#search-input {
+  flex: 1; min-width: 0;
+  background: #1a1a1a; color: #eee;
+  border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 0.45rem 0.7rem; font-size: 0.9rem; font-family: inherit;
+}
+#search-input:focus { outline: none; border-color: #444; }
+#search-clear {
+  background: #2a2a2a; color: #ccc; border: 1px solid #333;
+  border-radius: 4px; padding: 0.4rem 0.7rem; cursor: pointer; font-size: 0.85rem;
+}
+#search-info {
+  padding: 0.5rem 1.2rem; background: #161616; color: #888;
+  font-size: 0.82rem; border-bottom: 1px solid #1f1f1f;
+}
+#breadcrumb {
+  padding: 0.7rem 1.2rem;
+  background: #161616;
+  font-size: 0.9rem;
+  color: #777;
+  border-bottom: 1px solid #1f1f1f;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+#breadcrumb a { color: #dfdedd; text-decoration: none; cursor: pointer; }
+#breadcrumb a:hover { text-decoration: underline; }
+#breadcrumb .sep { color: #444; padding: 0 0.4em; }
+/* Library is a poster grid backed by the Sonarr/Radarr cover proxy at
+   /poster?path=…. Each tile is a card with a 2:3 poster on top (the
+   standard movie-poster aspect) and the filename/show below. Auto-fill
+   scales the column count to the viewport — 6-8 on desktop, 2-3 on a
+   phone. Folders get a "FOLDER" badge plus a fallback icon; files get
+   a hover-revealed "+ Queue" button in the top right. */
+ul#list {
+  list-style: none; padding: 1rem 1.1rem; margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.85rem;
+}
+ul#list .card {
+  position: relative;
+  background: #161616;
+  border: 1px solid #1d1d1d;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+  display: flex; flex-direction: column;
+  transition: transform 0.12s ease, background 0.12s, border-color 0.12s;
+}
+ul#list .card:hover { background: #1c1c1c; border-color: #2a2a2a; transform: translateY(-2px); }
+ul#list .card.now { background: #1a2c1a; border-color: #2c4a37; }
+ul#list .card .poster {
+  width: 100%; aspect-ratio: 2 / 3;
+  background: #0e0e0e;
+  display: flex; align-items: center; justify-content: center;
+  color: #333; font-size: 2.4rem;
+  overflow: hidden;
+}
+ul#list .card .poster {
+  position: relative;
+}
+ul#list .card .poster img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  /* opacity:0 (not display:none) so the img retains a layout box —
+     loading="lazy" needs intersection geometry to decide to fetch, and
+     display:none zeroes the rect and silently skips the load. The .ph
+     placeholder sits behind so the cell isn't blank during fetch. */
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+ul#list .card .poster img.loaded { opacity: 1; }
+ul#list .card.dir .ph { color: #524f48; }
+ul#list .card.now .ph { color: #6c6; }
+ul#list .card .body {
+  padding: 0.55rem 0.65rem 0.7rem;
+  display: flex; flex-direction: column; gap: 0.25rem;
+  min-width: 0;
+}
+ul#list .card .title {
+  color: #ddd; font-size: 0.83rem; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
+}
+ul#list .card .parent {
+  color: #666; font-size: 0.7rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+ul#list .card .meta { color: #666; font-size: 0.72rem; }
+ul#list .card .badge {
+  position: absolute; top: 6px; left: 6px;
+  background: rgba(0,0,0,0.65); color: #dfdedd;
+  padding: 0.15rem 0.45rem; border-radius: 3px;
+  font-size: 0.62rem; letter-spacing: 0.05em; font-weight: 600;
+}
+ul#list .card.now .badge { color: #7dcc99; }
+ul#list .card .queue-btn {
+  position: absolute; top: 6px; right: 6px;
+  background: rgba(20,20,20,0.85); border: 1px solid #333;
+  color: #eee; padding: 0.25rem 0.55rem; font-size: 0.72rem;
+  border-radius: 3px; cursor: pointer; font-family: inherit;
+  opacity: 0; transition: opacity 0.12s; min-height: auto;
+}
+ul#list .card:hover .queue-btn { opacity: 1; }
+ul#list .card.dir .queue-btn { display: none; }
+/* When the list is empty (no items / loading / error) the .empty <li> is the
+   only child of the grid — span it across all columns so the message centers. */
+ul#list .empty { grid-column: 1 / -1; }
+
+/* Show view — replaces the grid when you enter a tv/<show> folder. JS
+   parses SxxExx out of the filenames, groups by season, and renders the
+   result as a poster banner + collapsible season blocks of clickable
+   episode rows. Falls back to the regular grid if no episodes parse. */
+#show-view { padding: 1rem 1.1rem; }
+#show-view .banner {
+  display: flex; gap: 1rem; align-items: center;
+  padding-bottom: 1rem; margin-bottom: 1rem;
+  border-bottom: 1px solid #1a1a1a;
+}
+#show-view .banner .poster {
+  position: relative;
+  width: 90px; aspect-ratio: 2/3;
+  background: #161616; border-radius: 4px; overflow: hidden;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #333; font-size: 2rem;
+}
+#show-view .banner .poster img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; opacity: 0; transition: opacity 0.18s ease;
+}
+#show-view .banner .poster img.loaded { opacity: 1; }
+#show-view .banner .meta { flex: 1; min-width: 0; }
+#show-view .banner .title {
+  margin: 0 0 0.35rem; font-size: 1.15rem; font-weight: 500; color: #eee;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#show-view .banner .count { color: #888; font-size: 0.82rem; }
+#show-view .season {
+  margin-bottom: 0.7rem;
+  border: 1px solid #1a1a1a; border-radius: 4px;
+  background: #131313; overflow: hidden;
+}
+#show-view .season-head {
+  display: flex; align-items: center; gap: 0.55rem;
+  padding: 0.55rem 0.8rem; cursor: pointer; user-select: none;
+  background: #161616;
+  border-bottom: 1px solid #1a1a1a;
+}
+#show-view .season.collapsed .season-head { border-bottom: none; }
+#show-view .season-head:hover { background: #1c1c1c; }
+#show-view .season-head h3 {
+  margin: 0; font-size: 0.92rem; font-weight: 500; color: #ddd;
+  letter-spacing: 0.02em;
+}
+#show-view .season-head .count {
+  color: #666; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+#show-view .season-head .toggle {
+  color: #666; font-size: 0.85rem; transition: transform 0.15s;
+}
+#show-view .season.collapsed .toggle { transform: rotate(-90deg); }
+#show-view .season.collapsed .episodes { display: none; }
+#show-view .episodes { list-style: none; padding: 0; margin: 0; }
+#show-view .episodes li {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.55rem 0.85rem;
+  border-top: 1px solid #1a1a1a;
+  cursor: pointer; user-select: none;
+  font-size: 0.86rem; color: #ccc;
+  transition: background 0.1s;
+}
+#show-view .episodes li:first-child { border-top: none; }
+#show-view .episodes li:hover { background: #181818; }
+#show-view .episodes li.now { background: #1a2c1a; color: #b3e0c0; }
+#show-view .episodes .ep-code {
+  color: #888; font-family: ui-monospace, monospace;
+  font-size: 0.78rem; min-width: 3.6em; flex-shrink: 0;
+}
+#show-view .episodes li.now .ep-code { color: #6c6; }
+#show-view .episodes .ep-name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#show-view .episodes .ep-meta {
+  color: #666; font-size: 0.75rem; flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+#show-view .episodes .queue-btn {
+  padding: 0.22rem 0.55rem; font-size: 0.72rem;
+  min-height: auto; flex-shrink: 0;
+}
+
+.empty {
+  padding: 2.5rem 1.2rem;
+  text-align: center;
+  color: #555;
+  font-size: 0.9rem;
+}
+#toast {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #222;
+  color: #eee;
+  padding: 0.7rem 1.1rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  border: 1px solid #333;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+  z-index: 100;
+}
+#toast.show { opacity: 1; }
+#broadcast-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 1.2rem;
+  background: #0e0e0e;
+  border-bottom: 1px solid #1f1f1f;
+  font-size: 0.85rem;
+}
+#broadcast-bar #position { color: #6c6; font-variant-numeric: tabular-nums; }
+#broadcast-bar #duration { color: #888; font-variant-numeric: tabular-nums; }
+#broadcast-bar #broadcast-seek {
+  flex: 1;
+  accent-color: #c00;
+}
+#broadcast-bar #broadcast-seek:disabled { opacity: 0.4; }
+#seek-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.2rem;
+  background: #111;
+  border-bottom: 1px solid #1f1f1f;
+  font-size: 0.85rem;
+  color: #ccc;
+  flex-wrap: wrap;
+}
+#seek-bar .sep { color: #555; }
+#seek-bar .spacer { flex: 1; }
+#seek-bar #position { font-variant-numeric: tabular-nums; color: #6c6; }
+#seek-bar #duration { font-variant-numeric: tabular-nums; color: #888; }
+#seek-bar button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+}
+#seek-bar input {
+  background: #1a1a1a;
+  color: #eee;
+  border: 1px solid #333;
+  border-radius: 3px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  width: 12em;
+  font-family: inherit;
+}
+/* Subtitles picker — lives in the playback cluster (it IS a playback
+   control, not a host panel, so it ships on /controls too). Burn-in is
+   global: picking a track restarts ffmpeg for every viewer, hence the
+   notice line rather than a silent toggle. */
+#subs-control { position: relative; display: none; }
+#subs-btn {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  min-height: 40px;
+  white-space: nowrap;
+}
+#subs-btn[aria-expanded="true"] { background: #333; border-color: #444; }
+#subs-menu {
+  position: absolute;
+  /* Opens DOWNWARD. The VOD player's CC menu (library.html) opens upward
+     because it hangs off a bottom control bar; this button lives in the
+     seek row at the top of the page, so anchoring to `bottom` put "Off"
+     and the first track above the top of the viewport — unreachable. */
+  top: calc(100% + 0.35rem);
+  left: 0;
+  min-width: 13rem;
+  max-width: min(22rem, 80vw);
+  max-height: 15rem;
+  overflow-y: auto;
+  background: #161616;
+  border: 1px solid #333;
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+  padding: 0.25rem;
+  z-index: 90;
+}
+#subs-menu[hidden] { display: none; }
+#subs-menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 40px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.82rem;
+  color: #ddd;
+}
+#subs-menu button:hover, #subs-menu button:focus { background: #262626; outline: none; }
+#subs-menu button:focus-visible { box-shadow: inset 0 0 0 1px #6c6; }
+#subs-menu button[aria-checked="true"] { color: #9c9; }
+#subs-menu .tick { flex: 0 0 1em; color: #6c6; }
+#subs-menu .subs-note {
+  padding: 0.4rem 0.55rem 0.3rem;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: #888;
+  border-top: 1px solid #262626;
+  margin-top: 0.25rem;
+}
+#subs-notice {
+  flex-basis: 100%;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #c9a;
+}
+#subs-notice:empty { display: none; }
+/* Anonymous chat panel — same shape as the viewer's, just scoped to admin
+   styling. Sits at the bottom of the page, collapsible. */
+#chat-panel {
+  margin: 1rem 1.2rem;
+  background: #0e0e0e;
+  border: 1px solid #1f1f1f; border-radius: 4px;
+  display: flex; flex-direction: column;
+  max-height: 22rem;
+  transition: max-height 0.15s;
+}
+#chat-panel.collapsed { max-height: 2.4rem; overflow: hidden; }
+#chat-header {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  cursor: pointer; user-select: none;
+  border-bottom: 1px solid #1a1a1a;
+}
+#chat-panel.collapsed #chat-header { border-bottom: none; }
+#chat-header h2 {
+  margin: 0; font-size: 0.9rem; font-weight: 500; color: #ccc;
+  letter-spacing: 0.02em; flex: 1;
+}
+#chat-header .toggle { color: #666; font-size: 0.8rem; }
+#chat-messages {
+  flex: 1; overflow-y: auto;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.85rem;
+  min-height: 6rem;
+}
+#chat-messages .empty { color: #555; padding: 0.5rem 0; }
+.chat-msg { display: flex; gap: 0.5rem; padding: 0.18rem 0; align-items: flex-start; }
+.chat-dot { flex-shrink: 0; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-top: 0.45rem; }
+.chat-name { color: #aaa; font-weight: 600; flex-shrink: 0; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-msg.self .chat-name { color: #ddd; }
+.chat-text { flex: 1; color: #ddd; word-wrap: break-word; overflow-wrap: anywhere; }
+.chat-msg.self .chat-text { color: #fff; }
+/* Hover-reveal moderation buttons on each row (admin only — script adds
+   the .mod-actions div only when IS_ADMIN). Stay invisible until the row
+   is hovered so the panel doesn't look like a button farm. */
+.chat-msg .mod-actions {
+  flex-shrink: 0; display: none; gap: 0.3rem;
+  align-self: center;
+}
+.chat-msg:hover .mod-actions { display: flex; }
+.chat-msg .mod-actions button {
+  background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a;
+  border-radius: 3px; padding: 0.1rem 0.4rem; font-size: 0.7rem;
+  cursor: pointer; font-family: inherit;
+}
+.chat-msg .mod-actions button:hover { background: #2a1515; color: #e88; border-color: #4a2828; }
+#chat-form {
+  display: flex; gap: 0.5rem; align-items: center;
+  padding: 0.5rem 0.85rem;
+  border-top: 1px solid #1a1a1a;
+}
+#chat-name-input {
+  background: #1a1a1a; color: #cda;
+  border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 0.4rem 0.55rem; font-size: 0.8rem; font-family: inherit;
+  width: 8em; min-width: 0;
+}
+#chat-name-input:focus { outline: none; border-color: #444; }
+#chat-input {
+  flex: 1;
+  background: #1a1a1a; color: #eee;
+  border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 0.4rem 0.6rem; font-size: 0.85rem; font-family: inherit;
+  min-width: 0;
+}
+#chat-input:focus { outline: none; border-color: #444; }
+#chat-input:disabled { opacity: 0.5; }
+#chat-send {
+  padding: 0.35rem 0.9rem; font-size: 0.85rem;
+}
+#chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ------------------------------------------------------------------------
+ * Mobile / narrow-viewport polish.
+ *
+ * The default styling above is desktop-oriented (1.2rem horizontal padding,
+ * small fonts that suit a mouse). On phones — and especially on the
+ * /controls page that friends actually use from their couch — those defaults
+ * leave the layout feeling cramped *and* squandering horizontal space at
+ * the edges. This block tightens edge gutters, bumps fonts a hair, and
+ * grows tap targets to the iOS HIG 44pt minimum so a thumb-tap doesn't
+ * miss the row-action button it was aimed at.
+ *
+ * 640px catches every phone in portrait + small tablets; landscape phones
+ * (typically 740-900) keep the desktop layout, which is still legible at
+ * that width.
+ * --------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  /* Edge gutters: every section that pads to 1.2rem on desktop drops to
+     0.7rem on mobile. Don't rewrite every selector — collapse them with a
+     common rule below where the structure permits. */
+  header { padding: 0.7rem 0.8rem; gap: 0.5rem; }
+  header h1 { font-size: 0.95rem; }
+  #status { font-size: 0.8rem; }
+
+  #broadcast-bar, #seek-bar { padding: 0.55rem 0.7rem; gap: 0.45rem; }
+  #seek-bar input { width: 100%; box-sizing: border-box; }
+  /* Stack admin's seek input + scrub controls vertically on phones so the
+     row doesn't wrap into a confusing zig-zag. */
+  #seek-bar > * { flex-shrink: 0; }
+  #seek-bar input[type="number"] { flex: 1; min-width: 0; }
+
+  #friends-panel, #url-panel, #stream-settings-panel, #queue-panel, #requests-panel, #media-requests-panel, #viewers-panel,
+  #users-panel, #search-row, #breadcrumb, #search-info { padding: 0.7rem 0.8rem; }
+
+  /* Library grid: tighter gutter on a phone + smaller minimum card size
+     so 2-3 columns fit on a 390-440px viewport instead of just 1-2.
+     Card padding lives inside the body so the grid math is straightforward. */
+  ul#list {
+    padding: 0.65rem 0.65rem;
+    gap: 0.55rem;
+    grid-template-columns: repeat(auto-fill, minmax(115px, 1fr));
+  }
+  ul#list .card .body { padding: 0.45rem 0.55rem 0.55rem; }
+  ul#list .card .title { font-size: 0.78rem; }
+  ul#list .card .meta { font-size: 0.66rem; }
+  ul#list .card .queue-btn { opacity: 1; }  /* no hover on touch — keep visible */
+
+  /* Queue rows: same growth. The reorder handle + delete button are the
+     things friends actually tap; keep them within the 44pt minimum so a
+     missed tap doesn't accidentally hit the title (which plays the item). */
+  #queue-panel li {
+    padding: 0.55rem 0.7rem;
+    gap: 0.55rem;
+    min-height: 44px;
+  }
+  #queue-panel .qtitle { font-size: 0.92rem; }
+
+  /* Buttons: the default 0.4rem 0.9rem padding hits ~36px tall, under iOS's
+     44pt floor. Round everything up; admin's Skip / Pause / Add to queue
+     are touch-critical on /controls. */
+  button {
+    min-height: 44px;
+    padding: 0.5rem 0.95rem;
+    font-size: 0.9rem;
+  }
+  /* Inline row buttons (.danger row deletes, queue reorder arrows) stay at
+     full height but flatten horizontal padding so multiple fit on a row. */
+  #queue-panel button,
+  #requests-panel button,
+  #media-requests-panel button,
+  #friends-panel button,
+  #users-panel button {
+    padding: 0.4rem 0.7rem;
+    font-size: 0.8rem;
+  }
+  /* "Clear all" pinned to the right of the Requests head label needs to be
+     finger-sized too. */
+  #requests-clear, #media-requests-clear { min-height: 36px; padding: 0.35rem 0.7rem; }
+
+  /* Search input: full width, bigger touch surface. */
+  #search-row { display: flex; gap: 0.5rem; }
+  #search-input {
+    flex: 1; min-width: 0;
+    padding: 0.6rem 0.8rem; font-size: 0.95rem;
+    min-height: 44px;
+  }
+  #search-clear { min-height: 44px; padding: 0.5rem 0.85rem; }
+
+  /* Chat: keep visible but trimmer. The bottom-anchored input is what
+     friends type into; bump its height so the on-screen keyboard's auto-
+     focus doesn't have to fight a 28px target. */
+  #chat-panel { margin: 0.7rem 0.8rem; max-height: 18rem; }
+  #chat-header { padding: 0.45rem 0.7rem; }
+  #chat-messages { padding: 0.45rem 0.7rem; font-size: 0.88rem; }
+  #chat-form { padding: 0.5rem 0.6rem; gap: 0.4rem; }
+  #chat-name-input { width: 6.5em; padding: 0.55rem 0.5rem; font-size: 0.85rem; min-height: 40px; }
+  #chat-input { padding: 0.55rem 0.65rem; font-size: 0.95rem; min-height: 40px; }
+  #chat-send { padding: 0.5rem 0.95rem; font-size: 0.9rem; min-height: 40px; }
+
+  /* On a phone, friends-panel rows wrap their URL into the next line and
+     eat the screen — cap their width and let the panel scroll horizontally
+     if needed. */
+  #friends-panel .url { max-width: 100%; font-size: 0.7rem; }
+  #friends-panel .label { font-size: 0.88rem; }
+
+  /* Viewers list rows on /admin: shrink the wide IP column. */
+  #viewers-panel li > span { font-size: 0.78rem !important; }
+
+  /* The toast notification floats over content — keep it readable and above
+     the home indicator on iPhones. */
+  #toast { bottom: max(1rem, env(safe-area-inset-bottom)); font-size: 0.85rem; }
+}

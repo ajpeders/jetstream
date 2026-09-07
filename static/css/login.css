@@ -1,0 +1,103 @@
+/* login page styles — lifted out of login.html's inline <style> block.
+   Linked from the page BEFORE /jetstream-theme.css, preserving the
+   original cascade order: the shared theme still overrides these. */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  background: #0a0a0a;
+  color: #e8e8e8;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.card {
+  width: 100%;
+  max-width: 22rem;
+  background: var(--js-surface, #1a1917);
+  border: 1px solid var(--js-line, rgba(171, 168, 161, 0.18));
+  border-radius: 12px;
+  padding: 1.6rem 1.5rem 1.5rem;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+}
+h1 {
+  margin: 0 0 0.2rem;
+  font-size: 1.05rem;
+  font-weight: 760;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+h1::before {
+  content: "";
+  display: inline-block;
+  width: 0.58rem;
+  height: 0.58rem;
+  border-radius: var(--js-radius);
+  background: var(--js-accent, #dfdedd);
+  box-shadow: 0 0 0 5px rgba(223, 222, 221, 0.12), 0 0 22px rgba(223, 222, 221, 0.7);
+}
+.sub {
+  margin: 0 0 1.1rem;
+  color: var(--js-muted, #ada9a2);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+label {
+  display: block;
+  color: var(--js-muted, #ada9a2);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0.8rem 0 0.3rem;
+}
+input {
+  width: 100%;
+  min-height: 42px;
+  background: var(--js-surface-2, #201f1c);
+  color: var(--js-text, #efeeed);
+  border: 1px solid var(--js-line-strong, rgba(171, 168, 161, 0.28));
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+input:focus {
+  outline: none;
+  border-color: rgba(223, 222, 221, 0.72);
+  box-shadow: 0 0 0 3px rgba(223, 222, 221, 0.14);
+}
+button {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 1.2rem;
+  background: rgba(223, 222, 221, 0.16);
+  color: var(--js-accent-text, #dfdedd);
+  border: 1px solid rgba(223, 222, 221, 0.34);
+  border-radius: var(--js-radius);
+  font-size: 0.92rem;
+  font-weight: 750;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+button:hover { background: rgba(223, 222, 221, 0.24); transform: translateY(-1px); }
+button:disabled { opacity: 0.5; cursor: default; transform: none; }
+#error {
+  display: none;
+  margin: 0.9rem 0 0;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.83rem;
+  line-height: 1.4;
+}
+#error.show { display: block; }
+.back { margin: 1.2rem 0 0; font-size: 0.8rem; text-align: center; }
+.back a { color: var(--js-muted, #ada9a2); text-decoration: none; }
+.back a:hover { color: var(--js-accent, #dfdedd); }

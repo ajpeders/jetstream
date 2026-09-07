@@ -3,16 +3,30 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tailwindcss -i ./src/jetstream-theme.css -o ./static/jetstream-theme.css --minify && vite build",
+    "build": "tailwindcss -i ./src/jetstream-theme.css -o ./static/jetstream-theme.css --minify && vite build && ng build admin && ng build viewer",
     "build:theme": "tailwindcss -i ./src/jetstream-theme.css -o ./static/jetstream-theme.css --minify",
-    "dev": "vite --host 0.0.0.0"
+    "dev": "vite --host 0.0.0.0",
+    "build:admin": "ng build admin",
+    "watch:admin": "ng build admin --watch --configuration development",
+    "build:viewer": "ng build viewer",
+    "watch:viewer": "ng build viewer --watch --configuration development"
   },
   "devDependencies": {
+    "@angular/build": "^22.1.7",
+    "@angular/cli": "^22.1.7",
+    "@angular/common": "^22.1.5",
+    "@angular/compiler": "^22.1.5",
+    "@angular/compiler-cli": "^22.1.5",
+    "@angular/core": "^22.1.5",
+    "@angular/platform-browser": "^22.1.5",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tailwindcss/cli": "^4.3.3",
     "daisyui": "^5.7.14",
+    "rxjs": "^7.8.2",
     "svelte": "^5.0.0",
     "tailwindcss": "^4.3.3",
+    "tslib": "^2.8.1",
+    "typescript": "6.0",
     "vite": "^6.0.0"
   }
 }
