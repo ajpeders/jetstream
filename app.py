@@ -11,6 +11,7 @@ import re
 import secrets
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -124,6 +125,7 @@ VIEWER_LOG_FILE = Path(os.environ.get("VIEWER_LOG_FILE", "/data/viewer_log.jsonl
 
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", "/media")).resolve()
 HLS_DIR = Path(os.environ.get("HLS_DIR", "/hls")).resolve()
+CATALOG_DB = Path(os.environ.get("CATALOG_DB", "/data/catalog.sqlite3"))
 VIEWER_LIBRARY_ROOTS_RAW = os.environ.get("VIEWER_LIBRARY_ROOTS", "Movies=movies,TV Shows=tv")
 VIEWER_SEASON_MARKER = "__season__"
 VAAPI_DEVICE = os.environ.get("VAAPI_DEVICE", "/dev/dri/renderD128")
@@ -1380,7 +1382,7 @@ def _safe_resolve(rel: str, must_be_dir: bool = False, must_be_file: bool = Fals
     return target
 
 
-def _list_dir(rel: str):
+def _list_dir_from_disk(rel: str):
     base = _safe_resolve(rel, must_be_dir=True)
     items = []
     for entry in base.iterdir():
@@ -1398,6 +1400,10 @@ def _list_dir(rel: str):
             })
     items.sort(key=lambda i: (i["type"] != "directory", _natural_sort_key(i["name"])))
     return items
+
+
+def _list_dir(rel: str):
+    return _catalog_list_dir(rel)
 
 
 def _natural_sort_key(value: str):
@@ -1557,53 +1563,12 @@ def _search_library(query: str, limit: int = 300) -> tuple[list[dict], bool]:
     AND-matched, case-insensitively, against each file's path relative to
     MEDIA_ROOT — so "office s02" finds files with both. Returns file entries in
     the same shape as _list_dir (name/path/type/size) plus a truncated flag."""
-    terms = [t for t in query.lower().split() if t]
-    if not terms:
-        return [], False
-    matched = [
-        p for p in _scan_library()
-        if all(t in str(p.relative_to(MEDIA_ROOT)).lower() for t in terms)
-    ]
-    matched.sort(key=lambda p: p.name.lower())
-    truncated = len(matched) > limit
-    items = []
-    for p in matched[:limit]:
-        try:
-            size = p.stat().st_size
-        except OSError:
-            size = None
-        items.append({
-            "name": p.name,
-            "path": str(p.relative_to(MEDIA_ROOT)),
-            "type": "file",
-            "size": size,
-        })
-    return items, truncated
+    return _catalog_search_files(query, limit)
 
 
 def _search_viewer_library(query: str, limit: int = 300) -> tuple[list[dict], bool]:
-    terms = [t for t in query.lower().split() if t]
-    if not terms:
-        return [], False
-    matched = [
-        p for p in _viewer_library_files()
-        if all(t in str(p.relative_to(MEDIA_ROOT)).lower() for t in terms)
-    ]
-    matched.sort(key=lambda p: p.name.lower())
-    truncated = len(matched) > limit
-    items = []
-    for p in matched[:limit]:
-        try:
-            size = p.stat().st_size
-        except OSError:
-            size = None
-        items.append({
-            "name": p.name,
-            "path": str(p.relative_to(MEDIA_ROOT)),
-            "type": "file",
-            "size": size,
-        })
-    return items, truncated
+    roots = [r["path"].strip("/") for r in _viewer_library_roots()]
+    return _catalog_search_files(query, limit, roots)
 
 
 def _viewer_list_dir(rel: str):
@@ -3152,6 +3117,185 @@ def _build_ffmpeg_abr_cmd(
 
 _library_cache_lock = threading.Lock()
 _library_cache: dict = {"sig": None, "files": None}
+_catalog_lock = threading.Lock()
+
+
+def _catalog_connect() -> sqlite3.Connection:
+    CATALOG_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(CATALOG_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _catalog_init(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS catalog_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS catalog_items (
+            path TEXT PRIMARY KEY,
+            parent_path TEXT NOT NULL,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL CHECK (type IN ('directory', 'file')),
+            size INTEGER,
+            mtime_ns INTEGER
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_parent ON catalog_items(parent_path, type, name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_type_path ON catalog_items(type, path)")
+
+
+def _catalog_parent_path(rel: str) -> str:
+    parent = str(Path(rel).parent)
+    return "" if parent == "." else parent
+
+
+def _catalog_rebuild(conn: sqlite3.Connection, sig: int | None) -> list[Path]:
+    rows = []
+    files: list[Path] = []
+    try:
+        for root, dirs, names in os.walk(MEDIA_ROOT):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            root_path = Path(root)
+            for dirname in dirs:
+                p = root_path / dirname
+                try:
+                    rel = str(p.relative_to(MEDIA_ROOT))
+                    st = p.stat()
+                except OSError:
+                    continue
+                rows.append((rel, _catalog_parent_path(rel), dirname, "directory", None, st.st_mtime_ns))
+            for name in names:
+                if name.startswith(".") or Path(name).suffix.lower() not in VIDEO_EXTS:
+                    continue
+                p = root_path / name
+                try:
+                    rel = str(p.relative_to(MEDIA_ROOT))
+                    st = p.stat()
+                except OSError:
+                    continue
+                rows.append((rel, _catalog_parent_path(rel), name, "file", st.st_size, st.st_mtime_ns))
+                files.append(p)
+    except Exception as e:
+        print(f"catalog rebuild failed: {e}", file=sys.stderr)
+        return []
+
+    with conn:
+        conn.execute("DELETE FROM catalog_items")
+        conn.executemany(
+            "INSERT OR REPLACE INTO catalog_items(path, parent_path, name, type, size, mtime_ns) VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO catalog_meta(key, value) VALUES ('library_signature', ?)",
+            ("" if sig is None else str(sig),),
+        )
+    return files
+
+
+def _catalog_refresh_if_needed() -> None:
+    sig = _library_signature()
+    with _catalog_lock:
+        try:
+            with _catalog_connect() as conn:
+                _catalog_init(conn)
+                row = conn.execute(
+                    "SELECT value FROM catalog_meta WHERE key = 'library_signature'"
+                ).fetchone()
+                want = "" if sig is None else str(sig)
+                if row and row["value"] == want:
+                    return
+                files = _catalog_rebuild(conn, sig)
+        except Exception as e:
+            print(f"catalog refresh failed: {e}", file=sys.stderr)
+            return
+    with _library_cache_lock:
+        _library_cache["sig"] = sig
+        _library_cache["files"] = files
+
+
+def _catalog_item_row(row: sqlite3.Row) -> dict:
+    item = {"name": row["name"], "path": row["path"], "type": row["type"]}
+    if row["type"] == "file":
+        item["size"] = row["size"]
+    return item
+
+
+def _file_item_from_path(p: Path) -> dict:
+    try:
+        size = p.stat().st_size
+    except OSError:
+        size = None
+    return {
+        "name": p.name,
+        "path": str(p.relative_to(MEDIA_ROOT)),
+        "type": "file",
+        "size": size,
+    }
+
+
+def _catalog_list_dir(rel: str) -> list[dict]:
+    rel = (rel or "").strip("/")
+    _safe_resolve(rel, must_be_dir=True)
+    _catalog_refresh_if_needed()
+    try:
+        with _catalog_connect() as conn:
+            _catalog_init(conn)
+            rows = conn.execute(
+                "SELECT name, path, type, size FROM catalog_items WHERE parent_path = ?",
+                (rel,),
+            ).fetchall()
+    except Exception as e:
+        print(f"catalog list failed for {rel!r}: {e}", file=sys.stderr)
+        return _list_dir_from_disk(rel)
+    items = [_catalog_item_row(row) for row in rows]
+    items.sort(key=lambda i: (i["type"] != "directory", _natural_sort_key(i["name"])))
+    return items
+
+
+def _catalog_search_files(query: str, limit: int = 300, roots: list[str] | None = None) -> tuple[list[dict], bool]:
+    terms = [t for t in query.lower().split() if t]
+    if not terms:
+        return [], False
+    allowed = tuple(r.strip("/") for r in roots or [] if r.strip("/"))
+    _catalog_refresh_if_needed()
+    try:
+        with _catalog_connect() as conn:
+            _catalog_init(conn)
+            rows = conn.execute(
+                "SELECT name, path, type, size FROM catalog_items WHERE type = 'file'"
+            ).fetchall()
+    except Exception as e:
+        print(f"catalog search failed: {e}", file=sys.stderr)
+        matched = [
+            p for p in _scan_library()
+            if all(t in str(p.relative_to(MEDIA_ROOT)).lower() for t in terms)
+        ]
+        if allowed:
+            matched = [
+                p for p in matched
+                if any(
+                    (rel := str(p.relative_to(MEDIA_ROOT))) == root or rel.startswith(root + "/")
+                    for root in allowed
+                )
+            ]
+        matched.sort(key=lambda p: p.name.lower())
+        truncated = len(matched) > limit
+        return [_file_item_from_path(p) for p in matched[:limit]], truncated
+    items = []
+    for row in rows:
+        rel = row["path"]
+        if allowed and not any(rel == root or rel.startswith(root + "/") for root in allowed):
+            continue
+        low = rel.lower()
+        if all(t in low for t in terms):
+            items.append(_catalog_item_row(row))
+    items.sort(key=lambda i: i["name"].lower())
+    truncated = len(items) > limit
+    return items[:limit], truncated
 
 
 def _library_signature() -> int | None:
