@@ -1,6 +1,29 @@
-"""Viewer-page panels ported to Angular islands (queue, requests).
+"""Viewer-page panels ported to Angular islands (queue, requests, library).
 Split out of test_admin_island.py so the two sessions working this
 tree stop colliding in one file."""
+import pathlib
+
+import pytest
+
+_BUNDLE = pathlib.Path(__file__).resolve().parents[1] / "static" / "build-viewer" / "main.js"
+
+
+def _require_built_bundle():
+    """Skip when nothing has built the viewer bundle.
+
+    static/build-viewer/ is a build artifact and gitignored, so it is absent
+    from a fresh clone. CI's `tests` job is exactly that: it runs in a
+    python:3.12 container, clones the repo itself, and never runs `npm run
+    build` — that happens in the separate `checks` job, on a different runner
+    with its own filesystem. Asserting on bundle *contents* there would fail
+    for the absence of a file rather than for anything about the code.
+
+    Deliberately a skip and not a silent pass: the assertions below are real,
+    they just need something to have built first. `npm run build` locally, or
+    read them as covered by the checks job proving the build succeeds.
+    """
+    if not _BUNDLE.exists():
+        pytest.skip("viewer bundle not built — run `npm run build:viewer`")
 
 
 def test_viewer_page_hosts_the_queue_component(viewer_client):
@@ -24,6 +47,7 @@ def test_viewer_bundle_is_token_gated(client):
 
 
 def test_viewer_bundle_serves_to_a_token_holder(viewer_client):
+    _require_built_bundle()
     r = viewer_client.get("/build-viewer/main.js")
     assert r.status_code == 200
     # module scripts are rejected outright on a non-JS MIME type
@@ -97,6 +121,7 @@ def test_the_refresh_bridge_no_longer_crosses_the_page_boundary(viewer_client):
     assert "window.jetstream" not in html
     assert "jetstreamRefreshRequests" not in html  # the pre-bridge name
 
+    _require_built_bundle()
     js = viewer_client.get("/build-viewer/main.js").data.decode()
     for name in ("requests", "queue"):
         assert f'"{name}"' in js or f"'{name}'" in js, name
