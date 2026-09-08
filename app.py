@@ -4242,8 +4242,8 @@ def _gate_viewer_routes():
     # bundle that is open by design: home.html is the 401 body, so gating its
     # script would leave the front door with a dead form. It contains only
     # what the inline script it replaced already exposed (redeem/register) —
-    # src/public-app/main.ts spells out the rule that nothing authenticated
-    # may be imported there. /build/, /build-admin/ and /build-viewer/ stay
+    # src/public/main.tsx spells out the rule that nothing authenticated may
+    # be imported there. /build/ (admin, viewer, shared React chunk) stays
     # token-gated.
     if p.startswith("/build-public/"):
         return None

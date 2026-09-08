@@ -191,19 +191,23 @@ Flask parses the sid out of `X-Original-URI` and checks the requesting `js_user`
 
 ## Client (admin.html, viewer.html)
 
-### Angular islands (migration in progress)
+### React islands (migration in progress)
 
-The pages are still Flask-served HTML shells; what has moved is the code *inside* them. Each Angular app in `angular.json` builds one `main.js` that a shell loads as a module, and each component uses an **attribute selector** (`<section id="queue-panel" jet-queue-panel>`) so it adopts existing markup and the page CSS keeps matching unchanged. Every island bootstraps independently and no-ops when its mount point is absent, so a panel can be ported or reverted alone.
+The pages are still Flask-served HTML shells; what has moved is the code *inside* them. Vite builds one entry per page, and each island is a React function component that `mountIslands` (`src/lib/mount.tsx`) renders into an element the shell already carries — a custom tag like `<jet-viewers-panel>` or an attribute like `<section id="queue-panel" jet-queue-panel>` — so existing markup, ids and page CSS keep matching unchanged. One `createRoot` per island, not per page: a panel can be ported or reverted alone, and a shell that lacks a mount point simply gets no island.
 
-| App | Bundle | Mounted in | Gated? |
+Because a panel renders *into* a page-owned `<section>` whose chrome keys off `.collapsed` on the section itself, every island receives its `host` element and `useHostClass` toggles that class imperatively. Islands are separate roots, so they share no React context; the refresh nudges between them (library → requests → queue) go through `window.jetstream` (`src/lib/bridge.ts`).
+
+| Entry | Bundle | Mounted in | Gated? |
 |---|---|---|---|
-| `admin` (`src/admin-app`) | `/build-admin/main.js` | `admin.html` | Traefik basicauth |
-| `viewer` (`src/viewer-app`) | `/build-viewer/main.js` | `viewer.html` | token cookie, like `/build/` |
-| `public` (`src/public-app`) | `/build-public/main.js` | `home.html` (and `login.html` once ported) | **no — by design** |
+| `src/admin/main.tsx` | `/build/admin.js` + shared `chunks/` | `admin.html` | Traefik basicauth |
+| `src/viewer/main.tsx` | `/build/viewer.js` + shared `chunks/` | `viewer.html` | token cookie, like everything under `/build/` |
+| `src/public/main.tsx` | `/build-public/main.js`, fully inlined | `home.html` (and `login.html` once ported) | **no — by design** |
 
-`/build-public/` is the one bundle `_gate_viewer_routes` lets through anonymously: `home.html` *is* the 401 body, so gating its script would leave the front door with a dead form. The rule that keeps that safe is in `src/public-app/main.ts` — nothing that names an authenticated endpoint may be imported there, and it deliberately carries no HttpClient so it stays about the size of the inline script it replaced (~35 kB over the wire). The admin and viewer bundles stay gated because they enumerate the private route map.
+`/build-public/` is the one bundle `_gate_viewer_routes` lets through anonymously: `home.html` *is* the 401 body, so gating its script would leave the front door with a dead form. It is a separate Vite config (`vite.public.config.js`) with no code splitting, so it can never reference a chunk under the gated `/build/`. The rule that keeps it safe is stated in `src/public/main.tsx`: nothing that names an authenticated endpoint may be imported there. Cost stated plainly: React + ReactDOM put it at ~62 kB gzipped, against ~6 kB for the inline script it replaced.
 
-Still hand-written: the HLS player in `viewer.html`, the file browser + playback controls in `admin.html`, all of `library.html`, `login.html`, `hub.html`, and three Svelte islands (AdminQueue, AdminRecent, ViewerChat) built by Vite into `/build/`.
+`src/lib/` is the only thing islands may import from: `usePolled` / `usePollTick` (interval polling that keeps the last good value; the tick variant folds deltas, which chat needs), `useActions` (per-button in-flight state + toast), `useCollapse` (the `jetstream_*_collapsed` localStorage convention), `usePublishRefresh`, `clientSid`, `formatTime`, `fmtAgo`, `PosterThumb`. `npm run typecheck` is the only TypeScript gate — Vite does not type-check.
+
+Still hand-written: the HLS player in `viewer.html`, the file browser + playback controls in `admin.html`, all of `library.html`, `login.html`, `hub.html`.
 
 Both pages share the same playback core. Differences: admin has scrub bar + queue UI + play/pause controls + chat panel; viewer has the player + position counter + chat panel.
 

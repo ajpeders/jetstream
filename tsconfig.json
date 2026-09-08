@@ -1,31 +1,24 @@
-/* Scoped deliberately to src/admin-app: the rest of the frontend is plain
-   JS inside .html files and must stay outside TypeScript's view, or every
-   editor in the repo starts reporting errors on code that never compiles. */
+/* Type-checks the React islands and the shared lib: `npm run typecheck`.
+   Scoped to src/lib, src/admin, src/viewer, src/public — the inline scripts in
+   static/*.html are plain JS and must stay outside TypeScript's view.
+   Vite itself does not type-check, so this is the only gate for TS errors. */
 {
-  "compileOnSave": false,
   "compilerOptions": {
     "strict": true,
     "noImplicitOverride": true,
-    "noPropertyAccessFromIndexSignature": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "isolatedModules": true,
     "esModuleInterop": true,
-    "experimentalDecorators": true,
     "moduleResolution": "bundler",
-    "importHelpers": true,
+    "module": "ESNext",
     "target": "ES2022",
-    "module": "preserve",
-    "paths": {
-      "@jet/ui": ["./src/ui/index.ts"]
-    }
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "paths": { "@/lib": ["./src/lib/index.ts"], "@/*": ["./src/*"] }
   },
-  "angularCompilerOptions": {
-    "enableI18nLegacyMessageIdFormat": false,
-    "strictInjectionParameters": true,
-    "strictInputAccessModifiers": true,
-    "typeCheckHostBindings": true,
-    "strictTemplates": true
-  }
+  "include": ["src/lib", "src/admin/**/*.ts", "src/admin/**/*.tsx", "src/viewer/**/*.ts", "src/viewer/**/*.tsx", "src/public"]
 }

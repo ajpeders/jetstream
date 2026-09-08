@@ -107,7 +107,7 @@ def test_admin_hosts_both_request_panels(client):
     assert 'id="requests-panel"' in html and 'id="media-requests-panel"' in html
     for gone in ("refreshRequests", "refreshMediaRequests", "mediaRequestMeta",
                  'id="requests-list"', 'id="media-requests-list"',
-                 # dead once their only callers moved to Angular
+                 # dead once their only callers moved to React
                  "function reportAgo", "function basename"):
         assert gone not in html, gone
     # still used by the un-ported panels, so it must survive

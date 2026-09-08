@@ -1,7 +1,7 @@
 FROM node:26-slim AS ui-build
 
 WORKDIR /ui
-COPY package.json package-lock.json vite.config.js angular.json tsconfig.json tsconfig.app.json tsconfig.react.json vite.public.config.js /ui/
+COPY package.json package-lock.json vite.config.js vite.public.config.js tsconfig.json /ui/
 COPY src /ui/src
 RUN npm ci
 # `static/` must be present before the build: src/jetstream-theme.css does
@@ -59,7 +59,6 @@ WORKDIR /app
 COPY app.py /app/app.py
 COPY static /app/static
 COPY --from=ui-build /ui/static/build /app/static/build
-COPY --from=ui-build /ui/static/build-admin /app/static/build-admin
 COPY --from=ui-build /ui/static/build-public /app/static/build-public
 
 EXPOSE 8080

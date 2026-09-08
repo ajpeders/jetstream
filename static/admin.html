@@ -81,30 +81,30 @@
 </div>
 <div id="admin-queue-app"></div>
 <div id="admin-recent-app"></div>
-<!-- Queue requests (files we already have). Rendered by the Angular admin
+<!-- Queue requests (files we already have). Rendered by the React admin
      bundle; the div keeps its id so css/admin.css still applies.
-     See src/admin-app/queue-requests-panel.component.ts. -->
+     See src/admin/QueueRequestsPanel.tsx. -->
 <div id="requests-panel"><jet-queue-requests-panel></jet-queue-requests-panel></div>
 <!-- Media requests (things we do NOT have yet). See
-     src/admin-app/media-requests-panel.component.ts. -->
+     src/admin/MediaRequestsPanel.tsx. -->
 <div id="media-requests-panel"><jet-media-requests-panel></jet-media-requests-panel></div>
-<!-- Rendered by the Angular admin bundle; the div keeps its id so every
+<!-- Rendered by the React admin bundle; the div keeps its id so every
      #reports-panel rule in css/admin.css still applies.
-     See src/admin-app/reports-panel.component.ts. -->
+     See src/admin/ReportsPanel.tsx. -->
 <div id="reports-panel"><jet-reports-panel></jet-reports-panel></div>
-<!-- Rendered by the Angular admin bundle; the div keeps its id so every
+<!-- Rendered by the React admin bundle; the div keeps its id so every
      #reactions-panel rule in css/admin.css still applies.
-     See src/admin-app/custom-reactions-panel.component.ts. -->
+     See src/admin/CustomReactionsPanel.tsx. -->
 <div id="reactions-panel"><jet-custom-reactions-panel></jet-custom-reactions-panel></div>
 <div id="viewers-panel" style="margin-top:1rem">
   <jet-viewers-panel></jet-viewers-panel>
 </div>
-<!-- Rendered by the Angular admin bundle; the div keeps its id so every
+<!-- Rendered by the React admin bundle; the div keeps its id so every
      #users-panel rule in css/admin.css still applies.
-     See src/admin-app/users-panel.component.ts. -->
+     See src/admin/UsersPanel.tsx. -->
 <div id="users-panel"><jet-users-panel></jet-users-panel></div>
-<!-- Rendered by the Angular admin bundle. See
-     src/admin-app/vod-sessions-panel.component.ts. -->
+<!-- Rendered by the React admin bundle. See
+     src/admin/VodSessionsPanel.tsx. -->
 <div id="vod-panel"><jet-vod-sessions-panel></jet-vod-sessions-panel></div>
 <div id="search-row">
   <input id="search-input" type="search" placeholder="🔍 Search the whole library…" autocomplete="off">
@@ -115,9 +115,9 @@
 <ul id="list"><li class="empty">Loading…</li></ul>
 <div id="show-view" style="display:none"></div>
 
-<!-- Rendered by the Angular admin bundle; the section keeps its id so every
+<!-- Rendered by the React admin bundle; the section keeps its id so every
      #chat-panel rule in css/admin.css still applies.
-     See src/admin-app/chat-panel.component.ts. -->
+     See src/admin/ChatPanel.tsx. -->
 <section id="chat-panel" jet-chat-panel></section>
 
 <div id="toast"></div>
@@ -578,7 +578,7 @@ pauseBtn.addEventListener("click", () => togglePause(pauseBtn.dataset.paused ===
 dockPauseBtn.addEventListener("click", () => togglePause(dockPauseBtn.dataset.paused === "1"));
 
 // Relative-time label shared by the VOD sessions table and the users panel.
-// Lived in the Viewers panel until that moved to Angular; it is plain enough
+// Lived in the Viewers panel until that moved to React; it is plain enough
 // to keep here rather than reach into the bundle for it.
 function fmtAgo(secs) {
   if (secs < 60) return Math.max(0, Math.floor(secs)) + "s ago";

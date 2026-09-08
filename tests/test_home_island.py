@@ -49,5 +49,5 @@ def test_public_bundle_serves_anonymously(client):
 
 def test_viewer_and_admin_bundles_stay_gated(client):
     """Opening /build-public/ must not loosen the neighbours."""
-    for path in ("/build-viewer/main.js", "/build-admin/main.js", "/build/adminQueue.js"):
+    for path in ("/build/admin.js", "/build/viewer.js"):
         assert client.get(path).status_code in (401, 403), path

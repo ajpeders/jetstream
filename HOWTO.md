@@ -25,7 +25,7 @@ bin/dev-server.py     # serves on http://127.0.0.1:8099
 
 The server prints every way in before it starts listening — friend code `devfriend`, viewer code `devviewer`, account `dev` / `devpassword`, and `/admin` (unauthenticated locally, since Traefik isn't in front of it).
 
-Editing an Angular panel? Rebuild on save with `npm run watch:admin`, `watch:viewer` or `watch:public` in a second terminal, then reload — the dev server serves whatever is in `static/build*/`. HTML shells and `static/css/` need no build; the theme needs `npm run build:theme`.
+Editing a React island? Rebuild on save with `npm run watch` (admin + viewer) or `npm run watch:public` in a second terminal, then reload — the dev server serves whatever is in `static/build*/`. `npm run typecheck` before committing; Vite does not type-check. HTML shells and `static/css/` need no build; the theme needs `npm run build:theme`.
 
 Nothing plays until you pick a source on `/controls` or `/admin` — `auto_fill` is seeded off so the watcher doesn't loop a fixture at you while you work.
 

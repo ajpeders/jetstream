@@ -26,7 +26,7 @@ function chatColor(value: string): string {
 }
 
 /** Mounts into <div id="chat-app"> and renders the <section id="chat"> that
- *  viewer.css styles — the same element the Svelte island produced. */
+ *  viewer.css styles. */
 export function ChatPanel() {
   const sid = clientSid();
   const [collapsed, setCollapsed] = useCollapse('jetstream_chat_collapsed', false);

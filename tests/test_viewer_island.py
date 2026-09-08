@@ -11,7 +11,7 @@ _BUNDLE = pathlib.Path(__file__).resolve().parents[1] / "static" / "build" / "vi
 def _require_built_bundle():
     """Skip when nothing has built the viewer bundle.
 
-    static/build-viewer/ is a build artifact and gitignored, so it is absent
+    static/build/ is a build artifact and gitignored, so it is absent
     from a fresh clone. CI's `tests` job is exactly that: it runs in a
     python:3.12 container, clones the repo itself, and never runs `npm run
     build` — that happens in the separate `checks` job, on a different runner

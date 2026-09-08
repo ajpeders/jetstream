@@ -44,9 +44,9 @@
   </div>
 </main>
 
-<!-- Read-only "up next". Rendered by the Angular viewer bundle; the section
+<!-- Read-only "up next". Rendered by the React viewer bundle; the section
      keeps its id and starts collapsed so the panel looks right before the
-     bundle boots. See src/viewer-app/queue-panel.component.ts. -->
+     bundle boots. See src/viewer/queue-panel.tsx. -->
 <section id="queue-panel" class="collapsed" jet-queue-panel></section>
 
 <section>
@@ -77,15 +77,15 @@
 <!-- Votable viewer request list. Everyone sees it + can up-vote; friends/admin
      additionally get Queue/✕ (can_manage from /api/requests). Filing happens in
      the Library panel below; popular asks float to the top here.
-     Rendered by the Angular viewer bundle; the section keeps its id and starts
+     Rendered by the React viewer bundle; the section keeps its id and starts
      collapsed so the panel looks right before the bundle boots.
-     See src/viewer-app/requests-panel.component.ts. -->
+     See src/viewer/requests-panel.tsx. -->
 <section id="reqlist-panel" class="collapsed" jet-requests-panel></section>
 
 <!-- Browse/search the library and ask the host to queue something. Rendered by
-     the Angular viewer bundle; the section keeps its id so viewer.css and the
+     the React viewer bundle; the section keeps its id so viewer.css and the
      theme need no changes. Starts expanded, so no `collapsed` class here.
-     See src/viewer-app/library-panel.component.ts. -->
+     See src/viewer/library-panel.tsx. -->
 <section id="request-panel" jet-library-panel></section>
 
 <section id="reactions-panel" class="collapsed">
