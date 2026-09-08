@@ -1,7 +1,7 @@
 FROM node:26-slim AS ui-build
 
 WORKDIR /ui
-COPY package.json package-lock.json vite.config.js angular.json tsconfig.json tsconfig.app.json tsconfig.viewer.json /ui/
+COPY package.json package-lock.json vite.config.js angular.json tsconfig.json tsconfig.app.json tsconfig.viewer.json tsconfig.public.json /ui/
 COPY src /ui/src
 RUN npm ci
 # `static/` must be present before the build: src/jetstream-theme.css does
@@ -61,6 +61,7 @@ COPY static /app/static
 COPY --from=ui-build /ui/static/build /app/static/build
 COPY --from=ui-build /ui/static/build-admin /app/static/build-admin
 COPY --from=ui-build /ui/static/build-viewer /app/static/build-viewer
+COPY --from=ui-build /ui/static/build-public /app/static/build-public
 
 EXPOSE 8080
 # gunicorn replaces the dev-server Werkzeug. One worker (the app's background

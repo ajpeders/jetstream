@@ -17,3 +17,4 @@ state/
 static/build-admin/
 .angular/
 static/build-viewer/
+static/build-public/

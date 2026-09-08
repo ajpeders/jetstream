@@ -5,14 +5,18 @@ A small Flask + ffmpeg service that broadcasts video files (and yt-dlp-resolvabl
 ```
 ~/homelab/apps/jetstream/         ← code (this directory)
   app.py                          Flask backend
-  src/                            Svelte UI islands
+  src/admin-app/                  Angular panels mounted into admin.html
+  src/viewer-app/                 Angular panels mounted into viewer.html
+  src/public-app/                 Angular front door (home.html) — the one public bundle
+  src/ui/                         @jet/ui — helpers shared by the Angular apps
+  src/{admin,viewer}/*.svelte     remaining Svelte islands (queue, recent, chat)
   static/admin.html               admin UI
   static/viewer.html              viewer UI
   static/home.html                front door — friend code or sign in (/)
   static/login.html               user login (/login)
   static/hub.html                 post-login chooser (/home)
   static/library.html             private VOD library (/library)
-  static/build/                   generated frontend bundle (gitignored)
+  static/build*/                  generated bundles: build/ (Svelte), build-admin/, build-viewer/, build-public/ (all gitignored)
   package.json                    frontend build tooling
   Dockerfile                      python:3.12-slim + ffmpeg + gunicorn + yt-dlp
   nginx-default.conf.template     nginx sidecar config (envsubst at start)
@@ -45,7 +49,7 @@ docker compose up -d --build jetstream nginx-jetstream
 
 | Change | Local source tree | Prod |
 |---|---|---|
-| `src/*` frontend | `npm run build` (writes `static/build/`) | rebuild + recreate |
+| `src/*` frontend | `npm run build` (theme + Svelte + the three Angular apps, writes `static/build*/`) | rebuild + recreate |
 | `static/*.html` / CSS | local file changes | rebuild + recreate, or short-lived `docker cp static/foo.html jetstream:/app/static/foo.html` |
 | `app.py` | local file changes | rebuild + recreate |
 | `Dockerfile` / `nginx-default.conf.template` | rebuild + recreate | rebuild + recreate |

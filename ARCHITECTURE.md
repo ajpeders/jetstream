@@ -191,6 +191,20 @@ Flask parses the sid out of `X-Original-URI` and checks the requesting `js_user`
 
 ## Client (admin.html, viewer.html)
 
+### Angular islands (migration in progress)
+
+The pages are still Flask-served HTML shells; what has moved is the code *inside* them. Each Angular app in `angular.json` builds one `main.js` that a shell loads as a module, and each component uses an **attribute selector** (`<section id="queue-panel" jet-queue-panel>`) so it adopts existing markup and the page CSS keeps matching unchanged. Every island bootstraps independently and no-ops when its mount point is absent, so a panel can be ported or reverted alone.
+
+| App | Bundle | Mounted in | Gated? |
+|---|---|---|---|
+| `admin` (`src/admin-app`) | `/build-admin/main.js` | `admin.html` | Traefik basicauth |
+| `viewer` (`src/viewer-app`) | `/build-viewer/main.js` | `viewer.html` | token cookie, like `/build/` |
+| `public` (`src/public-app`) | `/build-public/main.js` | `home.html` (and `login.html` once ported) | **no — by design** |
+
+`/build-public/` is the one bundle `_gate_viewer_routes` lets through anonymously: `home.html` *is* the 401 body, so gating its script would leave the front door with a dead form. The rule that keeps that safe is in `src/public-app/main.ts` — nothing that names an authenticated endpoint may be imported there, and it deliberately carries no HttpClient so it stays about the size of the inline script it replaced (~35 kB over the wire). The admin and viewer bundles stay gated because they enumerate the private route map.
+
+Still hand-written: the HLS player in `viewer.html`, the file browser + playback controls in `admin.html`, all of `library.html`, `login.html`, `hub.html`, and three Svelte islands (AdminQueue, AdminRecent, ViewerChat) built by Vite into `/build/`.
+
 Both pages share the same playback core. Differences: admin has scrub bar + queue UI + play/pause controls + chat panel; viewer has the player + position counter + chat panel.
 
 ### Player setup / teardown

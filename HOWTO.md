@@ -7,7 +7,7 @@ Step-by-step operator guides. Admin API calls go through Traefik basicauth on pr
 Code changes (app.py, static, frontend) must be baked into the image — `docker cp` gets clobbered on the next `up -d`.
 
 ```sh
-# frontend changed? build the bundle first (writes static/build/)
+# frontend changed? build the bundles first (writes static/build*/)
 npm run build
 
 cd ~/homelab/services
@@ -24,6 +24,8 @@ bin/dev-server.py     # serves on http://127.0.0.1:8099
 ```
 
 The server prints every way in before it starts listening — friend code `devfriend`, viewer code `devviewer`, account `dev` / `devpassword`, and `/admin` (unauthenticated locally, since Traefik isn't in front of it).
+
+Editing an Angular panel? Rebuild on save with `npm run watch:admin`, `watch:viewer` or `watch:public` in a second terminal, then reload — the dev server serves whatever is in `static/build*/`. HTML shells and `static/css/` need no build; the theme needs `npm run build:theme`.
 
 Nothing plays until you pick a source on `/controls` or `/admin` — `auto_fill` is seeded off so the watcher doesn't loop a fixture at you while you work.
 

@@ -3,13 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tailwindcss -i ./src/jetstream-theme.css -o ./static/jetstream-theme.css --minify && vite build && ng build admin && ng build viewer",
+    "build": "tailwindcss -i ./src/jetstream-theme.css -o ./static/jetstream-theme.css --minify && vite build && ng build admin && ng build viewer && ng build public",
     "build:theme": "tailwindcss -i ./src/jetstream-theme.css -o ./static/jetstream-theme.css --minify",
     "dev": "vite --host 0.0.0.0",
     "build:admin": "ng build admin",
     "watch:admin": "ng build admin --watch --configuration development",
     "build:viewer": "ng build viewer",
-    "watch:viewer": "ng build viewer --watch --configuration development"
+    "watch:viewer": "ng build viewer --watch --configuration development",
+    "build:public": "ng build public",
+    "watch:public": "ng build public --watch --configuration development"
   },
   "devDependencies": {
     "@angular/build": "^22.1.7",

@@ -4238,6 +4238,15 @@ def _gate_viewer_routes():
              # redeem a friend code, or register with one.
              "/api/invite/redeem", "/api/auth/register"):
         return None
+    # The Angular bundle behind those same logged-out pages. It is the one
+    # bundle that is open by design: home.html is the 401 body, so gating its
+    # script would leave the front door with a dead form. It contains only
+    # what the inline script it replaced already exposed (redeem/register) —
+    # src/public-app/main.ts spells out the rule that nothing authenticated
+    # may be imported there. /build/, /build-admin/ and /build-viewer/ stay
+    # token-gated.
+    if p.startswith("/build-public/"):
+        return None
     if p == "/api/_authcheck_vod":
         return None  # nginx subrequest endpoint — has its own logic below
     # v2 user area: the library browser + VOD control APIs require a logged-in
