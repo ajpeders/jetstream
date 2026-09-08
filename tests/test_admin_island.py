@@ -1,4 +1,4 @@
-"""Admin panels ported from hand-written JS to Angular islands.
+"""Admin panels ported from hand-written JS and Angular/Svelte islands to React.
 Owned by this session under the two-session file split; viewer-side
 assertions live in test_viewer_island.py."""
 
@@ -8,7 +8,7 @@ def test_admin_renders_component_host(client):
     assert r.status_code == 200, r.status_code
     html = r.data.decode()
     assert "<jet-viewers-panel></jet-viewers-panel>" in html
-    assert "/build-admin/main.js" in html
+    assert "/build/admin.js" in html
     # the hand-written panel is gone
     for gone in ('id="viewers-list"', 'id="viewers-count"', 'id="viewers-history"',
                  "refreshViewers", "viewersHistoryBtn"):
@@ -29,9 +29,9 @@ def test_viewers_api_still_shaped_as_the_component_expects(client):
 
 
 def test_admin_bundle_is_token_gated(client):
-    """The Angular admin bundle must stay behind auth like /build/ does —
+    """The React admin bundle must stay behind auth like /build/ does —
     it names every /admin/api/* route it calls."""
-    r = client.get("/build-admin/main.js")
+    r = client.get("/build/admin.js")
     assert r.status_code in (401, 403), r.status_code
 
 
