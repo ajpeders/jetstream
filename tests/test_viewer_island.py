@@ -1,11 +1,11 @@
-"""Viewer-page panels ported to Angular islands (queue, requests, library).
+"""Viewer-page panels ported to React islands (queue, requests, library, chat).
 Split out of test_admin_island.py so the two sessions working this
 tree stop colliding in one file."""
 import pathlib
 
 import pytest
 
-_BUNDLE = pathlib.Path(__file__).resolve().parents[1] / "static" / "build-viewer" / "main.js"
+_BUNDLE = pathlib.Path(__file__).resolve().parents[1] / "static" / "build" / "viewer.js"
 
 
 def _require_built_bundle():
@@ -23,7 +23,7 @@ def _require_built_bundle():
     read them as covered by the checks job proving the build succeeds.
     """
     if not _BUNDLE.exists():
-        pytest.skip("viewer bundle not built — run `npm run build:viewer`")
+        pytest.skip("viewer bundle not built — run `npm run build`")
 
 
 def test_viewer_page_hosts_the_queue_component(viewer_client):
@@ -31,7 +31,7 @@ def test_viewer_page_hosts_the_queue_component(viewer_client):
     assert r.status_code == 200
     html = r.data.decode()
     assert "jet-queue-panel" in html
-    assert "/build-viewer/main.js" in html
+    assert "/build/viewer.js" in html
     # the section keeps its id so viewer.css needs no changes
     assert 'id="queue-panel"' in html
     # and the hand-written queue rendering is gone
@@ -43,12 +43,12 @@ def test_viewer_page_hosts_the_queue_component(viewer_client):
 def test_viewer_bundle_is_token_gated(client):
     """No token cookie — the bundle names every endpoint it calls, so it stays
     behind the same gate as /build/."""
-    assert client.get("/build-viewer/main.js").status_code in (401, 403)
+    assert client.get("/build/viewer.js").status_code in (401, 403)
 
 
 def test_viewer_bundle_serves_to_a_token_holder(viewer_client):
     _require_built_bundle()
-    r = viewer_client.get("/build-viewer/main.js")
+    r = viewer_client.get("/build/viewer.js")
     assert r.status_code == 200
     # module scripts are rejected outright on a non-JS MIME type
     assert "javascript" in r.headers["Content-Type"]
@@ -113,16 +113,15 @@ def test_the_refresh_bridge_no_longer_crosses_the_page_boundary(viewer_client):
     panel is ported, both the callers and the publishers are inside the bundle,
     so the page itself should hold no window.jetstream call at all.
 
-    The hooks have NOT gone away, and won't: each panel is its own
-    bootstrapApplication, so islands have separate root injectors and cannot
-    reach each other through DI. window.jetstream is how the library panel
+    The hooks have NOT gone away, and won't: each panel is its own React
+    root, so islands share no context and cannot reach each other directly. window.jetstream is how the library panel
     nudges the request list and how that list nudges the queue."""
     html = viewer_client.get("/").data.decode()
     assert "window.jetstream" not in html
     assert "jetstreamRefreshRequests" not in html  # the pre-bridge name
 
     _require_built_bundle()
-    js = viewer_client.get("/build-viewer/main.js").data.decode()
+    js = viewer_client.get("/build/viewer.js").data.decode()
     for name in ("requests", "queue"):
         assert f'"{name}"' in js or f"'{name}'" in js, name
 

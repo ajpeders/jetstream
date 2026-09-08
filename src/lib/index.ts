@@ -12,7 +12,8 @@
 export { useActions, toast, type Actions } from './actions';
 export { publishRefresh, usePublishRefresh } from './bridge';
 export { useCollapse } from './collapse';
-export { mountIslands } from './mount';
+export { mountIslands, type IslandProps } from './mount';
+export { useHostClass } from './host-class';
 export { usePolled, usePollTick, getJson, type Polled } from './polling';
 export { clientSid } from './sid';
 export { formatTime, fmtAgo } from './time';

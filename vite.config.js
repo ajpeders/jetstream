@@ -22,7 +22,6 @@ export default defineConfig({
       input: {
         admin: "src/admin/main.tsx",
         viewer: "src/viewer/main.tsx",
-        viewerChat: "src/viewer-chat.js",
         adminQueue: "src/admin-queue.js",
         adminRecent: "src/admin-recent.js"
       },

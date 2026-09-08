@@ -1,6 +1,13 @@
 import type { ComponentType } from 'react';
 import { createRoot } from 'react-dom/client';
 
+/** Every island receives the element it was mounted into. Panels that render
+ *  *into* a page-owned <section> need it to toggle classes viewer.css keys off
+ *  (see useHostClass); islands that don't care simply ignore the prop. */
+export interface IslandProps {
+  host: HTMLElement;
+}
+
 /**
  * Mount one React root per island present in the page.
  *
@@ -11,10 +18,12 @@ import { createRoot } from 'react-dom/client';
  * one per page) is deliberate: a panel can be ported or reverted alone, and
  * the page keeps working if one is absent from the markup.
  */
-export function mountIslands(islands: ReadonlyArray<readonly [string, ComponentType]>): void {
+export function mountIslands(
+  islands: ReadonlyArray<readonly [string, ComponentType<IslandProps>]>,
+): void {
   for (const [selector, Component] of islands) {
-    for (const el of document.querySelectorAll(selector)) {
-      createRoot(el).render(<Component />);
+    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+      createRoot(el).render(<Component host={el} />);
     }
   }
 }
