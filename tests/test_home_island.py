@@ -1,4 +1,4 @@
-"""The logged-out front door (home.html) ported to an Angular island.
+"""The logged-out front door surfaces ported to React islands.
 
 Unlike the viewer and admin bundles, /build-public/ is served to anonymous
 callers by design: the page it drives is the 401 body, so a gated bundle
@@ -30,6 +30,17 @@ def test_front_door_hosts_the_component(client):
     # and the hand-written state machine is gone
     for gone in ('id="state-code"', 'id="register-form"', "addEventListener",
                  "acceptedCode", "USERNAME_RE"):
+        assert gone not in html, gone
+
+
+def test_login_hosts_the_component(client):
+    r = client.get("/login")
+    assert r.status_code == 200
+    html = r.data.decode()
+    assert "jet-login-form" in html
+    assert "/build-public/main.js" in html
+    assert 'class="card du-card"' in html
+    for gone in ("safeNext", "showError", "addEventListener", 'id="login-form"'):
         assert gone not in html, gone
 
 

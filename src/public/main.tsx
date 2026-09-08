@@ -1,6 +1,7 @@
 import { mountIslands } from '@/lib';
 
 import { FrontDoor } from './front-door';
+import { LoginForm } from './login-form';
 
 /* The logged-out surfaces: the front door (home.html, served as the 401 body
  * at "/") and, once ported, /login. Unlike /build/ this bundle is deliberately
@@ -9,4 +10,7 @@ import { FrontDoor } from './front-door';
  * everything inlined, because it must not depend on a shared chunk under the
  * gated /build/ path. Keep it to what those pages already showed the world:
  * nothing in here may import anything that names an authenticated endpoint. */
-mountIslands([['[jet-front-door]', FrontDoor]]);
+mountIslands([
+  ['[jet-front-door]', FrontDoor],
+  ['[jet-login-form]', LoginForm],
+]);

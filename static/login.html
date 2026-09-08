@@ -9,70 +9,10 @@
 <link rel="stylesheet" href="/jetstream-theme.css">
 </head>
 <body class="front-door-page">
-<div class="card du-card">
+<div class="card du-card" jet-login-form>
   <h1>jetstream</h1>
-  <p class="sub">Sign in to browse the library and watch on demand.</p>
-  <form id="login-form">
-    <label for="username">Username</label>
-    <input class="du-input" id="username" name="username" type="text" autocomplete="username"
-           autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
-    <label for="password">Password</label>
-    <input class="du-input" id="password" name="password" type="password" autocomplete="current-password" required>
-    <p id="error" role="alert"></p>
-    <button class="du-btn du-btn-primary" id="submit-btn" type="submit">Sign in</button>
-  </form>
-  <!-- Reciprocal of the viewer header's Sign-in link: someone who landed here
-       by accident, or who holds only an invite and no account, needs a way
-       back to the shared stream. -->
-  <p class="back"><a href="/">← Back to the live stream</a></p>
+  <noscript><p class="sub">jetstream needs JavaScript to sign in.</p></noscript>
 </div>
-<script>
-const form = document.getElementById("login-form");
-const errorEl = document.getElementById("error");
-const submitBtn = document.getElementById("submit-btn");
-
-// Only same-origin relative paths — a "next" like "https://evil" or "//evil"
-// (protocol-relative) must never become a post-login redirect target.
-function safeNext() {
-  const next = new URLSearchParams(location.search).get("next") || "";
-  if (next.startsWith("/") && !next.startsWith("//")) return next;
-  // Default to the hub, not straight to the library — signing in should let
-  // you pick live stream vs on-demand.
-  return "/home";
-}
-
-function showError(msg) {
-  errorEl.textContent = msg;
-  errorEl.classList.add("show");
-}
-
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  errorEl.classList.remove("show");
-  submitBtn.disabled = true;
-  submitBtn.textContent = "Signing in…";
-  try {
-    const r = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: document.getElementById("username").value,
-        password: document.getElementById("password").value,
-      }),
-    });
-    if (r.ok) {
-      location.href = safeNext();
-      return;
-    }
-    if (r.status === 401) showError("Wrong username or password.");
-    else if (r.status === 429) showError("Too many attempts — wait a minute.");
-    else showError("Sign-in failed — try again.");
-  } catch {
-    showError("Network error — try again.");
-  }
-  submitBtn.disabled = false;
-  submitBtn.textContent = "Sign in";
-});
-</script>
+<script type="module" src="/build-public/main.js"></script>
 </body>
 </html>
