@@ -1,7 +1,7 @@
 FROM node:26-slim AS ui-build
 
 WORKDIR /ui
-COPY package.json package-lock.json vite.config.js angular.json tsconfig.json tsconfig.app.json tsconfig.viewer.json tsconfig.public.json /ui/
+COPY package.json package-lock.json vite.config.js angular.json tsconfig.json tsconfig.app.json tsconfig.viewer.json tsconfig.react.json vite.public.config.js /ui/
 COPY src /ui/src
 RUN npm ci
 # `static/` must be present before the build: src/jetstream-theme.css does

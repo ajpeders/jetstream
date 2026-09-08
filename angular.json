@@ -82,46 +82,6 @@
           "defaultConfiguration": "production"
         }
       }
-    },
-    "public": {
-      "projectType": "application",
-      "root": "src/public-app",
-      "sourceRoot": "src/public-app",
-      "prefix": "jet",
-      "architect": {
-        "build": {
-          "builder": "@angular/build:application",
-          "options": {
-            "browser": "src/public-app/main.ts",
-            "tsConfig": "tsconfig.public.json",
-            "outputPath": {
-              "base": "static/build-public",
-              "browser": ""
-            },
-            "index": false,
-            "polyfills": [],
-            "outputHashing": "none",
-            "sourceMap": false
-          },
-          "configurations": {
-            "production": {
-              "optimization": true,
-              "budgets": [
-                {
-                  "type": "initial",
-                  "maximumWarning": "150kB",
-                  "maximumError": "250kB"
-                }
-              ]
-            },
-            "development": {
-              "optimization": false,
-              "sourceMap": true
-            }
-          },
-          "defaultConfiguration": "production"
-        }
-      }
     }
   }
 }

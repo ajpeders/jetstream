@@ -54,12 +54,17 @@ Replaces `src/ui/`, same responsibilities, as hooks and plain functions:
 
 | Export | Replaces | Contract |
 |---|---|---|
-| `usePolled(fetcher, {intervalMs, pauseWhenHidden})` | `polled()` | returns `{data, refresh}`; a failed tick keeps the last good value |
+| `usePolled(fetcher, {initial, intervalMs})` | `polled()` | returns `{data, refresh}`; a tick that fails or resolves `undefined` keeps the last good value |
+| `usePollTick(fetcher, onTick, {intervalMs})` | `pollingStream()` | for panels that fold each tick into state (chat appends deltas); returns `refresh` |
+| `getJson(url)` | HttpClient reads | fetch → parsed JSON, `undefined` on any failure |
+| `mountIslands([[selector, Component]])` | per-app `bootstrapApplication` loop | one `createRoot` per matching element |
 | `useActions()` | `actions()` | `{busy(key), run(key, fn)}` for per-button in-flight state |
 | `useCollapse(id)` | `collapseState()` | persisted collapsed flag per panel |
 | `publishRefresh(name)` / `useRefreshSignal(name)` | `bridge.ts` | cross-island nudge via `window.jetstream` |
 | `clientSid()`, `formatTime()`, `fmtAgo()`, `toast()` | same | unchanged behaviour |
 | `PosterThumb` | `PosterThumbComponent` | same props |
+
+`vite.config.js` carries the `admin` and `viewer` entries from step 1, pointing at stub `src/admin/main.tsx` and `src/viewer/main.tsx` that mount an empty island list — so `npm run build` stays green throughout, and agents B and A register islands by editing only their own `main.tsx`. The Angular CLI build and Svelte entries stay in the build script until step 4, so every page keeps working on the branch in between.
 
 Islands may only import from `src/lib/`. Nothing in `src/lib/` may import from
 an island directory.
@@ -84,6 +89,10 @@ already carry. A shell that lacks a mount point simply gets no island.
 keep their assertions; only bundle paths change (`/build/admin.js`,
 `/build/viewer.js`, `/build-public/main.js`). The gate tests that prove
 `/build/` stays gated and `/build-public/` does not are unchanged.
+
+## Out of scope
+
+Converting the still-inline pages (library, admin controls, viewer player, login, hub) happens after this spec is done, each as its own small spec. Nothing below covers them.
 
 ## Work split
 

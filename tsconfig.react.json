@@ -1,0 +1,22 @@
+/* Type-checks the React islands and the shared lib: `npm run typecheck`.
+   Vite itself does not type-check, so this is the only gate for TS errors. */
+{
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "target": "ES2022",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "paths": { "@/lib": ["./src/lib/index.ts"], "@/*": ["./src/*"] }
+  },
+  "include": ["src/lib", "src/admin/**/*.ts", "src/admin/**/*.tsx", "src/viewer/**/*.ts", "src/viewer/**/*.tsx", "src/public"]
+}
