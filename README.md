@@ -15,7 +15,7 @@ A small Flask + ffmpeg service that broadcasts video files (and yt-dlp-resolvabl
   static/login.html               user login (/login)
   static/hub.html                 post-login chooser (/home)
   static/library.html             private VOD library (/library)
-  static/build/, build-public/    generated bundles (gitignored): admin.js, viewer.js + shared React chunk; the ungated front door
+  static/build/, build-public/    generated bundles (gitignored): admin.js, hub.js, viewer.js + shared React chunk; the ungated front door
   package.json                    frontend build tooling
   Dockerfile                      python:3.12-slim + ffmpeg + gunicorn + yt-dlp
   nginx-default.conf.template     nginx sidecar config (envsubst at start)

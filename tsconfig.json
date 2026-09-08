@@ -1,5 +1,5 @@
 /* Type-checks the React islands and the shared lib: `npm run typecheck`.
-   Scoped to src/lib, src/admin, src/viewer, src/public — the inline scripts in
+   Scoped to src/lib, src/admin, src/hub, src/viewer, src/public — the inline scripts in
    static/*.html are plain JS and must stay outside TypeScript's view.
    Vite itself does not type-check, so this is the only gate for TS errors. */
 {
@@ -20,5 +20,5 @@
     "noEmit": true,
     "paths": { "@/lib": ["./src/lib/index.ts"], "@/*": ["./src/*"] }
   },
-  "include": ["src/lib", "src/admin/**/*.ts", "src/admin/**/*.tsx", "src/viewer/**/*.ts", "src/viewer/**/*.tsx", "src/public"]
+  "include": ["src/lib", "src/admin/**/*.ts", "src/admin/**/*.tsx", "src/hub/**/*.ts", "src/hub/**/*.tsx", "src/viewer/**/*.ts", "src/viewer/**/*.tsx", "src/public"]
 }

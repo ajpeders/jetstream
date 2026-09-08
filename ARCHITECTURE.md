@@ -200,14 +200,15 @@ Because a panel renders *into* a page-owned `<section>` whose chrome keys off `.
 | Entry | Bundle | Mounted in | Gated? |
 |---|---|---|---|
 | `src/admin/main.tsx` | `/build/admin.js` + shared `chunks/` | `admin.html` | Traefik basicauth |
+| `src/hub/main.tsx` | `/build/hub.js` + shared `chunks/` | `hub.html` (`/home`) | logged-in user session |
 | `src/viewer/main.tsx` | `/build/viewer.js` + shared `chunks/` | `viewer.html` | token cookie, like everything under `/build/` |
-| `src/public/main.tsx` | `/build-public/main.js`, fully inlined | `home.html` (and `login.html` once ported) | **no — by design** |
+| `src/public/main.tsx` | `/build-public/main.js`, fully inlined | `home.html` and `login.html` | **no — by design** |
 
 `/build-public/` is the one bundle `_gate_viewer_routes` lets through anonymously: `home.html` *is* the 401 body, so gating its script would leave the front door with a dead form. It is a separate Vite config (`vite.public.config.js`) with no code splitting, so it can never reference a chunk under the gated `/build/`. The rule that keeps it safe is stated in `src/public/main.tsx`: nothing that names an authenticated endpoint may be imported there. Cost stated plainly: React + ReactDOM put it at ~62 kB gzipped, against ~6 kB for the inline script it replaced.
 
 `src/lib/` is the only thing islands may import from: `usePolled` / `usePollTick` (interval polling that keeps the last good value; the tick variant folds deltas, which chat needs), `useActions` (per-button in-flight state + toast), `useCollapse` (the `jetstream_*_collapsed` localStorage convention), `usePublishRefresh`, `clientSid`, `formatTime`, `fmtAgo`, `PosterThumb`. `npm run typecheck` is the only TypeScript gate — Vite does not type-check.
 
-Still hand-written: the HLS player in `viewer.html`, the file browser + playback controls in `admin.html`, all of `library.html`, `login.html`, `hub.html`.
+Still hand-written: the HLS player in `viewer.html`, the file browser + playback controls in `admin.html`, all of `library.html`.
 
 Both pages share the same playback core. Differences: admin has scrub bar + queue UI + play/pause controls + chat panel; viewer has the player + position counter + chat panel.
 

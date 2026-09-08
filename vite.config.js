@@ -18,6 +18,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         admin: "src/admin/main.tsx",
+        hub: "src/hub/main.tsx",
         viewer: "src/viewer/main.tsx"
       },
       output: {
