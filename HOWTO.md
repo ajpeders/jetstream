@@ -153,14 +153,14 @@ All set in the compose `.env`; apply with `docker compose up -d` (no rebuild).
 
 Related: `USERS_FILE` (`/data/users.json`) and `USER_SESSIONS_FILE` (`/data/sessions.json`) relocate the account/session stores — normally leave alone.
 
-## Tune the live idle pause
+## Tune the live idle simulation
 
-`LIVE_IDLE_TIMEOUT_S` (default `120`, set in the compose `.env`; apply with `docker compose up -d`, no rebuild) is how long the watcher waits with zero viewers before auto-pausing the live stream: ffmpeg is killed, source + position are kept, and `auto_fill` is gated so nothing new starts for an empty room. A viewer's next `/hls` request auto-resumes the same title (~1-3 s cold start). `0` disables it and restores the old "always playing" behavior.
+`LIVE_IDLE_TIMEOUT_S` (default `120`, set in the compose `.env`; apply with `docker compose up -d`, no rebuild) is how long the watcher waits with zero viewers before killing the real transcode. It does **not** pause: the source stays loaded and a virtual playhead keeps advancing with the wall clock (rotating to the next item at EOF), so `/api/now-playing` and `/api/status` still read as playing — a linear-TV channel with no encoder running. A viewer's next `/hls` request starts real ffmpeg at the simulated position (~1-3 s cold start). `0` disables it and restores always-transcoding behavior.
 
-Only auto-pauses resume on their own — a manual Pause stays put. Live URL sources are never auto-paused. Confirm from `/api/status` (idle shows `paused: true`, `viewers: 0`) or the admin dashboard.
+Live URL sources are never simulated (no duration to advance against). A manual Pause is a real pause and overrides the simulation. Confirm from `/api/status` (`simulated: true`, `viewers: 0`, `paused: false`, position still moving) or the admin dashboard.
 
 ## Truly stop the live stream
 
-`auto_fill` defaults to on, so Stop just makes the watcher pick something else. To actually stop: Settings → `auto_fill` off, then Stop. With the idle pause on this is mostly automatic anyway — the stream stops itself ~2 min after the last viewer leaves.
+`auto_fill` defaults to on, so Stop just makes the watcher pick something else. To actually stop: Settings → `auto_fill` off, then Stop. With the idle simulation on, the real transcode already stops itself ~2 min after the last viewer leaves — the channel just keeps appearing to play.
 
 See **README.md** for the full endpoint/env reference, **ARCHITECTURE.md** for how it works.

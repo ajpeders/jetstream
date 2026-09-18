@@ -53,7 +53,7 @@ Other invariants across branches:
 - `-f hls -hls_time HLS_SEG_TIME -hls_list_size HLS_LIST_SIZE -hls_segment_type fmp4`.
 - Output: `idx_av.m3u8` + `seg_av_NNNNN.m4s` + `init_av.mp4` in `/hls/run/<run_id>/`.
 
-Pause is **kill-and-resume**: SIGSTOP doesn't work cleanly with `-re` (wall-clock advances while suspended; SIGCONT then burst-encodes to "catch up"). On resume, a new ffmpeg starts with `-ss <paused_position>`. The watcher's idle auto-pause reuses this exact path (see Watcher thread), so a stream with no viewers freezes instead of transcoding for an empty room.
+Pause is **kill-and-resume**: SIGSTOP doesn't work cleanly with `-re` (wall-clock advances while suspended; SIGCONT then burst-encodes to "catch up"). On resume, a new ffmpeg starts with `-ss <paused_position>`. The watcher's idle simulation is different: it also kills ffmpeg but does *not* pause — the playhead keeps advancing as a virtual clock (see Watcher thread).
 
 ### Run directory + composer
 
@@ -72,7 +72,7 @@ This is what makes queue advances / seeks / resumes seamless on the viewer side:
 
 | Lock | Protects |
 |---|---|
-| `state_lock` | `current_proc`, `current_source`, `current_start_offset`, `current_start_time`, `current_paused`, `paused_position`, `auto_paused`, `active_run_id`, `next_run_id`, `finished_run_ids` |
+| `state_lock` | `current_proc`, `current_source`, `current_start_offset`, `current_start_time`, `current_paused`, `paused_position`, `detached`, `active_run_id`, `next_run_id`, `finished_run_ids` |
 | `_composer_state_lock` | composer's per-(run, segment) seq tables |
 | `playlist_lock` | `playlist[]` |
 | `settings_lock` | `settings{}` |
@@ -94,9 +94,9 @@ This is what makes queue advances / seeks / resumes seamless on the viewer side:
 4. If we have an item → `_start_stream(item)`. On failure, sleep 4s (back-off).
 5. Else → `_stop_locked()` + `_cleanup_hls()` (fully idle).
 
-This is what gives the "always playing 24/7" behavior — bounded by the idle auto-pause below. Setting `auto_fill=false` is still the manual off switch.
+This is what gives the "always playing 24/7" behavior — bounded by the idle simulation below. Setting `auto_fill=false` is still the manual off switch.
 
-**Idle auto-pause (`LIVE_IDLE_TIMEOUT_S`, default 120s, 0 disables).** Each tick the watcher reads `_viewer_count()`. With no viewers it starts a clock; once the timeout elapses it calls `_auto_pause_locked()` — the same kill-and-resume freeze as `api_pause` (ffmpeg terminated, run retired, `current_paused=True`, `paused_position` frozen), tagged with `auto_paused=True` so it's distinguishable from a user pause. While idle it also gates the queue pop, `auto_fill`, and pre-roll promotion, so nothing new starts for an empty room; a stream that ends naturally with no viewers falls through to the fully-idle cleanup. When a viewer's `/hls` request reappears (`_viewer_count() > 0`), the watcher auto-resumes the *same* title from `paused_position` — only `auto_paused` pauses resume, a manual pause stays put. `is_live` sources are never auto-paused (a live URL has no resumable position). This stops `auto_fill` from transcoding a random library title forever with no audience; the cost is a ~1-3s cold start when a viewer connects.
+**Idle simulation (`LIVE_IDLE_TIMEOUT_S`, default 120s, 0 disables).** Each tick the watcher reads `_viewer_count()`. With no viewers it starts a clock; once the timeout elapses it calls `_detach_locked()`: ffmpeg is terminated and the run retired, but `current_source` stays loaded and `current_start_offset`/`current_start_time` are left alone, so the playhead keeps advancing with the wall clock. `detached=True` marks this state — distinct from `current_paused`, because the channel is presented as *playing*. `/api/status` and `/api/now-playing` compute the position through `_current_position()`, which now also returns the virtual playhead while detached. At virtual EOF the watcher picks the next queue/auto_fill item via `_simulate_source_locked()` and keeps simulating (no ffmpeg), so a living-room display keeps showing a title. The moment a viewer's `/hls` request reappears (`_viewer_count() > 0`), the watcher calls `_start_stream(current_source, start_seconds=<virtual position>)` — real ffmpeg resumes at exactly where the simulation would be. A manual `api_pause` clears `detached` (a real pause, not a simulation). `is_live` sources are never simulated (no duration to advance against). This stops `auto_fill` from transcoding a random library title forever with no audience; the cost is a ~1-3s cold start when a viewer connects.
 
 ### State persistence (`STATE_FILE = /data/state.json`)
 
@@ -277,7 +277,7 @@ That works mechanically, but with `-f hls` + a VAAPI-decoded source, segment tim
 
 - Pause kills ffmpeg and retires the run. Composer keeps the (now-finished) run's segments in `/hls/stream.m3u8` until they roll out, so viewers' players sit on the existing live edge instead of seeing a 404'd manifest. On resume, a new run with `EXT-X-DISCONTINUITY` between.
 - Player pane is always visible (no `display:none`) even when idle, so seek/pause/auto-advance can't collapse the layout. `aspect-ratio: 16/9 + object-fit: contain` keeps the box at fixed dimensions.
-- `auto_fill` defaults to true. Stop button is mostly a "skip current; watcher will pick something else" unless `auto_fill=false`. To truly stop: flip the setting then stop. Independently, the idle auto-pause (`LIVE_IDLE_TIMEOUT_S`) already stops transcoding ~2 min after the last viewer leaves.
+- `auto_fill` defaults to true. Stop button is mostly a "skip current; watcher will pick something else" unless `auto_fill=false`. To truly stop: flip the setting then stop. Independently, the idle simulation (`LIVE_IDLE_TIMEOUT_S`) already stops the real transcode ~2 min after the last viewer leaves, while the channel keeps appearing to play.
 - Admin's `broadcast-seek` slider posts to `/admin/api/seek`; it does NOT scrub the local `<video>` element. Seek is server-side (kill + restart ffmpeg with new `-ss`).
 - Subtitle burn-in is implicit-on for files with English text subs. Pass `subtitle_idx: null` at queue/play time to opt out. URLs don't get subs.
 - `docker cp app.py` to prod survives until the next image rebuild — always rebuild for app.py changes that need to stick.
