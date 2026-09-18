@@ -4039,6 +4039,22 @@ def _composer_thread():
         time.sleep(COMPOSER_TICK_S)
 
 
+def _with_duration(source: dict) -> dict:
+    """Return `source` with a probed duration when it's a file that lacks one.
+    Queue/auto_fill entries don't carry a duration, but the idle simulation
+    needs it to know where EOF is. May spawn ffprobe, so call OUTSIDE
+    state_lock."""
+    if source.get("type") == "file" and source.get("duration") is None:
+        try:
+            full = _safe_resolve(source["ref"], must_be_file=True)
+            dur = _probe_duration(full)
+            if dur is not None:
+                return {**source, "duration": dur}
+        except Exception:
+            pass
+    return source
+
+
 def _pick_next_item() -> dict | None:
     """Choose what plays next: the queue head, else a random library pick when
     auto_fill is on. Does its own locking (playlist_lock/settings_lock) and may
@@ -4120,6 +4136,7 @@ def _watcher():
                             _cleanup_hls()
                             _clear_state()
                         else:
+                            next_item = _with_duration(next_item)
                             with state_lock:
                                 if detached:
                                     old_src, old_pos = _simulate_source_locked(next_item)
@@ -4183,6 +4200,7 @@ def _watcher():
                 # the next title and the virtual playhead runs it.
                 next_item = _pick_next_item()
                 if next_item is not None:
+                    next_item = _with_duration(next_item)
                     with state_lock:
                         old_src, old_pos = _simulate_source_locked(next_item)
                         sim_snap = _state_snapshot_locked()
@@ -4345,6 +4363,7 @@ def _restore_state_on_startup():
         # We shut down while simulating: restore the simulated channel without
         # spawning ffmpeg for an empty room. The playhead resumes advancing from
         # the saved position; the watcher materializes real playback on a join.
+        source = _with_duration(source)
         with state_lock:
             current_source = source
             current_start_offset = position
