@@ -174,6 +174,7 @@ Not supported:
 | `TARGET_HEIGHT` | `1080` | Output cap. Source-bounded — smaller sources don't get upscaled. |
 | `HLS_SEG_TIME` | `1` | Segment seconds. Matches the player live-edge tuning. |
 | `HLS_LIST_SIZE` | `24` | Live playlist depth. |
+| `LIVE_IDLE_TIMEOUT_S` | `120` | No viewers for this long → live ffmpeg auto-paused (source + position kept) and `auto_fill` gated so nothing starts for an empty room. A returning viewer auto-resumes the same title. `0` disables. |
 | `USERS_FILE` | `/data/users.json` | User accounts (scrypt-hashed passwords). |
 | `USER_SESSIONS_FILE` | `/data/sessions.json` | Server-side login sessions (`js_user` cookie). |
 | `PROGRESS_FILE` | `/data/progress.json` | Per-user VOD watch positions (Continue watching). |

@@ -73,6 +73,13 @@ services:
       # tabs that would otherwise stream forever. Tapping the prompt resets the
       # clock; it's a nudge, not a ban. Set to 0 to disable the cap entirely.
       VIEWER_MAX_SESSION_HOURS: ${VIEWER_MAX_SESSION_HOURS:-8}
+      # Live idle pause (seconds). With zero viewers for this long, the watcher
+      # auto-pauses the live stream (ffmpeg killed, source + position kept) and
+      # stops auto_fill from starting anything new, so the encoder isn't
+      # transcoding a random title for an empty room. A returning viewer
+      # auto-resumes the same title (~1-3s cold start). Set 0 to disable and
+      # restore the old always-playing behavior.
+      LIVE_IDLE_TIMEOUT_S: ${LIVE_IDLE_TIMEOUT_S:-120}
       # Viewer Library roots. Format is "Label=relative/path,Label=relative/path".
       # Viewers can browse/search/request only inside these roots; admin/control
       # browsing remains unrestricted.

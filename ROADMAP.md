@@ -122,6 +122,14 @@ Titles are judged on arr metadata (genres / certification / overview) when avail
 
   Note fail-closed applies to *unjudged* titles, not to a judge outage: already-cleared verdicts stay valid, so if ollama goes down the stream keeps playing the titles it had already cleared.
 
+## v2.7 — idle auto-pause (shipped)
+
+`auto_fill` transcoded a random library title forever with no audience: prod had been chewing on one film for 1h30m with the last real viewer connection days earlier. The watcher now reads `_viewer_count()` each tick and, with `LIVE_IDLE_TIMEOUT_S` (default 120 s) elapsed and zero viewers, calls `_auto_pause_locked()` — the same kill-and-resume freeze as `api_pause` (ffmpeg terminated, run retired, `current_paused=True`, `paused_position` frozen), tagged `auto_paused=True` to distinguish it from a user pause. While idle it also gates the queue pop, `auto_fill`, and pre-roll promotion, so nothing new starts for an empty room; a stream that ends naturally with no viewers falls through to the fully-idle cleanup.
+
+When a viewer's `/hls` request reappears (`_viewer_count() > 0`), the watcher auto-resumes the *same* title from `paused_position`. Only `auto_paused` pauses resume — a manual Pause stays put. `is_live` sources are never auto-paused (no resumable position). Cost: a ~1-3 s cold start when a viewer connects instead of sitting on a warmed live edge. `0` disables and restores the old always-playing behavior.
+
+New env: `LIVE_IDLE_TIMEOUT_S`. New global: `auto_paused` (under `state_lock`), reset wherever `current_paused` goes false (`_start_stream`, `_stop_locked`, `_skip_locked`, `_promote_preroll_locked`) and on manual `api_pause`.
+
 ## Open
 
 - **React migration** — replacing the hand-written page scripts panel by panel as React islands (see ARCHITECTURE → React islands; design in `docs/superpowers/specs/2026-09-08-react-migration-design.md`). The earlier Angular port and the Svelte islands were replaced wholesale on 2026-09-08: Angular assumed it owned the page and fought the islands pattern. Merged to main and deployed 2026-09-09. Done: every admin data panel (incl. queue, recent, chat), viewer queue/requests/library/chat, the home front door, login, and the hub. Remaining, largest first: `library.html` (entirely inline, ~1250 lines — browse, search, VOD player, subtitles, continue-watching; also the file the `ui/daisyui-conversion` branch rewrote, so port from one or the other, not both), `admin.html` file browser + playback/seek/subtitle controls + invites (~1080 lines), `viewer.html` player + reactions (~1090 lines). Each is its own small spec.

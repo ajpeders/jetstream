@@ -31,6 +31,12 @@ VIEWER_TIMEOUT = 30  # seconds without an HLS request → viewer dropped
 # Set VIEWER_MAX_SESSION_HOURS=0 in compose to disable.
 VIEWER_MAX_SESSION_HOURS = float(os.environ.get("VIEWER_MAX_SESSION_HOURS", "8"))
 VIEWER_MAX_SESSION_SECS = VIEWER_MAX_SESSION_HOURS * 3600 if VIEWER_MAX_SESSION_HOURS > 0 else 0
+# Live idle pause: after this many seconds with zero viewers, the watcher
+# auto-pauses the live transcode (ffmpeg killed, source + position kept) and
+# stops auto_fill from starting anything new. A returning viewer auto-resumes
+# the same title. Without this, auto_fill transcodes a random library title
+# forever with no audience. 0 disables the idle pause entirely.
+LIVE_IDLE_TIMEOUT_S = int(os.environ.get("LIVE_IDLE_TIMEOUT_S", "120"))
 TOKEN_COOKIE = "lt"
 TOKEN_COOKIE_MAX_AGE = 60 * 60 * 24 * 90  # 90 days
 # Stable token id used to grant the admin viewer access. Reaching the admin
@@ -353,6 +359,10 @@ current_start_offset: float = 0.0   # seconds into the source at which broadcast
 current_start_time: float = 0.0     # wall-clock time ffmpeg was launched
 current_paused: bool = False
 paused_position: float = 0.0        # frozen position while paused
+# True when current_paused was set by the watcher's idle auto-pause rather
+# than by a user. Only auto-pauses are auto-resumed when a viewer connects;
+# a manual pause is the user's to undo. Guarded by state_lock.
+auto_paused: bool = False
 # Monotonic run id. Increments on every ffmpeg (re)start. Each ffmpeg owns
 # /hls/run/<run_id>/ and writes its own per-run idx.m3u8 there. The composer
 # stitches a single /hls/stream.m3u8 across all runs — clients never see the
@@ -1803,7 +1813,7 @@ def _promote_preroll_locked() -> bool:
     /api/status, the watcher, and termination paths point at it. Returns
     True if a promotion happened. Caller must hold state_lock."""
     global current_proc, current_source, current_start_offset, current_start_time
-    global current_paused, paused_position, active_run_id
+    global current_paused, paused_position, auto_paused, active_run_id
     global preroll_proc, preroll_source, preroll_run_id, preroll_source_from_queue
     if preroll_proc is None or preroll_proc.poll() is not None:
         return False
@@ -1820,6 +1830,7 @@ def _promote_preroll_locked() -> bool:
     current_start_time = time.time()
     current_paused = False
     paused_position = 0.0
+    auto_paused = False
     preroll_proc = None
     preroll_source = None
     preroll_run_id = None
@@ -1836,7 +1847,7 @@ def _stop_locked():
     retires the active run (the composer's tick will then drop /hls/stream.m3u8
     once no playable segments remain anywhere)."""
     global current_source, current_start_offset, current_start_time
-    global current_paused, paused_position, active_run_id
+    global current_paused, paused_position, auto_paused, active_run_id
     old_source = current_source
     old_pos = _current_position()
     if old_pos is None and current_paused:
@@ -1850,7 +1861,38 @@ def _stop_locked():
     current_start_time = 0.0
     current_paused = False
     paused_position = 0.0
+    auto_paused = False
     _recent_record(old_source, old_pos)
+
+
+def _auto_pause_locked() -> dict | None:
+    """Idle auto-pause: kill ffmpeg and freeze the position, exactly like a
+    user pause but tagged so the watcher auto-resumes it when a viewer
+    returns. Returns the state snapshot to persist (caller saves it OUTSIDE
+    state_lock), or None if there was nothing pausable. Caller must hold
+    state_lock."""
+    global current_paused, paused_position, auto_paused, active_run_id
+    if current_source is None or current_proc is None or current_paused:
+        return None
+    # A live URL has no fixed position to resume from, so pausing it would
+    # just strand the stream. Leave live sources to run.
+    if current_source.get("is_live"):
+        return None
+    pos = current_start_offset + max(0.0, time.time() - current_start_time)
+    duration = current_source.get("duration")
+    if duration:
+        pos = min(pos, duration)
+    paused_position = pos
+    _terminate_proc_locked()
+    # Retire the run like api_pause does: its segments stay on disk and in the
+    # master so a returning player can sit on the live edge, and the resume
+    # draws an EXT-X-DISCONTINUITY before its new run.
+    if active_run_id is not None:
+        finished_run_ids.add(active_run_id)
+        active_run_id = None
+    current_paused = True
+    auto_paused = True
+    return _state_snapshot_locked()
 
 
 def _probe_duration(path: Path) -> float | None:
@@ -3975,17 +4017,68 @@ def _composer_thread():
 def _watcher():
     """Keep something playing: advance the queue, then auto-fill from the library
     if enabled. Triggered by ffmpeg exiting and also when fully idle (e.g. fresh
-    startup or after admin stop)."""
+    startup or after admin stop).
+
+    Viewer-gated: with LIVE_IDLE_TIMEOUT_S > 0 and no viewers, the live
+    transcode is auto-paused after the timeout and nothing new is started, so
+    auto_fill can't transcode a random title for an empty room. A returning
+    viewer auto-resumes the same title where it left off."""
     last_state_save = 0.0
+    idle_since: float | None = None
     while True:
         time.sleep(1)
         try:
             with state_lock:
                 proc = current_proc
                 paused = current_paused
+                auto = auto_paused
                 # Build a snapshot of live globals while holding the lock; do the
                 # actual file write below, after we've dropped it.
                 snapshot = _state_snapshot_locked()
+            active = _viewer_count()
+            now = time.time()
+            # Idle auto-pause / auto-resume (see LIVE_IDLE_TIMEOUT_S).
+            if LIVE_IDLE_TIMEOUT_S > 0:
+                if active > 0:
+                    idle_since = None
+                    # A viewer returned while we were idle-paused: resume the
+                    # same title. Only auto-pauses resume — a manual pause is
+                    # the user's to undo.
+                    if auto and paused:
+                        with state_lock:
+                            if auto_paused and current_paused and current_source is not None:
+                                resume_src = current_source
+                                resume_pos = paused_position
+                            else:
+                                resume_src = None
+                                resume_pos = 0.0
+                        if resume_src is not None:
+                            try:
+                                _start_stream(resume_src, start_seconds=resume_pos)
+                            except Exception as e:
+                                print(f"watcher: auto-resume failed: {e}", file=sys.stderr)
+                            continue
+                elif proc is not None and proc.poll() is None and not paused:
+                    # Streaming with nobody watching — start the idle clock,
+                    # then freeze ffmpeg once it runs out.
+                    if idle_since is None:
+                        idle_since = now
+                    elif now - idle_since >= LIVE_IDLE_TIMEOUT_S:
+                        with state_lock:
+                            idle_snap = _auto_pause_locked()
+                        if idle_snap is not None:
+                            _save_state(idle_snap)
+                            print(f"[idle] auto-paused live stream "
+                                  f"({LIVE_IDLE_TIMEOUT_S}s, no viewers)",
+                                  file=sys.stderr)
+                            idle_since = None
+                        else:
+                            # Nothing pausable (e.g. a live URL) — back off a
+                            # full timeout rather than retrying every tick.
+                            idle_since = now
+                        continue
+                else:
+                    idle_since = None
             # Still streaming — periodically persist position so a crash recovers near where we were.
             if proc is not None and proc.poll() is None:
                 now = time.time()
@@ -4002,32 +4095,39 @@ def _watcher():
             # Holding a paused position — leave it alone.
             if paused:
                 continue
-            # If a process exited, make sure user action hasn't superseded us,
-            # and check for a pre-rolled successor: if the watcher set one up
-            # in the lead-up to EOF, promoting it skips the full ffprobe +
-            # spawn dance and the player sees an unbroken segment stream.
-            if proc is not None:
-                with state_lock:
-                    if current_proc is not proc:
+            # Idle gate: with no viewers, never advance to a new item. If
+            # ffmpeg just exited, fall through to the finalize-idle block
+            # below so the stale source is cleared; otherwise stay put.
+            idle_gated = LIVE_IDLE_TIMEOUT_S > 0 and active == 0
+            if not idle_gated:
+                # If a process exited, make sure user action hasn't superseded us,
+                # and check for a pre-rolled successor: if the watcher set one up
+                # in the lead-up to EOF, promoting it skips the full ffprobe +
+                # spawn dance and the player sees an unbroken segment stream.
+                if proc is not None:
+                    with state_lock:
+                        if current_proc is not proc:
+                            continue
+                        if _promote_preroll_locked():
+                            # Snapshot the new current source for state persistence.
+                            promote_snap = _state_snapshot_locked()
+                        else:
+                            promote_snap = None
+                    if promote_snap is not None:
+                        _save_state(promote_snap)
                         continue
-                    if _promote_preroll_locked():
-                        # Snapshot the new current source for state persistence.
-                        promote_snap = _state_snapshot_locked()
-                    else:
-                        promote_snap = None
-                if promote_snap is not None:
-                    _save_state(promote_snap)
-                    continue
-            # Pick what to play next: queue first, then random library fallback.
-            with playlist_lock:
-                next_item = playlist.pop(0) if playlist else None
-                if next_item is not None:
-                    _save_playlist()
-            if next_item is None:
-                with settings_lock:
-                    auto_fill_on = settings.get("auto_fill", True)
-                if auto_fill_on:
-                    next_item = _pick_random_from_library()
+                # Pick what to play next: queue first, then random library fallback.
+                with playlist_lock:
+                    next_item = playlist.pop(0) if playlist else None
+                    if next_item is not None:
+                        _save_playlist()
+                if next_item is None:
+                    with settings_lock:
+                        auto_fill_on = settings.get("auto_fill", True)
+                    if auto_fill_on:
+                        next_item = _pick_random_from_library()
+            else:
+                next_item = None
             if next_item is not None:
                 try:
                     _start_stream(next_item)
@@ -4061,7 +4161,7 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
     segments into the master playlist with an EXT-X-DISCONTINUITY between them
     and the new run's first segment. Viewers see one continuous stream.m3u8."""
     global current_proc, current_source, current_start_offset, current_start_time
-    global current_paused, paused_position
+    global current_paused, paused_position, auto_paused
     audio_input: str | None = None  # set on the URL DASH path; passed as a 2nd ffmpeg -i
     if source["type"] == "file":
         full_path = _safe_resolve(source["ref"], must_be_file=True)
@@ -4132,6 +4232,7 @@ def _start_stream(source: dict, start_seconds: float = 0.0):
         current_start_time = time.time()
         current_paused = False
         paused_position = 0.0
+        auto_paused = False
         snapshot = _state_snapshot_locked()
     # New item playing — wipe any skip votes from the last one.
     with skip_votes_lock:
@@ -6471,7 +6572,7 @@ def api_stop():
 def _skip_locked():
     """Terminate ffmpeg + retire the run so the watcher advances to the next
     item (queue first, then auto_fill). Caller must hold state_lock."""
-    global current_paused, active_run_id
+    global current_paused, auto_paused, active_run_id
     _terminate_proc_locked()
     # Retire the run so the next _start_stream draws an EXT-X-DISCONTINUITY
     # boundary in the master.
@@ -6480,6 +6581,7 @@ def _skip_locked():
         active_run_id = None
     # Un-pause so the watcher's `if paused: continue` doesn't block advance.
     current_paused = False
+    auto_paused = False
 
 
 @app.route("/admin/api/skip", methods=["POST"])
@@ -6535,7 +6637,7 @@ def api_vote_skip():
 @app.route("/admin/api/pause", methods=["POST"])
 @app.route("/api/control/pause", methods=["POST"])
 def api_pause():
-    global current_paused, paused_position, active_run_id
+    global current_paused, paused_position, auto_paused, active_run_id
     with state_lock:
         if current_source is None:
             return jsonify({"error": "no stream loaded"}), 400
@@ -6560,6 +6662,7 @@ def api_pause():
             finished_run_ids.add(active_run_id)
             active_run_id = None
         current_paused = True
+        auto_paused = False
         snapshot = _state_snapshot_locked()
     _save_state(snapshot)
     return jsonify({"ok": True, "paused": True, "position_seconds": paused_position})
