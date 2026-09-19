@@ -16,7 +16,7 @@ jobs:
       # obvious breakage without needing the full ffmpeg/nvidia runtime.
       - name: python compile check
         run: python3 -m compileall -q app.py bin tests
-      # Frontend: the Svelte/Vite bundle must build; static/build is what the
+      # Frontend: the React/Vite bundle must build; static/build is what the
       # container serves, so a broken build = broken admin/chat UI.
       - name: npm build
         run: |
