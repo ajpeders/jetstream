@@ -119,7 +119,7 @@ For non-`/hls` paths nginx just proxies through to Flask, which runs the existin
 
 ### Users & sessions
 
-Admin-created accounts only — no self-registration. Username + password, scrypt-hashed via stdlib `hashlib.scrypt` (no external deps), stored in `/data/users.json` under `users_lock`. Login at `/login`, rate-limited 5 attempts / 60 s per IP (`login_rate_lock`).
+Username + password, scrypt-hashed via stdlib `hashlib.scrypt` (no external deps), stored in `/data/users.json` under `users_lock`. Login at `/login`, rate-limited 5 attempts / 60 s per IP (`login_rate_lock`). Accounts are created by the host or via invite-gated self-registration — see "Two ways an account is born" below.
 
 Sessions are **server-side**: opaque id in the `js_user` cookie (30 d), record in `/data/sessions.json` under `user_sessions_lock`. Deliberately distinct from the `lt` invite cookie — a browser can hold both. Revocation is real, not cookie-expiry-based: password reset, disable, and delete all drop the user's session records, so the cookie dies server-side immediately.
 

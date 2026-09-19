@@ -1,8 +1,53 @@
 # jetstream roadmap
 
+**Status (2026-09-19):** v1 through v2.7 shipped to prod — accounts, private VOD,
+home screen + invite-gated signup, post-login hub, continue watching, subtitle
+controls (VOD + live), iOS VOD playback fix, `auto_fill` variety + LLM content
+gate, and idle simulation (channel stays "on" with no encoder running when
+nobody's watching). The React migration is mid-flight: every admin/viewer data
+panel, the front door, login and the hub are ported; `library.html`,
+`admin.html`, `viewer.html` are still hand-written pages. CI (kaniko-in-gVisor
+image build gate) is the homelab's reference implementation for that pattern.
+Nothing currently broken in prod — everything below is enhancement, cleanup,
+or investigation work.
+
+## Backlog
+
+Story points (1/2/3/5/8): 1–2 = mechanical, safe unattended; 3 = needs
+codebase context; 5–8 = design judgment or cross-service work. `[human-assisted]`
+= blocked on something outside the agent's reach (hardware access, an external
+key, a design decision with the human).
+
+| pts | Item |
+|---|---|
+| 1 | Remove the dead inline `mem_limit: 3g` from `docker-compose.yml` (jetstream service). The homelab overlay `services/apps-mem-limits.yml` already sets `mem_limit: 3g` + `memswap_limit: 3g` for jetstream and wins — it's later in `COMPOSE_FILE`. **Acceptance:** line removed; `docker compose config` from `services/` still resolves jetstream's mem_limit to 3g via the overlay; diff touches only that block. |
+| 3 | Port `viewer.html` (player + reactions, ~1233 lines) to React islands, following the pattern already used for queue/requests/library/chat (`src/viewer/`). **Acceptance:** parity-tested against current chrome (reactions, controls-idle fade, PDT sync, iPhone fullscreen/PiP quirks); `npm run typecheck` and `npm run build` pass. |
+| 3 | Port `admin.html` (file browser + playback/seek/subtitle controls + invites, ~1208 lines) to React islands. **Acceptance:** same bar as above; host-only panels (tokens, settings, users, perf) stay correctly hidden on the `/controls` alias. |
+| 5 | Port `library.html` (VOD player, subtitle picker, continue-watching, ~1335 lines) to React islands — the largest remaining page. **Acceptance:** VOD start/seek/subtitle-switch/resume flows manually verified against a local `bin/dev-server.py` run. Note: the `ui/daisyui-conversion` branch this item used to warn about no longer exists — its content (`b8ffb30`, mobile Tailwind/daisyUI refresh) is already merged into `main` and didn't touch `library.html`, so there's one source of truth now, not two. |
+| 3 | Viewer: report *why* playback can't start. `setupPlayer` in `viewer.html` currently falls through to a generic "HLS not supported" message whenever `Hls.isSupported()` is false. Add an upfront `MediaSource.isTypeSupported('video/mp4; codecs="avc1…"')` probe, a specific on-page message when it fails (the 2026-09-09 case: Firefox/LibreWolf on Linux with no distro H.264 decoder), and include the probe result in the `[viewer] connect` log line + report-queue submissions. **Acceptance:** a decoder-less browser shows the specific message; probe result visible via `docker logs jetstream \| grep connect` and in `/data/reports.json` entries. |
+| 2 | HOWTO: add the black-screen triage section. The recipe is already written down in this file's history (v2.4/Open-era notes): `/api/now-playing` position advancing + a frame grab from `/hls/run/N/v0/idx.m3u8` proves the server; `docker logs livestream \| grep m4s` per user-agent proves/disproves the player (polls-but-never-fetches-playlist = unsupported branch, fetches 2-3 segments then stops = fatal hls.js media error); only then look at the encoder. Two traps to record: recreating containers discards nginx's log history, and the Playwright Chromium bundled with the dev tooling has no H.264 decoder and reports false decode errors on good segments. **Acceptance:** HOWTO.md gains this as a runnable checklist, cross-linked from the viewer-probe item above. |
+| 8 | `[design, not committed]` Evaluate a non-H.264 rendition (VP9/AV1) for decoder-less browsers. The stream host's RTX 3050 (Ampere) has NVENC for H.264/HEVC only — AV1 encode needs Ada, VP9 encode isn't in NVENC at all — so this is a CPU software encode layered on the existing GPU ladders. **Acceptance:** a written ship/don't-ship recommendation backed by a measured CPU cost; only worth pursuing if a real (not hypothetical) decoder-less viewer shows up — the host's own machine fix is the ffmpeg compat package, not this. |
+| 5 | `[human-assisted — needs GPU/deploy-host time]` 4K live stream optimization. Answer, with measurements: (1) is HEVC passthrough at source height cheaper/better than the current 4K→1080p scale, or does it just move cost to the network; (2) does the 3-rung ABR ladder cost meaningfully more than a single rendition on a 4K decode, and should the ladder cap at 1080p while a passthrough rung stays single; (3) NVDEC/NVENC session count under live + preroll + 2 concurrent VOD — does a 4K source push it over the cap; (4) should the app auto-detect 4K sources and prefer `TARGET_HEIGHT=1080`/`VOD_FORCE_CPU=1`. **Acceptance:** numbers recorded here, plus a yes/no on the auto-detect. |
+| 8 | Build the jetstream watcher agent loop. The report queue already persists agent-readable JSON at `/data/reports.json`, exposes `GET /admin/api/reports`, and accepts triage write-back at `POST /admin/api/reports/<id>/triage`. Design + failure-taxonomy playbook already captured in `apps/watcher/DESIGN.md`. **Acceptance:** the loop polls the queue, gathers nearby app/ffmpeg/browser context, triages likely causes, writes back via the triage endpoint, and either files a roadmap note or drafts a fix for admin review. |
+| 8 | Media requests phase 3: arr write access (Radarr/Sonarr POST to add a title) — this repo's first non-read-only external integration. Phase 1 (request store + admin approve/reject) and phase 2 (read-only search via `/api/v3/{movie,series}/lookup`) are already shipped; see [`DESIGN-media-requests.md`](DESIGN-media-requests.md). **Acceptance:** approving a searched-but-not-owned title triggers a real arr add; rejection leaves arr untouched; same account-gated flow as phases 1-2. |
+| 5 | Media requests phase 4: availability tracking. Poll arr for download/import completion on requested titles and surface status in the request panel. **Acceptance:** a requested title's status moves pending → approved → available with no manual admin polling of arr. Depends on phase 3 landing first (nothing to track availability for otherwise). |
+| 3 | `[human-assisted — needs a TMDB API key]` Media requests phase 5: TMDB discovery/browse tab. Search already needs no key (arr's lookup endpoints proxy TMDB/TVDB); only browse/trending needs one. **Acceptance:** tab stays hidden until a key is configured in env; browse/trending appears once one is set. |
+| 8 | `[design session needed]` Stream rooms — a `mod` tier that can run its own live room (own queue/viewers/chat) instead of sharing the single broadcast. This is a rearchitecture, not a feature: every live-playback global in `app.py` (`current_proc`/`current_source`/`current_paused`/run-id tracking/pre-roll/skip-votes/composer state/playlist/viewers/chat/`settings.viewer_public`) assumes exactly one stream. Cheaper adjacent option worth weighing first: the already-per-user, multi-session VOD engine could back a "watch together" shared session instead of N live pipelines. **Acceptance:** a design doc picking one shape (keyed-by-room-id vs. N independent instances vs. shared-VOD-session), reviewed before any implementation starts. |
+| 5 | Per-viewer live subtitles via WebVTT sidecar. The live encode currently burns subs into the shared video, so the v2.3 toggle is broadcast-wide. **Acceptance:** subs extracted to WebVTT, served via `EXT-X-MEDIA`, composer carries the subtitle rendition across run boundaries; live CC toggle becomes per-viewer. |
+| 5 | `app.py` split, stage 1: characterisation tests for the live pipeline (composer, watcher, pre-roll, chat, reactions, requests, reports currently have none — auth and VOD are already well-covered). **Acceptance:** tests pass against current behavior; `_build_ffmpeg_cmd`'s existing 192-variant byte-identity harness is the coverage-depth bar to match. Do first — nothing after this stage is safe without it. |
+| 2 | `app.py` split, stage 2: update the Dockerfile for a multi-module layout (it currently `COPY`s exactly one `.py` file — any new module not added there crashes the container on import at boot) and add an image-boots smoke test. **Acceptance:** verified by actually building the image (`docker build`), not by reading the diff. |
+| 3 | `app.py` split, stage 3: extract the `vod` module (~20 functions, zero `global` uses, best-covered by tests). **Acceptance:** `vod.py` importable with its ~9 helper deps, `app.py` imports from it, existing VOD tests still pass, Dockerfile copies the new file (depends on stage 2). |
+| 3 | `app.py` split, stage 4: extract the `auth` module (~22 functions, 13 helper deps, 2 `global` rebinds that move with it). **Acceptance:** same shape as stage 3; the one circular symbol (`_session_user`) stays importable both directions without a cycle. |
+| 8 | Universalize jetstream for outside users. Document setup from scratch on generic infrastructure, replace homelab-specific assumptions (private hostnames, LAN addresses, personal paths/defaults) with env-driven config + examples, keep the public GitHub mirror directly runnable. **Acceptance:** a from-scratch clone can stand up the stack from the README + `.env.example` alone, with no homelab-specific path edited by hand. |
+
+## History (collapsed)
+
+<details>
+<summary>v2 series through v2.7, closed items, and the full "done this branch" list</summary>
+
 v1 + a viewer-interaction pass shipped. All tracked cleanup items closed. **v2 (accounts + private VOD) shipped to main and prod** (merge `25a05df`), followed by v2.1 (home screen + invite-gated signup, `a71c892`).
 
-## v2 — shipped
+### v2 — shipped
 
 v1's invite-token live stream is unchanged — v2 layers on top.
 
@@ -17,7 +62,7 @@ New env: `USERS_FILE`, `USER_SESSIONS_FILE`, `VOD_MAX_SESSIONS`, `VOD_IDLE_TIMEO
 
 **Not exercised on GPU hardware yet:** NVENC session count under live + preroll + 2 concurrent VOD sessions (`VOD_FORCE_CPU=1` is the escape hatch), and an HDR source through the VOD path.
 
-## v2.1 — shipped
+### v2.1 — shipped
 
 | What | Status | Notes |
 |---|---|---|
@@ -27,7 +72,7 @@ New env: `USERS_FILE`, `USER_SESSIONS_FILE`, `VOD_MAX_SESSIONS`, `VOD_IDLE_TIMEO
 
 Rate limiting is keyed on `_trusted_client_ip()` (nginx-set `X-Real-IP`), never the client-forgeable leftmost `X-Forwarded-For`.
 
-## v2.2 — shipped
+### v2.2 — shipped
 
 | What | Status | Notes |
 |---|---|---|
@@ -35,7 +80,7 @@ Rate limiting is keyed on `_trusted_client_ip()` (nginx-set `X-Real-IP`), never 
 
 **Threshold gotcha (found in test):** the "finished" tail and "too early to resume" floor are clamped to a fraction of runtime (10% / 5%) rather than flat 90 s / 30 s. With flat values, every position in a sub-90 s clip counted as finished and nothing short was ever resumable. Feature-length content keeps the flat numbers.
 
-## v2.3 — shipped
+### v2.3 — shipped
 
 | What | Status | Notes |
 |---|---|---|
@@ -47,7 +92,7 @@ Rate limiting is keyed on `_trusted_client_ip()` (nginx-set `X-Real-IP`), never 
 
 **First-play delay is by design, not a bug:** the first play of any file+track runs *without* subtitles while a background job extracts the track to a small cached `.srt` (see #32); the next play burns them in. Both UIs now say this out loud instead of looking broken.
 
-## v2.4 — UI verification pass (shipped)
+### v2.4 — UI verification pass (shipped)
 
 Everything from v2 through v2.3 was built and tested headlessly, and the theme refresh (`62bd6c7`) landed underneath it — so no v2 page had ever been *looked at* in a browser. This pass drove every page through a real browser (local Flask + real ffmpeg + a generated fixture carrying English/French subtitle tracks) at 1280 / 390 / 360 px.
 
@@ -70,7 +115,7 @@ The last two are pre-existing viewer chrome rather than v2 work, found incidenta
 
 **HDR through the VOD path** is no longer completely untested: `bin/dev-setup.sh` generates a genuinely BT.2020/PQ-tagged fixture, and an end-to-end CPU run produced 22 segments with an empty ffmpeg log and the full zscale tonemap chain in both `live` and `vod` modes. What remains unverified is HDR *on the GPU* — NVDEC/NVENC tonemapping is a different branch of `_build_ffmpeg_cmd` than the CPU one this exercises.
 
-## Local dev environment (shipped)
+### Local dev environment (shipped)
 
 `bin/dev-setup.sh` + `bin/dev-server.py` — run the app outside Docker against `.devenv/`, with generated fixtures. Added because the harness for the v2.4 UI pass had to be hand-rebuilt from scratch, and three of its bugs were pure setup errors rather than app bugs. Two are encoded in the scripts so they can't recur:
 
@@ -79,7 +124,7 @@ The last two are pre-existing viewer chrome rather than v2 work, found incidenta
 
 A third is worth knowing generally: **lavfi sources emit frames with unspecified colour properties**, so `-color_trc`/`-color_primaries` output options are silently dropped and the file probes as SDR. HDR fixtures must be tagged with the `setparams` filter, and the script now verifies `color_transfer=smpte2084` after encoding rather than assuming it.
 
-## v2.5 — VOD playback on iOS (shipped)
+### v2.5 — VOD playback on iOS (shipped)
 
 **Symptom:** on-demand playback did nothing on an iPhone — player chrome drawn, duration correct, permanently stuck on "tap to play". Desktop was fine.
 
@@ -96,7 +141,7 @@ A third is worth knowing generally: **lavfi sources emit frames with unspecified
 
 **Verified:** the wait logic under unit test against the shipped function text (appears-after-404s, transient network errors, 401→login, superseded-session abort), and end-to-end against a live server — HEAD 200 after 5 polls / 1.64 s. **Not verified on a real iPhone** — no iOS device or browser automation available here.
 
-## v2.6 — auto_fill variety + LLM content gate (shipped, filter default-OFF)
+### v2.6 — auto_fill variety + LLM content gate (shipped, filter default-OFF)
 
 **Variety.** `auto_fill` picked uniformly over *files*, which is uniform over the wrong thing: a 200-episode show was 200× likelier than a movie, so the stream drowned in whichever series was longest. It also never consulted `recent_items`, so it could replay what just finished. Now it picks a **title** uniformly (`_title_key` collapses `tv/Show/Season N/…` to `tv/Show`), then an episode within it, skipping the last `AUTOFILL_RECENT_TITLES` (12) titles played. Measured over 1200 picks across 4 titles: ~300 each, with the 2-file show at 319 rather than the ~480 that file-weighting gave.
 
@@ -122,7 +167,7 @@ Titles are judged on arr metadata (genres / certification / overview) when avail
 
   Note fail-closed applies to *unjudged* titles, not to a judge outage: already-cleared verdicts stay valid, so if ollama goes down the stream keeps playing the titles it had already cleared.
 
-## v2.7 — idle simulation (shipped)
+### v2.7 — idle simulation (shipped)
 
 `auto_fill` transcoded a random library title forever with no audience: prod had been chewing on one film for 1h30m with the last real viewer connection days earlier. The channel now stays "on" without an encoder: after `LIVE_IDLE_TIMEOUT_S` (default 120 s) with zero viewers the watcher calls `_detach_locked()` — ffmpeg is terminated and the run retired, but `current_source` stays loaded and `current_start_offset`/`current_start_time` are left untouched, so the virtual playhead keeps advancing with the wall clock. `detached=True` marks the state (distinct from `current_paused` — the channel reads as *playing*). `_current_position()` returns the virtual playhead while detached, and `/api/status` + `/api/now-playing` keep showing the title with a moving position (`/api/status` gains a `simulated` field). At virtual EOF the watcher picks the next queue/auto_fill item via `_simulate_source_locked()` and keeps simulating, so a living-room display never goes dark.
 
@@ -130,62 +175,16 @@ When a viewer's `/hls` request reappears (`_viewer_count() > 0`), the watcher ma
 
 New env: `LIVE_IDLE_TIMEOUT_S`. New global: `detached` (under `state_lock`), persisted in `state.json` so a restart resumes the simulation without spawning ffmpeg for an empty room; reset by `_start_stream`, `_stop_locked`, `_skip_locked`, `_promote_preroll_locked`, and manual `api_pause`.
 
-## Open
-
-- **React migration** — replacing the hand-written page scripts panel by panel as React islands (see ARCHITECTURE → React islands; design in `docs/superpowers/specs/2026-09-08-react-migration-design.md`). The earlier Angular port and the Svelte islands were replaced wholesale on 2026-09-08: Angular assumed it owned the page and fought the islands pattern. Merged to main and deployed 2026-09-09. Done: every admin data panel (incl. queue, recent, chat), viewer queue/requests/library/chat, the home front door, login, and the hub. Remaining, largest first: `library.html` (entirely inline, ~1250 lines — browse, search, VOD player, subtitles, continue-watching; also the file the `ui/daisyui-conversion` branch rewrote, so port from one or the other, not both), `admin.html` file browser + playback/seek/subtitle controls + invites (~1080 lines), `viewer.html` player + reactions (~1090 lines). Each is its own small spec.
-
-- **Viewer: say *why* playback can't start (added 2026-09-09)** — `setupPlayer` in `viewer.html` falls through to "HLS not supported in this browser" whenever `Hls.isSupported()` is false, and the page otherwise looks healthy (status, chat and reactions keep polling), so the viewer sees a black box and reports "black screen". The 2026-09-09 case was LibreWolf on Arch: ffmpeg 9 moved the system to libavcodec 63, which Firefox 153 builds can't load, so `MediaSource.isTypeSupported('video/mp4; codecs="avc1…"')` was false while the server was fine. Two small pieces: (1) run the `isTypeSupported` probe up front and render a specific message ("this browser has no H.264 decoder — on Linux Firefox/LibreWolf install the distro's ffmpeg compat package"); (2) include the probe result in the `[viewer] connect` log line and in report-queue submissions so the server side can tell a decoder-less client from a stream fault in one grep. Triage notes for the human path are in `HOWTO.md` once the item below lands.
-
-- **HOWTO: black-screen triage section (added 2026-09-09)** — write down the split that worked: `/api/now-playing` position advancing + a frame grabbed from `/hls/run/N/v0/idx.m3u8` proves the server; `docker logs livestream | grep m4s` per user agent proves the player (polls-but-never-fetches-playlist = unsupported branch; fetches 2-3 segments then stops = fatal hls.js media error); only then look at the encoder. Two traps worth recording: recreating the containers discards the nginx log history, and the Playwright Chromium bundled with the dev tooling has no H.264 decoder, so it reports decode errors on good segments.
-
-- **Non-H.264 rendition for decoder-less browsers (option, not committed)** — a VP9 or AV1 variant would let Firefox-family browsers play through their bundled ffvpx decoder without touching the system ffmpeg. Constraint: the stream host's RTX 3050 (Ampere) has NVENC for H.264/HEVC only — AV1 encode needs Ada, VP9 encode isn't in NVENC at all — so this would be a CPU software encode on top of the three GPU ladders. Only worth it if the decoder problem shows up on viewers we don't control; for the host's own machine the compat package is the fix.
-
-- **4K live stream optimization (added 2026-09-18)** — investigate making 4K sources cheaper to stream live. Current shape: `TARGET_HEIGHT=1080` downscales, `ABR_LADDER=1` fans a single 4K HEVC decode into three `scale_cuda` rungs in one ffmpeg, and NVDEC + NVENC holds a single 4K HDR stream at ~17% CPU on the RTX 3050 — but the single decode + tonemap is the 4K bottleneck (compose comment on `ABR_LADDER`), and a live 4K session competes with VOD + pre-roll for the GPU's limited NVENC/NVDEC sessions. Questions to answer with measurements: (1) is HEVC passthrough at source height actually cheaper/better than 4K→1080p scale for clients that can take it, or does it just move the cost to the network? (2) does the 3-rung ABR split cost meaningfully more than a single rendition on a 4K decode, and should the ladder cap at 1080p while a passthrough rung stays single? (3) NVDEC/NVENC session count under live + pre-roll + 2 concurrent VOD (the "not exercised on GPU hardware yet" item) — does a 4K source push it over? (4) should the app detect 4K sources and prefer `TARGET_HEIGHT=1080`/`VOD_FORCE_CPU=1` to protect the live path? Blocked only on GPU/deploy-host measurement time.
-
-- **Jetstream watcher agent (automation)** — the report queue (#34) already persists agent-readable JSON at `/data/reports.json`, exposes `GET /admin/api/reports`, and now accepts triage write-back at `POST /admin/api/reports/<id>/triage` (sets the reserved `triage` field under `reports_lock` — a direct file edit would be clobbered by Flask's in-memory rewrite). The admin reports panel renders the verdict when present. Still to build: the watcher loop itself — polls the queue, gathers nearby app/ffmpeg/browser context, triages likely causes, writes back, and either adds a roadmap note or drafts a fix for admin review. Design + failure-taxonomy playbook captured in `apps/watcher/DESIGN.md`; only the agent runner is outstanding.
-
-- **Media requests — replace Overseerr** — *phase 1 shipped; phases 2-5 open. Full design in [`DESIGN-media-requests.md`](DESIGN-media-requests.md).* Decided scope: full replacement; requesting requires a **user account**, not an invite token.
-
-  The load-bearing distinction: jetstream's existing "request" (#27) means *"play this file we already have"*; this one means *"acquire this thing we don't have"*. Same word, opposite direction — separate store, separate panel, separate route prefix, or both become ambiguous and the admin panel grows two Approve buttons that do wildly different things (one plays a file, one starts a 40 GB download).
-
-  Most of the plumbing already exists: arr API-key reading and `X-Api-Key` calls, the 30-min inventory poll, accounts, the request-queue idiom, the poster proxy, rate limiting. Genuinely missing: discovery, **write** access to arr (this would be the first non-read-only integration), availability tracking, and quotas.
-
-  Useful finding: **search needs no TMDB key** — `/api/v3/{movie,series}/lookup` on Radarr/Sonarr already proxy TMDB/TVDB and return objects that can be POSTed straight back to add. Only *browse/trending* needs a key, so that's phased last and degrades to a hidden tab. (This reverses the closed "TMDB not worth the friction" call, deliberately: that was about enriching the existing library, which is a different requirement.)
-
-  Shipped phase 1: separate `/data/media_requests.json`, account-backed create/list/cancel endpoints, admin list/approve/reject status controls, and a host-only admin panel with no arr writes. Shipped phase 2: `/api/media/search` uses read-only Radarr/Sonarr lookup, annotates already-in-library/already-requested state, and `/library` now has a mobile-friendly request panel. Next phases: arr writes → availability tracking → TMDB discovery.
-
-- **Stream rooms (a "mod" tier that can run its own live room)** — *next up; needs a design session before any code.* Wanted: a trusted user can spin up their own live room — own queue, own viewers, own chat — instead of everyone sharing the single broadcast.
-
-  Be clear-eyed about the cost: **this is a rearchitecture, not a feature.** Every live-playback global in `app.py` assumes exactly one stream — `current_proc` / `current_source` / `current_paused` / `active_run_id` / `next_run_id` / `finished_run_ids` under `state_lock`, the pre-roll globals, `skip_votes`, `_composer_state` (a single media-sequence + discontinuity counter space), `playlist`, `recent_items`, the IP-keyed `viewers` / `viewer_labels` / `viewer_session_start`, the single global chat + reaction rings, and `settings.viewer_public`. On disk it's one `/hls` tree with one `stream.m3u8`, and the watcher + composer threads are singletons driving it. Making rooms real means keying all of that by room id and running a watcher/composer per room — or accepting a hard cap and running N independent instances.
-
-  Cheaper adjacent option worth weighing first: the private-VOD engine is *already* per-user and multi-session. "Watch together in a room" could be built as a shared VOD session (one encode, several authorized viewers, synced position) rather than N live pipelines — much closer to what already works.
-
-  Also needs: a `mod` tier (a third invite/account level between friend and admin), per-room authorization, room lifecycle/reaping, and a concurrency cap — each room is another ffmpeg competing for the same NVENC slots the live stream and VOD already share.
-
-- **Per-viewer live subtitles (WebVTT sidecar)** — the live encode burns subtitles into the shared video, so the shipped v2.3 toggle is necessarily broadcast-wide (everyone sees the change). A true per-viewer CC toggle needs subs extracted to WebVTT, served alongside, referenced via `EXT-X-MEDIA`, and the composer taught to carry a subtitle rendition across run boundaries. Previously marked won't-do; re-listed because the question keeps coming up.
-
-- **`app.py` split (6,162 lines, 237 functions, 109 routes, 6 threads)** — *analysed, deliberately not yet done.* The measurements, so the next attempt doesn't have to redo them:
-
-  **The boundary is cleaner than it looks.** An `auth` module (users/sessions/passwords/register/login/admin-user routes) is ~22 functions needing 13 helpers from the rest; a `vod` module is ~20 functions needing 9. Crucially the rest of `app.py` needs exactly **one** symbol back from either — `_session_user` — so there's a single circular edge, not a web.
-
-  **The usual refactor landmine is mostly absent.** Cross-module breakage comes from *rebinding* module-level globals, not mutating them. The vod functions use `global` **zero** times; the auth ones use it twice (`_load_users`, `_load_user_sessions`), and both rebind globals that would move into the same module. Dict/list mutation (`vod_sessions`, `watch_progress`) is shared correctly through an imported reference.
-
-  **Two real blockers, both must be handled first:**
-  1. **The Dockerfile copies exactly one Python file** (`COPY app.py /app/app.py`; `static/` is copied separately, no other `.py` is). Any new module must be added there or the container crashes on import at boot — prod down, for a change with no user-facing benefit. Verify by actually building the image, not by reading the diff.
-  2. **No safety net on the live pipeline.** The test suites cover auth and VOD thoroughly, but the composer, watcher, pre-roll, chat, reactions, requests and reports have no characterisation tests — and those are exactly what a bad move would break. `_build_ffmpeg_cmd` is the exception: the 192-variant byte-identity harness used for the VOD-mode change covers it.
-
-  **Suggested order:** characterisation tests for the live pipeline → Dockerfile + an image-boots smoke test → extract `vod` (zero globals, best-covered) → extract `auth` → only then consider splitting the live pipeline itself. Do it in its own session, not appended to a feature batch.
-
-## Closed (works in practice / won't-do)
+### Closed (works in practice / won't-do)
 
 - **Firefox playback** — works in practice on current main. Defensive fixes parked locally on the `firefox-playback` branch (NVENC AUD BSF + FF-tuned Hls.js config + wider PDT lag) if a regression surfaces; tested-in-Firefox-OK but unshipped while there's nothing to fix. Branch can be rebased + deployed later if needed.
 
 - **Now-playing info card** + **metadata-aware library search (actor / director)** — both required a TMDB API key + a per-file metadata cache. Not worth the friction for a personal co-watching setup. Filename search (`/admin/api/search`, `/api/control/search`) covers the realistic case; viewers still see the title + duration in the up-next panel.
 - **HW VAAPI decode + colorspace handling** — superseded by the NVENC pipeline. The original motivation was unlocking HW decode on the Intel UHD 630 iGPU to drop 4K HEVC from ~135% CPU to ~30%. The host got an RTX 3050 and the NVDEC+NVENC path delivers a stronger win (4K HEVC HDR at ~17% CPU on prod, full GPU decode + encode). VAAPI code stays in the codebase for portability to Intel-iGPU hosts but the 100×-oversized-segment bug isn't worth chasing.
-- **CC sidecar / WebVTT** — burn-in via #11 covers the friends-and-family case. Toggle/multi-language don't justify the composer rework.
+- **CC sidecar / WebVTT** — burn-in via #11 covers the friends-and-family case. Toggle/multi-language don't justify the composer rework. (Re-opened in the Backlog above — the question keeps coming up.)
 - **Live voice chat / WebRTC** — was the v2 reason-to-exist; v2 scrapped, voice product not being built. v1's HLS at ~1.7 s sync is fine for co-watching.
 
-## Done (this branch)
+### Done (this branch)
 
 | # | What | Notes |
 |---|------|-------|
@@ -226,7 +225,7 @@ New env: `LIVE_IDLE_TIMEOUT_S`. New global: `detached` (under `state_lock`), per
 | 41 | Strip dead component CSS | Resolved the "component CSS never loads" issue (#38) by taking the strip path: deleted the dead scoped `<style>` blocks from all three Svelte components (`AdminQueue` −275, `AdminRecent` −126, `ViewerChat` −185 lines; none were ever linked/injected, so zero visual change). `jetstream-theme.css` + each page's inline `<style>` are now the sole, unambiguous source of truth — no more dormant rules that look authoritative but do nothing. |
 | 40 | Tokenless now-playing feed (`/api/now-playing`) | External-display endpoint for the living-room hub. Returns `{"title","playing"}`, exempt from the viewer token gate (title-only, non-sensitive), 2 s cache. Title is prettified from the raw scene-release filename via `_display_title` (cuts at the first resolution/source/codec/tag token — `Hokum 2026 REPACK 1080p AMZN WEB-DL ...mkv` → `Hokum 2026`); URL/yt-dlp sources keep their human title as-is. App's own UI still shows the raw filename. Consumed via `JETSTREAM_TITLE_URL` on the pi. |
 | 39 | Now-playing title on the player | Small filename-derived title label pinned top-left of the player (`#now-playing` in `viewer.html`), reveals for 5 s on each source change and otherwise fades with the player chrome (same `.controls-idle` rules as `#vol-controls`; JS `.np-reveal` pins it on change). Took the lightweight path — the active title already rides the existing `/api/status` channel (`title` field), so this is a viewer-side render only, no HLS-metadata / ID3 tagging. Accent-dot prefix matches the unified theme (#38). |
-| 38 | Frontend consolidation + mobile polish | Unified 4 competing blues → single cyan `--js-accent` (`#38bdf8`) token in `jetstream-theme.css`; emoji→inline-SVG icons (mute/pip/fs/vote-skip/queue actions) on viewer + admin; fixed chat-header double-label and queue-row action overflow (6-column grid + icon cluster); ≥40px touch targets throughout; no horizontal overflow at 360px portrait or landscape. **Latent issue surfaced:** Vite emits Svelte scoped CSS to `static/build/assets/` but nothing loads it — the UI is styled entirely by inline `<style>` + `jetstream-theme.css`, so all fixes routed through the loaded stylesheet. Tracked as an Open cleanup item. |
+| 38 | Frontend consolidation + mobile polish | Unified 4 competing blues → single cyan `--js-accent` (`#38bdf8`) token in `jetstream-theme.css`; emoji→inline-SVG icons (mute/pip/fs/vote-skip/queue actions) on viewer + admin; fixed chat-header double-label and queue-row action overflow (6-column grid + icon cluster); ≥40px touch targets throughout; no horizontal overflow at 360px portrait or landscape. **Latent issue surfaced:** Vite emits Svelte scoped CSS to `static/build/assets/` but nothing loads it — the UI is styled entirely by inline `<style>` + `jetstream-theme.css`, so all fixes routed through the loaded stylesheet. (Resolved by #41.) |
 | 37 | Viewer session time cap | Continuous-watch limit (`VIEWER_MAX_SESSION_HOURS`, default 8, set in compose; 0 disables). The `/hls` auth gate (`/api/_authcheck`) starts returning 403 once `viewer_session_start[ip]` exceeds the cap, so segments cut off; `/api/status.session_expired` drives a "keep watching" overlay in `viewer.html` that resets the clock via `POST /api/session/continue`. A fresh session (reload after the 30 s idle prune, or a new tab) starts over — reclaims forgotten tabs, not a ban. |
 
 Plus, off-list:
@@ -237,10 +236,5 @@ Plus, off-list:
 - Token-only viewing (settings `viewer_public=false`) durably enabled on prod; bare URL returns the invite page without a valid `?t=` / cookie.
 - Subtitle burn-in disabled globally (`SUBTITLE_BURN_IN`) to stop the `subtitles=`-filter full-file scan; real fix tracked under the Open item.
 - Live-edge sync regression: prod was running 4 s HLS segments but the player's `liveSyncDurationCount: 1` + `TARGET_LAG_S: 2.5` tuning assumed 1 s segments. The drift-correction loop kept seeking into the segment still being written → choppy / desyncing playback on every browser (worst on Firefox where MSE doesn't clamp out-of-buffer seeks). Fixed by dropping `HLS_SEG_TIME` back to 1 s (matches ROADMAP #13's design); env-only change, no rebuild.
-## Make this usable by others (added 2026-08-27)
 
-- [ ] Universalize the README / docs / code for outside users: document setup
-  from scratch on generic infrastructure, replace homelab-specific assumptions
-  (private hostnames, LAN addresses, personal paths and defaults) with
-  env-driven configuration plus examples, and keep the public GitHub mirror
-  directly runnable.
+</details>
