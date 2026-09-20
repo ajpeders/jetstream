@@ -61,17 +61,14 @@ server {
   # if the viewer's token cookie is invalid (and we're not in public mode),
   # nginx rejects with 401 here without ever reading the file.
   location /hls/ {
-    # LAN bypass: clients on the private network (e.g. the living-room Apple TV
-    # AirPlaying the stream) skip the token entirely — AirPlay has the TV fetch
-    # the HLS itself and it can't carry the viewer cookie. `satisfy any` means a
-    # private-range client is allowed OR a valid token passes; remote/public
-    # friends fall through to the cookie check unchanged.
-    satisfy any;
-    allow 127.0.0.1;
-    allow 10.0.0.0/8;        # LAN + WireGuard VPN (10.8.0.0/24)
-    allow 192.168.0.0/16;    # LAN (living-room Apple TV @ 192.168.0.39)
-    deny all;                # everyone else (incl. Traefik's own IP if XFF ever
-    auth_request /__authcheck;   # goes missing) falls through to the token check
+    # Every /hls/* fetch goes through the Flask auth subrequest — including
+    # LAN clients. The LAN bypass (living-room Pi / Apple TV fetching HLS
+    # without a viewer cookie) lives in Flask's _authcheck now, keyed on the
+    # realip-resolved X-Real-IP below. It used to be an nginx `satisfy any`
+    # allow-list here, which skipped the subrequest entirely, so LAN viewers
+    # were invisible to _track_viewer: LIVE_IDLE_TIMEOUT_S saw "no viewers"
+    # and tore the transcode down under the TV.
+    auth_request /__authcheck;
 
     alias /hls/;
 

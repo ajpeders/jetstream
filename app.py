@@ -782,6 +782,23 @@ def _ip_rate_check(bucket: dict[str, list[float]], lock: threading.Lock,
         return True
 
 
+# Private ranges that may fetch /hls/* without a viewer cookie: the living-room
+# Pi / Apple TV (AirPlay has the TV fetch the HLS itself and can't carry the
+# cookie). Same list the nginx allow-list used to hold. 172.16/12 is deliberately
+# absent — that's where Traefik lives, and a request whose XFF went missing must
+# not look local.
+_LAN_NETS = tuple(ipaddress.ip_network(n) for n in
+                  ("127.0.0.1/32", "10.0.0.0/8", "192.168.0.0/16"))
+
+
+def _is_lan_client(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in _LAN_NETS)
+
+
 def _trusted_client_ip() -> str:
     """Client IP for SECURITY decisions (rate limiting). _client_ip trusts
     the leftmost X-Forwarded-For entry, which the CLIENT controls — fine for
@@ -4537,13 +4554,17 @@ def api_authcheck():
     Without _track_viewer here the active viewers list and history go silent."""
     with settings_lock:
         public = settings.get("viewer_public")
-    if (not public and not _valid_token(request.cookies.get(TOKEN_COOKIE))
+    # LAN clients (the Pi / Apple TV) need no cookie and are exempt from the
+    # continuous-watch cap — but they DO get tracked below, so the idle watcher
+    # counts them and keeps the transcode alive while the TV is watching.
+    lan = _is_lan_client(_trusted_client_ip())
+    if (not lan and not public and not _valid_token(request.cookies.get(TOKEN_COOKIE))
             and not _session_user()):
         return ("", 401)
     # Continuous-watch cap: a session past the limit gets its segments cut off.
     # Checked before _track_viewer so an expired session stops refreshing its
     # last-seen and ages out of the viewer list, letting a reload start fresh.
-    if _viewer_session_expired(_client_ip()):
+    if not lan and _viewer_session_expired(_client_ip()):
         return ("", 403)
     # Authorized — log this viewer activity. Idempotent: updates the timestamp
     # for known IPs and only emits a connect-log on the very first sighting.

@@ -42,6 +42,8 @@ key, a design decision with the human).
 
 ## History (collapsed)
 
+- **2026-09-19 — LAN viewers count (idle-detach fix).** The `/hls/` nginx allow-list bypassed `auth_request`, so the living-room Pi was invisible to `_track_viewer`; 120 s after the last cookie-bearing viewer left, `LIVE_IDLE_TIMEOUT_S` killed ffmpeg under the TV (Pi mpv relaunch loop, black screen). LAN allowance moved into Flask `_authcheck`; LAN clients are tracked and exempt from the watch cap. Test: `tests/test_authcheck_lan.py`.
+
 <details>
 <summary>v2 series through v2.7, closed items, and the full "done this branch" list</summary>
 

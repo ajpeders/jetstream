@@ -75,7 +75,7 @@ What local differs from prod on, and why it's survivable:
 | Encode | libx264 only (`VOD_FORCE_CPU=1`) | NVENC/VAAPI per the GPU overlay |
 | Admin auth | none — `/admin` is open | Traefik basicauth |
 
-So local **does not** cover the nginx `auth_request` path, the `/hls/` LAN bypass, or the hardware-encode branches of `_build_ffmpeg_cmd`. It covers everything else: both auth tiers, VOD, subtitles, the composer, and real transcodes.
+So local **does not** cover the nginx `auth_request` path or the hardware-encode branches of `_build_ffmpeg_cmd`. It covers everything else: both auth tiers, VOD, subtitles, the composer, and real transcodes.
 
 ## Endpoints
 

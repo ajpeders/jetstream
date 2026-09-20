@@ -129,7 +129,7 @@ Admin CRUD: `GET/POST /admin/api/users`, `DELETE /admin/api/users/<id>`, `POST â
 
 ### Viewer tracking + logs
 
-`_track_viewer()` runs from `/api/_authcheck`, keyed by `X-Forwarded-For` IP (forwarded by nginx). On *new* IP, fires `[viewer] connect ...` to stderr with token label + ipinfo.io geo + UA. Geo lookups happen on a daemon thread to avoid blocking. `_viewer_count()` prunes IPs idle >30s and emits `[viewer] disconnect ...`. Both the active list (`/admin/api/viewers`) and the JSONL log (`/data/viewer_log.jsonl`, exposed via `/admin/api/viewers/history`) include the resolved token label.
+`_track_viewer()` runs from `/api/_authcheck`, keyed by `X-Forwarded-For` IP (forwarded by nginx). nginx runs that `auth_request` for **every** `/hls/*` fetch, LAN included: the LAN allowance (Pi / Apple TV, no cookie) is decided inside `_authcheck` from the realip-resolved `X-Real-IP` (`_is_lan_client`), not by an nginx `satisfy any` allow-list â€” the allow-list skipped the subrequest, so LAN viewers never registered and the idle simulation below tore the transcode down under the TV. On *new* IP, fires `[viewer] connect ...` to stderr with token label + ipinfo.io geo + UA. Geo lookups happen on a daemon thread to avoid blocking. `_viewer_count()` prunes IPs idle >30s and emits `[viewer] disconnect ...`. Both the active list (`/admin/api/viewers`) and the JSONL log (`/data/viewer_log.jsonl`, exposed via `/admin/api/viewers/history`) include the resolved token label.
 
 ### Chat
 

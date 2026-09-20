@@ -155,7 +155,7 @@ Related: `USERS_FILE` (`/data/users.json`) and `USER_SESSIONS_FILE` (`/data/sess
 
 ## Tune the live idle simulation
 
-`LIVE_IDLE_TIMEOUT_S` (default `120`, set in the compose `.env`; apply with `docker compose up -d`, no rebuild) is how long the watcher waits with zero viewers before killing the real transcode. It does **not** pause: the source stays loaded and a virtual playhead keeps advancing with the wall clock (rotating to the next item at EOF), so `/api/now-playing` and `/api/status` still read as playing — a linear-TV channel with no encoder running. A viewer's next `/hls` request starts real ffmpeg at the simulated position (~1-3 s cold start). `0` disables it and restores always-transcoding behavior.
+`LIVE_IDLE_TIMEOUT_S` (default `120`, set in the compose `.env`; apply with `docker compose up -d`, no rebuild) is how long the watcher waits with zero viewers before killing the real transcode. It does **not** pause: the source stays loaded and a virtual playhead keeps advancing with the wall clock (rotating to the next item at EOF), so `/api/now-playing` and `/api/status` still read as playing — a linear-TV channel with no encoder running. A viewer's next `/hls` request starts real ffmpeg at the simulated position (~1-3 s cold start). LAN clients (the living-room Pi / Apple TV, no cookie) count as viewers too — the LAN allowance lives in Flask's `_authcheck`, not an nginx allow-list, precisely so they are seen. `0` disables it and restores always-transcoding behavior.
 
 Live URL sources are never simulated (no duration to advance against). A manual Pause is a real pause and overrides the simulation. Confirm from `/api/status` (`simulated: true`, `viewers: 0`, `paused: false`, position still moving) or the admin dashboard.
 
